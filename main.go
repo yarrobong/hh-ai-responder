@@ -1545,9 +1545,11 @@ type HHAIResponder struct {
 	chatURL                 string
 	resumeProfileFrontURL   string
 	ignoredChats            []int64
+	preflightCache          map[int]VacancyPreflight
 
 	eventWriter io.Writer
 	eventMu     sync.Mutex
+	preflightMu sync.Mutex
 }
 
 type HHRequester struct {
@@ -2590,6 +2592,13 @@ func (r *HHAIResponder) SendResponse(payload url.Values, refererURL string) (map
 	if !r.autoApply {
 		return map[string]any{"disabled": true}, nil
 	}
+	vacancyID, err := strconv.Atoi(payload.Get("vacancy_id"))
+	if err != nil || vacancyID <= 0 {
+		return nil, errors.New("vacancy preflight requires a valid vacancy_id")
+	}
+	if err := r.requireLiveApplicationPreflight(vacancyID); err != nil {
+		return nil, err
+	}
 	token := r.XSRFToken()
 	if token == "" {
 		return nil, errors.New("xsrf token not found")
@@ -2634,6 +2643,9 @@ func (r *HHAIResponder) ApplyVacancy(vacancyID int, refererURL, letter string) (
 	}
 	if r.dryRun {
 		return map[string]any{"dry_run": true}, nil
+	}
+	if err := r.requireLiveApplicationPreflight(vacancyID); err != nil {
+		return nil, err
 	}
 	token := r.XSRFToken()
 	if token == "" {
@@ -2782,6 +2794,11 @@ func (r *HHAIResponder) ApplyVacancyWithTest(vacancyId int, letter string) (map[
 	if err := r.ctx.Err(); err != nil {
 		return nil, nil, err
 	}
+	if !r.dryRun {
+		if err := r.requireLiveApplicationPreflight(vacancyId); err != nil {
+			return nil, nil, err
+		}
+	}
 
 	responseURL := r.ResolveURL(fmt.Sprintf("/applicant/vacancy_response?vacancyId=%d&startedWithQuestion=false&hhtmFrom=vacancy", vacancyId))
 	tests, err := r.GetVacancyTests(responseURL)
@@ -2890,6 +2907,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 		logger.Info("Automatic applications disabled by configuration")
 		return nil
 	}
+	r.clearVacancyPreflightCache()
 
 	summary := RunSummaryResult{Type: "run_summary"}
 	defer func() {
@@ -3010,6 +3028,112 @@ func (r *HHAIResponder) ApplyVacancies() error {
 				continue
 			}
 
+			preflight, preflightErr := r.GetVacancyPreflight(vacancy)
+			if preflightErr != nil {
+				summary.Errors++
+				summary.ReviewRequired++
+				reason := "vacancy preflight failed: " + preflightErr.Error()
+				logger.Warn("REVIEW — vacancy %d: %s", vacancy.ID, reason)
+				r.writeEvent(VacancyPreflight{
+					VacancyID:   vacancy.ID,
+					ResponseURL: r.ResolveURL(fmt.Sprintf("/applicant/vacancy_response?vacancyId=%d&startedWithQuestion=false&hhtmFrom=vacancy", vacancy.ID)),
+				}.event())
+				r.writeEvent(VacancyReviewRequiredResult{
+					Type:                    "vacancy_review_required",
+					VacancyID:               vacancy.ID,
+					Name:                    vacancy.Name,
+					URL:                     vacancyURL,
+					Score:                   evaluation.Score,
+					Apply:                   evaluation.Apply,
+					Reasons:                 append(append([]string{}, evaluation.Reasons...), reason),
+					Missing:                 evaluation.Missing,
+					HardRequirementsUnknown: hardRequirementsUnknown(evaluation),
+					HardRequirements:        evaluation.HardRequirements,
+				})
+				continue
+			}
+			r.writeEvent(preflight.event())
+
+			preflightDecision, preflightReason := vacancyPreflightDecision(preflight)
+			if preflightDecision == VacancyReviewRequired {
+				summary.ReviewRequired++
+				logger.Info("REVIEW — vacancy %d: %s", vacancy.ID, preflightReason)
+				r.writeEvent(VacancyReviewRequiredResult{
+					Type:                    "vacancy_review_required",
+					VacancyID:               vacancy.ID,
+					Name:                    vacancy.Name,
+					URL:                     vacancyURL,
+					Score:                   evaluation.Score,
+					Apply:                   evaluation.Apply,
+					Reasons:                 append(append([]string{}, evaluation.Reasons...), "preflight: "+preflightReason),
+					Missing:                 evaluation.Missing,
+					HardRequirementsUnknown: hardRequirementsUnknown(evaluation),
+					HardRequirements:        evaluation.HardRequirements,
+				})
+				continue
+			}
+			if preflightDecision != VacancyMatch {
+				r.skipVacancyWithEvaluation(vacancy, vacancyURL, "preflight: "+preflightReason, &score, hardRequirementsMissing(evaluation), evaluation.HardRequirements)
+				continue
+			}
+
+			structuredVacancy := vacancy
+			if preflight.AreaKnown {
+				structuredVacancy.Area.Name = preflight.Area
+			}
+			if preflight.WorkScheduleKnown {
+				structuredVacancy.WorkSchedule = preflight.WorkSchedule
+			}
+			if preflight.WorkExperienceKnown {
+				structuredVacancy.WorkExperience = preflight.WorkExperience
+			}
+			evaluation.HardRequirements = mergeHardRequirements(
+				localStructuredHardRequirements(preflight, r.candidateContext(*resume)),
+				evaluation.HardRequirements,
+			)
+			if err := validateHardRequirements(r.candidateContext(*resume), structuredVacancy, evaluation); err != nil {
+				summary.ReviewRequired++
+				reason := "structured preflight requirements could not be validated: " + err.Error()
+				logger.Info("REVIEW — vacancy %d: %s", vacancy.ID, reason)
+				r.writeEvent(VacancyReviewRequiredResult{
+					Type:                    "vacancy_review_required",
+					VacancyID:               vacancy.ID,
+					Name:                    vacancy.Name,
+					URL:                     vacancyURL,
+					Score:                   evaluation.Score,
+					Apply:                   evaluation.Apply,
+					Reasons:                 append(append([]string{}, evaluation.Reasons...), reason),
+					Missing:                 evaluation.Missing,
+					HardRequirementsUnknown: hardRequirementsUnknown(evaluation),
+					HardRequirements:        evaluation.HardRequirements,
+				})
+				continue
+			}
+			decision = vacancyDecision(evaluation, r.minMatchScore)
+			if decision == VacancyReviewRequired {
+				summary.ReviewRequired++
+				unknownReason := vacancyEvaluationRejectReason(evaluation, r.minMatchScore)
+				logger.Info("REVIEW — vacancy %d: %s", vacancy.ID, unknownReason)
+				r.writeEvent(VacancyReviewRequiredResult{
+					Type:                    "vacancy_review_required",
+					VacancyID:               vacancy.ID,
+					Name:                    vacancy.Name,
+					URL:                     vacancyURL,
+					Score:                   evaluation.Score,
+					Apply:                   evaluation.Apply,
+					Reasons:                 evaluation.Reasons,
+					Missing:                 evaluation.Missing,
+					HardRequirementsUnknown: hardRequirementsUnknown(evaluation),
+					HardRequirements:        evaluation.HardRequirements,
+				})
+				continue
+			}
+			if decision != VacancyMatch {
+				reason := vacancyEvaluationRejectReason(evaluation, r.minMatchScore)
+				r.skipVacancyWithEvaluation(vacancy, vacancyURL, reason, &score, hardRequirementsMissing(evaluation), evaluation.HardRequirements)
+				continue
+			}
+
 			summary.Matched++
 			r.writeEvent(VacancyMatchResult{
 				Type:                    "vacancy_match",
@@ -3031,7 +3155,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 			}
 
 			var letter string
-			if vacancy.ResponseLetterRequired || r.forceLetter {
+			if preflight.LetterRequired || r.forceLetter {
 				letter, err = r.ai.GenerateLetterWithEvaluation(
 					vacancy,
 					vacancyDescription,
@@ -3049,7 +3173,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 
 			var responseResult map[string]any
 			var solutions []QAPair
-			if vacancy.UserTestPresent {
+			if preflight.TestPresent {
 				responseResult, solutions, err = r.ApplyVacancyWithTest(vacancy.ID, letter)
 			} else {
 				responseResult, err = r.ApplyVacancy(vacancy.ID, vacancyURL, letter)
