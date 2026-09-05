@@ -6,31 +6,14 @@ import (
 	"time"
 )
 
-func TestGenericHHExperienceRequirementsUseMinimumOnly(t *testing.T) {
-	tests := []struct {
-		name         string
-		months       int
-		known        bool
-		work         string
-		wantStatus   string
-		wantEvidence string
-	}{
-		{name: "18 months meets 1-3", months: 18, known: true, work: "Опыт 1-3 года", wantStatus: hardRequirementStatusMet},
-		{name: "8 months misses 1-3", months: 8, known: true, work: "Опыт 1-3 года", wantStatus: hardRequirementStatusMissing},
-		{name: "50 months is not above range", months: 50, known: true, work: "Опыт 1-3 года", wantStatus: hardRequirementStatusMet},
-		{name: "unknown duration is unknown", work: "Опыт 1-3 года", wantStatus: hardRequirementStatusUnknown},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			candidate := CandidateContext{TotalExperienceMonthsKnown: test.known, TotalExperienceMonths: test.months}
-			got := localStructuredHardRequirements(VacancyPreflight{WorkExperienceKnown: true, WorkExperience: test.work}, candidate)
-			if len(got) != 1 || got[0].Status != test.wantStatus {
-				t.Fatalf("got requirements=%+v, want status=%s", got, test.wantStatus)
+func TestGenericHHExperienceIsSoftContext(t *testing.T) {
+	for _, work := range []string{"between1And3", "between3And6", "moreThan6"} {
+		for _, months := range []int{0, 11} {
+			got := localStructuredHardRequirements(VacancyPreflight{WorkExperienceKnown: true, WorkExperience: work}, CandidateContext{TotalExperienceMonthsKnown: true, TotalExperienceMonths: months})
+			if len(got) != 0 {
+				t.Fatalf("HH WorkExperience %q created a hard requirement for %d months: %+v", work, months, got)
 			}
-			if test.wantStatus != hardRequirementStatusUnknown && !strings.Contains(got[0].CandidateEvidence, "Candidate total experience:") {
-				t.Fatalf("trusted candidate evidence missing: %+v", got[0])
-			}
-		})
+		}
 	}
 }
 
@@ -73,19 +56,25 @@ func TestDescriptionSpecificExperienceDoesNotUseTotalExperience(t *testing.T) {
 	}
 }
 
-func TestGenericExperienceDerivationRequiresHHWorkExperienceEvidence(t *testing.T) {
-	candidate := CandidateContext{TotalExperienceMonthsKnown: true, TotalExperienceMonths: 18}
-	met, _ := deriveHardRequirementStatus(candidate, Vacancy{WorkExperience: "Опыт 1-3 года"}, HardRequirementCandidate{
-		Requirement: "1-3 года опыта", Category: hardRequirementCategoryExperienceYears, VacancyEvidence: "Опыт 1-3 года",
-	})
-	if met != hardRequirementStatusMet {
-		t.Fatalf("generic HH requirement was not met: %s", met)
+func TestDescriptionExperienceUsesExplicitTotalDurationPolicy(t *testing.T) {
+	candidate := CandidateContext{TotalExperienceMonthsKnown: true, TotalExperienceMonths: 11}
+	softGap := deriveHardRequirements(candidate, Vacancy{WorkExperience: "between1And3"}, "Опыт от 1 года", []HardRequirementCandidate{{
+		Requirement: "опыт от 1 года", Category: hardRequirementCategoryExperienceYears, VacancyEvidence: "Опыт от 1 года",
+	}})
+	if len(softGap) != 1 || softGap[0].Status != hardRequirementStatusUnknown || !softGap[0].Soft {
+		t.Fatalf("one-year description requirement was not a soft gap: %+v", softGap)
 	}
-	unknown, _ := deriveHardRequirementStatus(candidate, Vacancy{WorkExperience: "Опыт 1-3 года"}, HardRequirementCandidate{
+	largeGap := deriveHardRequirements(candidate, Vacancy{WorkExperience: "between1And3"}, "Опыт от 3 лет", []HardRequirementCandidate{{
+		Requirement: "опыт от 3 лет", Category: hardRequirementCategoryExperienceYears, VacancyEvidence: "Опыт от 3 лет",
+	}})
+	if len(largeGap) != 1 || largeGap[0].Status != hardRequirementStatusMissing || largeGap[0].Soft {
+		t.Fatalf("three-year generic requirement was not a hard mismatch: %+v", largeGap)
+	}
+	roleSpecific := deriveHardRequirements(CandidateContext{TotalExperienceMonthsKnown: true, TotalExperienceMonths: 50}, Vacancy{}, "Нужно 3 года SRE", []HardRequirementCandidate{{
 		Requirement: "3 года SRE", Category: hardRequirementCategoryExperienceYears, VacancyEvidence: "Нужно 3 года SRE",
-	})
-	if unknown != hardRequirementStatusUnknown {
-		t.Fatalf("role-specific requirement used generic HH duration: %s", unknown)
+	}})
+	if len(roleSpecific) != 1 || roleSpecific[0].Status != hardRequirementStatusUnknown {
+		t.Fatalf("role-specific requirement used generic total experience: %+v", roleSpecific)
 	}
 }
 

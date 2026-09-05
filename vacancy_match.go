@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
@@ -139,7 +140,7 @@ func hardRequirementsMissing(evaluation VacancyEvaluation) []string {
 func hardRequirementsUnknown(evaluation VacancyEvaluation) []string {
 	result := make([]string, 0)
 	for _, requirement := range evaluation.HardRequirements {
-		if requirement.Status == hardRequirementStatusUnknown && !isOptionalRequirement(requirement) {
+		if requirement.Status == hardRequirementStatusUnknown && !requirement.Soft && !isOptionalRequirement(requirement) {
 			result = append(result, strings.TrimSpace(requirement.Requirement))
 		}
 	}
@@ -261,6 +262,10 @@ func buildVacancyEvaluationPrompt(input vacancyEvaluationInput) (string, string)
 		"category может быть только education, location, experience_years, skill, language, license, citizenship или other.",
 		"vacancy_evidence — короткий точный фрагмент из описания вакансии или структурированного поля HH, без перефразирования. Не объявляй требование hard без такого подтверждения.",
 		"Для location используй точный фрагмент из Area.Name или WorkSchedule; для experience_years — из WorkExperience. Для остальных категорий используй точный фрагмент из описания.",
+		"WorkExperience из карточки HH — только factual/ranking signal. Диапазон HH не является автоматическим hard blocker и сам по себе не должен создавать hard requirement.",
+		"Точный общий стаж кандидата передан в месяцах. Не округляй его: 11 months — это не 1 year.",
+		"Небольшой разрыв для общего минимума опыта допустим: при минимуме до 12 месяцев и стаже кандидата от 9 месяцев это UNKNOWN/soft gap, а не MISSING.",
+		"Требование вида «3 года SRE», «2 года DevOps» или «3 года Java» относится к роли/технологии; общий стаж его не подтверждает, без role-specific evidence оставляй UNKNOWN.",
 		"Не создавай требования, которых нет в вакансии. Не превращай отсутствие информации в вакансии в образование, лицензию, гражданство или другой hard requirement.",
 		"Если вакансия говорит «без опыта» или «опыт не требуется», не создавай hard requirement experience_years.",
 		"Если вакансия говорит «без опыта» или «опыт не требуется», наличие опыта кандидата не является hard mismatch.",
@@ -305,6 +310,7 @@ func buildVacancyEvaluationPrompt(input vacancyEvaluationInput) (string, string)
 Навыки: %s
 Локация кандидата: %s
 Образование кандидата: %s
+Structured candidate total experience: %s
 Структурированная длительность опыта кандидата: %s
 Опыт:
 %s
@@ -323,7 +329,7 @@ func buildVacancyEvaluationPrompt(input vacancyEvaluationInput) (string, string)
 Совпавшие позитивные ключевые слова: %s
 Если они не встречаются, не отклоняй вакансию только по этой причине; используй их как дополнительный сигнал.
 	`, input.Candidate.FullName, input.Candidate.ResumeTitle, input.Candidate.Salary,
-		input.Candidate.Skills, candidateLocation(input.Candidate.Location), candidateEducationSummary(input.Candidate), candidateExperienceSummary(input.Candidate), input.Candidate.Experience, input.Vacancy.Name,
+		input.Candidate.Skills, candidateLocation(input.Candidate.Location), candidateEducationSummary(input.Candidate), candidateExperienceSummary(input.Candidate), candidateExperienceSummary(input.Candidate), input.Candidate.Experience, input.Vacancy.Name,
 		input.Vacancy.Company.Name, workExperience, input.Description, input.Salary, input.Location,
 		input.WorkSchedule, includeKeywords, matchedIncludeKeywords)
 
@@ -525,9 +531,9 @@ func validateHardRequirementShape(requirement HardRequirementEvaluation) error {
 	return nil
 }
 
-// deriveHardRequirementStatus is intentionally conservative. Generic HH
-// experience requirements are derived by localStructuredHardRequirements;
-// description-specific experience is never satisfied by total experience.
+// deriveHardRequirementStatus is intentionally conservative. Generic HH card
+// experience is a soft ranking signal, while explicit description experience
+// may be evaluated locally when it clearly refers to total experience.
 func deriveHardRequirementStatus(candidate CandidateContext, vacancy Vacancy, requirement HardRequirementCandidate) (string, string) {
 	unknown := "not provided"
 	switch requirement.Category {
@@ -544,11 +550,9 @@ func deriveHardRequirementStatus(candidate CandidateContext, vacancy Vacancy, re
 		}
 		return hardRequirementStatusMissing, candidateEducationEvidence(candidate)
 	case hardRequirementCategoryExperienceYears:
-		// A requirement extracted from free-form description can be role- or
-		// technology-specific. Total duration is only used for the trusted HH
-		// WorkExperience field, when the extracted evidence matches that field.
-		if genericExperienceRequirementEvidenceMatches(vacancy.WorkExperience, requirement) {
-			return genericExperienceStatus(candidate, vacancy.WorkExperience)
+		minimumMonths, supported, generic := descriptionExperienceMinimumMonths(requirement.Requirement, requirement.VacancyEvidence)
+		if supported && generic {
+			return genericDescriptionExperienceStatus(candidate, minimumMonths)
 		}
 		return hardRequirementStatusUnknown, unknown
 	case hardRequirementCategoryLocation:
@@ -571,13 +575,6 @@ func deriveHardRequirementStatus(candidate CandidateContext, vacancy Vacancy, re
 	}
 }
 
-func genericExperienceRequirementEvidenceMatches(workExperience string, requirement HardRequirementCandidate) bool {
-	if _, supported, noExperience := genericWorkExperienceMinimumMonths(workExperience); !supported || noExperience {
-		return false
-	}
-	return containsNormalizedText(workExperience, requirement.VacancyEvidence)
-}
-
 func deriveHardRequirements(candidate CandidateContext, vacancy Vacancy, description string, candidates []HardRequirementCandidate) []HardRequirementEvaluation {
 	result := make([]HardRequirementEvaluation, 0, len(candidates))
 	for _, requirement := range candidates {
@@ -589,9 +586,15 @@ func deriveHardRequirements(candidate CandidateContext, vacancy Vacancy, descrip
 			}
 			continue
 		}
-		if vacancyDoesNotRequireExperience(vacancy.WorkExperience) && requirement.Category == hardRequirementCategoryExperienceYears {
+		if requirement.Category == hardRequirementCategoryExperienceYears && experienceRequirementIsNonRequirement(requirement) {
 			if logger != nil {
 				logger.Debug("Discard hard requirement: vacancy does not require experience: %q", requirement.Requirement)
+			}
+			continue
+		}
+		if requirement.Category == hardRequirementCategoryExperienceYears && genericHHExperienceEvidenceOnly(vacancy, description, requirement) {
+			if logger != nil {
+				logger.Debug("Discard hard requirement: generic HH WorkExperience is a soft signal: %q", requirement.Requirement)
 			}
 			continue
 		}
@@ -615,6 +618,7 @@ func deriveHardRequirements(candidate CandidateContext, vacancy Vacancy, descrip
 			Status:            status,
 			VacancyEvidence:   strings.TrimSpace(requirement.VacancyEvidence),
 			CandidateEvidence: candidateEvidence,
+			Soft:              requirement.Category == hardRequirementCategoryExperienceYears && status == hardRequirementStatusUnknown && genericDescriptionExperienceSoftGap(candidate, requirement),
 		})
 	}
 	return result
@@ -695,6 +699,75 @@ func candidateRequirementMentioned(candidate CandidateContext, requirement strin
 	return containsNormalizedText(candidate.Skills, requirement) || containsNormalizedText(candidate.Experience, requirement)
 }
 
+var numericExperiencePattern = regexp.MustCompile(`(?i)([0-9]+)\s*(?:\+\s*)?(лет|года|год|месяц(?:а|ев|ы)?|years?|months?)`)
+
+var roleSpecificExperienceMarkers = []string{
+	"sre", "devops", "devsecops", "java", "python", "django", "fastapi", "golang", "go ",
+	"php", "ruby", "kotlin", "swift", "javascript", "typescript", "c#", "c++", "kubernetes",
+	"qa", "тестиров", "разработчик", "разработке", "backend", "back-end", "frontend", "front-end",
+	"fullstack", "full-stack", "data engineer", "data analyst", "аналитик", "поддержк",
+}
+
+// descriptionExperienceMinimumMonths extracts only an explicit duration from
+// the description-derived requirement. The generic flag is false for role- or
+// technology-specific phrases, whose duration cannot be proven by total
+// candidate experience.
+func descriptionExperienceMinimumMonths(requirement, evidence string) (int, bool, bool) {
+	text := normalizeEvidenceText(strings.Join([]string{requirement, evidence}, " "))
+	match := numericExperiencePattern.FindStringSubmatch(text)
+	if len(match) != 3 {
+		return 0, false, false
+	}
+	months, err := strconv.Atoi(match[1])
+	if err != nil || months < 0 {
+		return 0, false, false
+	}
+	unit := strings.ToLower(match[2])
+	if strings.Contains(unit, "месяц") || strings.Contains(unit, "month") {
+		return months, true, !containsRoleSpecificExperienceMarker(text)
+	}
+	return months * 12, true, !containsRoleSpecificExperienceMarker(text)
+}
+
+func containsRoleSpecificExperienceMarker(text string) bool {
+	for _, marker := range roleSpecificExperienceMarkers {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func genericDescriptionExperienceStatus(candidate CandidateContext, minimumMonths int) (string, string) {
+	if !candidate.TotalExperienceMonthsKnown {
+		return hardRequirementStatusUnknown, "not provided"
+	}
+	evidence := fmt.Sprintf("Candidate total experience: %d months", candidate.TotalExperienceMonths)
+	if candidate.TotalExperienceMonths >= minimumMonths {
+		return hardRequirementStatusMet, evidence
+	}
+	// A small gap around the one-year threshold is a ranking signal, not a
+	// hard mismatch. Keep it visible as soft UNKNOWN for auditability.
+	if minimumMonths <= 12 && candidate.TotalExperienceMonths >= 9 {
+		return hardRequirementStatusUnknown, evidence
+	}
+	return hardRequirementStatusMissing, evidence
+}
+
+func genericDescriptionExperienceSoftGap(candidate CandidateContext, requirement HardRequirementCandidate) bool {
+	minimumMonths, supported, generic := descriptionExperienceMinimumMonths(requirement.Requirement, requirement.VacancyEvidence)
+	return supported && generic && candidate.TotalExperienceMonthsKnown && minimumMonths <= 12 && candidate.TotalExperienceMonths < minimumMonths && candidate.TotalExperienceMonths >= 9
+}
+
+func experienceRequirementIsNonRequirement(requirement HardRequirementCandidate) bool {
+	return vacancyDoesNotRequireExperience(requirement.Requirement) || vacancyDoesNotRequireExperience(requirement.VacancyEvidence)
+}
+
+func genericHHExperienceEvidenceOnly(vacancy Vacancy, description string, requirement HardRequirementCandidate) bool {
+	_, supported, noExperience := genericWorkExperienceMinimumMonths(vacancy.WorkExperience)
+	return supported && !noExperience && containsNormalizedText(vacancy.WorkExperience, requirement.VacancyEvidence) && !containsNormalizedText(description, requirement.VacancyEvidence)
+}
+
 func genericWorkExperienceMinimumMonths(value string) (int, bool, bool) {
 	text := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(value)), " "))
 	text = strings.ReplaceAll(text, "–", "-")
@@ -713,18 +786,6 @@ func genericWorkExperienceMinimumMonths(value string) (int, bool, bool) {
 	default:
 		return 0, false, false
 	}
-}
-
-func genericExperienceStatus(candidate CandidateContext, workExperience string) (string, string) {
-	minimumMonths, supported, noExperience := genericWorkExperienceMinimumMonths(workExperience)
-	if !supported || noExperience || !candidate.TotalExperienceMonthsKnown {
-		return hardRequirementStatusUnknown, "not provided"
-	}
-	evidence := fmt.Sprintf("Candidate total experience: %d months", candidate.TotalExperienceMonths)
-	if candidate.TotalExperienceMonths >= minimumMonths {
-		return hardRequirementStatusMet, evidence
-	}
-	return hardRequirementStatusMissing, evidence
 }
 
 func educationRequirementMatches(candidateLevel, requirement string) (bool, bool) {
@@ -802,20 +863,17 @@ func validateHardRequirements(candidate CandidateContext, vacancy Vacancy, evalu
 				return fmt.Errorf("education requirement %q has status %s, want trusted status %s", requirement.Requirement, requirement.Status, expected)
 			}
 		case hardRequirementCategoryExperienceYears:
-			if vacancyDoesNotRequireExperience(vacancy.WorkExperience) {
+			if vacancyDoesNotRequireExperience(requirement.Requirement) || vacancyDoesNotRequireExperience(requirement.VacancyEvidence) {
 				return fmt.Errorf("vacancy does not require experience, so experience requirement %q must not be emitted", requirement.Requirement)
 			}
-			minimumMonths, supported, noExperience := genericWorkExperienceMinimumMonths(vacancy.WorkExperience)
-			if !supported || noExperience || !candidate.TotalExperienceMonthsKnown || !strings.HasPrefix(requirement.CandidateEvidence, "Candidate total experience:") {
+			minimumMonths, supported, generic := descriptionExperienceMinimumMonths(requirement.Requirement, requirement.VacancyEvidence)
+			if !supported || !generic || !candidate.TotalExperienceMonthsKnown || !strings.HasPrefix(requirement.CandidateEvidence, "Candidate total experience:") {
 				if requirement.Status != hardRequirementStatusUnknown {
-					return fmt.Errorf("experience requirement %q must be unknown without trusted generic HH duration", requirement.Requirement)
+					return fmt.Errorf("experience requirement %q must be unknown without trusted generic description duration", requirement.Requirement)
 				}
 				break
 			}
-			expected := hardRequirementStatusMissing
-			if candidate.TotalExperienceMonths >= minimumMonths {
-				expected = hardRequirementStatusMet
-			}
+			expected, _ := genericDescriptionExperienceStatus(candidate, minimumMonths)
 			if requirement.Status != expected {
 				return fmt.Errorf("experience requirement %q has status %s, want trusted status %s", requirement.Requirement, requirement.Status, expected)
 			}
@@ -1115,7 +1173,14 @@ func (c *AIClient) GenerateLetterWithEvaluation(v Vacancy, vacancyDescription st
 		strings.Join(evaluation.StrongMatch, ", "), strings.Join(evaluation.Missing, ", "),
 		strings.Join(evaluation.Reasons, "; "),
 	)
-	return c.Chat(systemPrompt, userPrompt, 512, 0.5)
+	letter, err := c.Chat(systemPrompt, userPrompt, 512, 0.5)
+	if err != nil {
+		return "", err
+	}
+	if err := validateGeneratedLetterExperience(candidate, letter); err != nil {
+		return "", err
+	}
+	return letter, nil
 }
 
 func parseMinSalary(value string) (int, error) {

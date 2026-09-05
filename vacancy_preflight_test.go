@@ -78,11 +78,9 @@ func TestLocalStructuredHardRequirements(t *testing.T) {
 		wantLocationHard bool
 	}{
 		{
-			name:         "experience 3-6 years is local unknown",
-			preflight:    VacancyPreflight{WorkExperienceKnown: true, WorkExperience: "Опыт 3-6 лет"},
-			wantCategory: hardRequirementCategoryExperienceYears,
-			wantCount:    1,
-			wantStatus:   hardRequirementStatusUnknown,
+			name:      "structured experience is not a local hard requirement",
+			preflight: VacancyPreflight{WorkExperienceKnown: true, WorkExperience: "Опыт 3-6 лет"},
+			wantCount: 0,
 		},
 		{
 			name:      "no experience does not create requirement",
@@ -144,8 +142,8 @@ func TestMergeHardRequirementsKeepsLocalRequirementWhenAIIsEmpty(t *testing.T) {
 		WorkExperience:      "Опыт 3-6 лет",
 	}, CandidateContext{})
 	merged := mergeHardRequirements(local, nil)
-	if len(merged) != 1 || merged[0].Category != hardRequirementCategoryExperienceYears {
-		t.Fatalf("local structured requirement was lost: %+v", merged)
+	if len(merged) != 0 {
+		t.Fatalf("soft structured experience was turned into a hard requirement: %+v", merged)
 	}
 }
 

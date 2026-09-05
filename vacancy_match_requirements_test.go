@@ -230,7 +230,7 @@ func TestDeriveHardRequirementsIsDeterministicAndConservative(t *testing.T) {
 		{Requirement: "Kubernetes", Category: hardRequirementCategorySkill, VacancyEvidence: "Kubernetes"},
 	}
 	derived := deriveHardRequirements(candidate, vacancy, description, requirements)
-	if len(derived) != 3 {
+	if len(derived) != 2 {
 		t.Fatalf("unexpected derived requirements, optional/unsupported items were not discarded: %+v", derived)
 	}
 
@@ -238,10 +238,13 @@ func TestDeriveHardRequirementsIsDeterministicAndConservative(t *testing.T) {
 	for _, requirement := range derived {
 		byRequirement[requirement.Requirement] = requirement
 	}
-	for _, requirement := range []string{"FastAPI", "3+ года", "офис в Ташкенте"} {
+	for _, requirement := range []string{"FastAPI", "офис в Ташкенте"} {
 		if byRequirement[requirement].Status != hardRequirementStatusUnknown {
 			t.Fatalf("%q should be unknown: %+v", requirement, byRequirement[requirement])
 		}
+	}
+	if _, ok := byRequirement["3+ года"]; ok {
+		t.Fatal("generic HH WorkExperience was incorrectly turned into a hard requirement")
 	}
 	if _, ok := byRequirement["высшее образование"]; ok {
 		t.Fatal("education without supported vacancy evidence should have been discarded")

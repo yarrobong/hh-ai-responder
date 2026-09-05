@@ -401,17 +401,9 @@ func stateHasVacancyTest(value any, vacancyID int) bool {
 
 func localStructuredHardRequirements(preflight VacancyPreflight, candidate CandidateContext) []HardRequirementEvaluation {
 	var result []HardRequirementEvaluation
-	workExperienceKnown := preflight.WorkExperienceKnown || strings.TrimSpace(preflight.WorkExperience) != ""
-	if workExperienceKnown && strings.TrimSpace(preflight.WorkExperience) != "" && !vacancyDoesNotRequireExperience(preflight.WorkExperience) {
-		status, candidateEvidence := genericExperienceStatus(candidate, preflight.WorkExperience)
-		result = append(result, HardRequirementEvaluation{
-			Requirement:       preflight.WorkExperience,
-			Category:          hardRequirementCategoryExperienceYears,
-			Status:            status,
-			VacancyEvidence:   preflight.WorkExperience,
-			CandidateEvidence: candidateEvidence,
-		})
-	}
+	// HH's structured WorkExperience is factual context and a ranking signal,
+	// not a hard requirement. Explicit duration requirements from the vacancy
+	// description are derived separately from AI extraction.
 
 	workScheduleKnown := preflight.WorkScheduleKnown || strings.TrimSpace(preflight.WorkSchedule) != ""
 	if !workScheduleKnown || isRemoteWorkSchedule(preflight.WorkSchedule) {

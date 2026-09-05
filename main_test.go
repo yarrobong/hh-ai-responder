@@ -115,6 +115,28 @@ func TestNoExperienceRequirementDoesNotConflictWithCandidateExperience(t *testin
 	}
 }
 
+func TestVacancyEvaluationPromptUsesExactExperienceMonthsAndSoftHHBand(t *testing.T) {
+	systemPrompt, userPrompt := buildVacancyEvaluationPrompt(vacancyEvaluationInput{
+		Candidate: CandidateContext{TotalExperienceMonthsKnown: true, TotalExperienceMonths: 11},
+		Vacancy:   Vacancy{WorkExperience: "between1And3"},
+	})
+	if !strings.Contains(userPrompt, "Structured candidate total experience: 11 months") {
+		t.Fatalf("prompt did not preserve exact candidate duration: %s", userPrompt)
+	}
+	for _, expected := range []string{"WorkExperience из карточки HH", "ranking signal", "не является автоматическим hard blocker", "11 months — это не 1 year"} {
+		if !strings.Contains(systemPrompt, expected) {
+			t.Fatalf("experience policy missing from system prompt (%q): %s", expected, systemPrompt)
+		}
+	}
+	soft := VacancyEvaluation{Score: 90, Apply: true, HardRequirements: []HardRequirementEvaluation{{
+		Requirement: "опыт от 1 года", Category: hardRequirementCategoryExperienceYears, Status: hardRequirementStatusUnknown, Soft: true,
+		VacancyEvidence: "Опыт от 1 года", CandidateEvidence: "Candidate total experience: 11 months",
+	}}}
+	if got := vacancyDecision(soft, 65); got != VacancyMatch {
+		t.Fatalf("soft experience gap blocked application: %s", got)
+	}
+}
+
 func TestVacancyEvaluationRequiresUnknownRequirementsArray(t *testing.T) {
 	if _, err := parseVacancyEvaluationJSON(`{"score":82,"apply":true,"reasons":[],"missing":[]}`); err == nil {
 		t.Fatal("evaluation without hard_requirements was accepted")
@@ -826,6 +848,27 @@ func TestOrdinaryLetterDoesNotForceJSONMode(t *testing.T) {
 	}
 }
 
+func TestGeneratedLetterRejectsRoundedExperienceClaim(t *testing.T) {
+	previousLogger := logger
+	logger = NewLogger(io.Discard, LevelDebug)
+	t.Cleanup(func() { logger = previousLogger })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"У меня 1 год опыта в разработке."}}]}`)
+	}))
+	defer server.Close()
+	client := NewAIClient(context.Background(), server.URL, "test-model", "", time.Second, time.Second, 1)
+	_, err := client.GenerateLetter(
+		Vacancy{Name: "Backend"},
+		"Python",
+		CandidateContext{ResumeTitle: "Python developer", TotalExperienceMonthsKnown: true, TotalExperienceMonths: 11},
+		"",
+	)
+	if err == nil || !strings.Contains(err.Error(), "rounds structured experience") {
+		t.Fatalf("rounded experience claim was accepted: %v", err)
+	}
+}
+
 type aiRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f aiRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -853,6 +896,8 @@ func TestDryRunVacancyAboveThresholdProducesPreviewWithoutWrite(t *testing.T) {
 			_, _ = io.WriteString(w, "prefix,\"vacancies\":[{\"vacancyId\":123,\"name\":\"Python backend developer\",\"links\":{\"desktop\":\"https://example.test/vacancy/123\"},\"company\":{\"name\":\"Example\"},\"responseLetterRequired\":false}]}")
 		case "/vacancy/123":
 			_, _ = io.WriteString(w, "{\"redirectConfig\":{},\"vacancyView\":{\"description\":\"Python, REST API and SQL\"}}")
+		case "/applicant/vacancy_response":
+			_, _ = io.WriteString(w, "{\"redirectConfig\":{\"archived\":false,\"alreadyResponded\":false,\"testPresent\":false,\"responseLetterRequired\":false,\"canApply\":true,\"area\":{\"name\":\"Екатеринбург\"},\"workSchedule\":\"Можно удалённо\",\"workExperience\":\"Без опыта\"}}")
 		default:
 			t.Fatalf("unexpected HH endpoint: %s", r.URL.Path)
 		}
@@ -881,10 +926,12 @@ func TestDryRunVacancyAboveThresholdProducesPreviewWithoutWrite(t *testing.T) {
 	if err := r.ApplyVacancies(); err != nil {
 		t.Fatal(err)
 	}
-	if got := hhCalls.Load(); got != 3 {
-		t.Fatalf("unexpected number of HH read requests: got %d, want 3", got)
+	if got := hhCalls.Load(); got != 4 {
+		t.Fatalf("unexpected number of HH read requests: got %d, want 4", got)
 	}
-	if !strings.Contains(events.String(), "\"type\":\"vacancy_match\"") || !strings.Contains(events.String(), "\"type\":\"application_preview\"") {
+	if !strings.Contains(events.String(), "\"type\":\"vacancy_preflight\"") ||
+		!strings.Contains(events.String(), "\"type\":\"vacancy_match\"") ||
+		!strings.Contains(events.String(), "\"type\":\"application_preview\"") {
 		t.Fatalf("dry-run did not emit match and application preview events: %s", events.String())
 	}
 	if !strings.Contains(events.String(), "\"type\":\"run_summary\"") ||

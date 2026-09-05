@@ -57,9 +57,11 @@ const (
 )
 
 var (
-	logger                  *Logger
-	latesteResumeHashRegexp = regexp.MustCompile(`"latestResumeHash":"([a-f0-9]{30,})"`)
-	userIdRegexp            = regexp.MustCompile(`"userId":(\d+)`)
+	logger                            *Logger
+	latesteResumeHashRegexp           = regexp.MustCompile(`"latestResumeHash":"([a-f0-9]{30,})"`)
+	userIdRegexp                      = regexp.MustCompile(`"userId":(\d+)`)
+	experienceDurationClaimPattern    = regexp.MustCompile(`(?i)(?:[0-9]+(?:[.,][0-9]+)?\s*)?(?:год(?:а|ов)?|лет|year(?:s)?)\s*(?:опыта|experience)?`)
+	approximateExperienceClaimPattern = regexp.MustCompile(`(?i)(?:около|примерно|приблизительно|about|approximately)\s+(?:[0-9]+(?:[.,][0-9]+)?\s*)?(?:год(?:а|ов)?|лет|year(?:s)?)`)
 )
 
 type Config struct {
@@ -132,6 +134,7 @@ type HardRequirementEvaluation struct {
 	Status            string `json:"status"`
 	VacancyEvidence   string `json:"vacancy_evidence"`
 	CandidateEvidence string `json:"candidate_evidence"`
+	Soft              bool   `json:"soft,omitempty"`
 }
 
 // VacancyEvaluationAIResponse is the structured response contract used by
@@ -2158,6 +2161,10 @@ func buildLetterSystemPrompt(candidate CandidateContext, extraPrompt string) str
 
 %s`, candidate.FullName, candidate.ResumeTitle, candidate.Salary, candidate.Skills, candidateLocation(candidate.Location), candidateEducationSummary(candidate), candidateExperienceSummary(candidate), candidate.Experience)
 
+	if candidate.TotalExperienceMonthsKnown {
+		systemPrompt += fmt.Sprintf("\nДлительность общего стажа указана точно в месяцах (%d months). Не округляй её до лет; предпочтительно вообще не упоминай длительность в письме.", candidate.TotalExperienceMonths)
+	}
+
 	if strings.TrimSpace(candidate.Contacts) != "" {
 		systemPrompt += "\nКонтакты для указания в письме: " + candidate.Contacts
 	}
@@ -2206,7 +2213,29 @@ func (c *AIClient) GenerateLetter(v Vacancy, vacancyDescription string, candidat
 		vacancyDescription,
 	)
 
-	return c.Chat(systemPrompt, userPrompt, 512, 0.5)
+	letter, err := c.Chat(systemPrompt, userPrompt, 512, 0.5)
+	if err != nil {
+		return "", err
+	}
+	if err := validateGeneratedLetterExperience(candidate, letter); err != nil {
+		return "", err
+	}
+	return letter, nil
+}
+
+func validateGeneratedLetterExperience(candidate CandidateContext, letter string) error {
+	if !candidate.TotalExperienceMonthsKnown || candidate.TotalExperienceMonths%12 == 0 {
+		return nil
+	}
+	claims := experienceDurationClaimPattern.FindAllStringIndex(letter, -1)
+	if len(claims) == 0 {
+		return nil
+	}
+	approximateClaims := approximateExperienceClaimPattern.FindAllStringIndex(letter, -1)
+	if len(approximateClaims) < len(claims) {
+		return fmt.Errorf("generated letter rounds structured experience of %d months to years", candidate.TotalExperienceMonths)
+	}
+	return nil
 }
 
 func buildTestSystemPrompt(contacts, githubURL, extraPrompt string) string {

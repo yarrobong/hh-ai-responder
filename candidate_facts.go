@@ -435,5 +435,5 @@ func candidateExperienceSummary(candidate CandidateContext) string {
 	if !candidate.TotalExperienceMonthsKnown {
 		return "не передана; не вычисляй её по датам"
 	}
-	return fmt.Sprintf("%d месяцев", candidate.TotalExperienceMonths)
+	return fmt.Sprintf("%d months", candidate.TotalExperienceMonths)
 }
