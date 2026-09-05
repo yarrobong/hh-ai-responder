@@ -1604,7 +1604,14 @@ type ChatCompletionUsage struct {
 }
 
 type ChatResponseFormat struct {
-	Type string `json:"type"`
+	Type       string          `json:"type"`
+	JSONSchema *ChatJSONSchema `json:"json_schema,omitempty"`
+}
+
+type ChatJSONSchema struct {
+	Name   string         `json:"name"`
+	Schema map[string]any `json:"schema"`
+	Strict bool           `json:"strict"`
 }
 
 type AccountInfo struct {
@@ -1920,17 +1927,34 @@ func (c *AIClient) Chat(systemPrompt, userPrompt string, maxTokens int, temperat
 	return c.chat(systemPrompt, userPrompt, maxTokens, temperature, nil, nil)
 }
 
-// ChatStructured sends an OpenAI-compatible JSON-mode request and only returns
-// after the response content passes validator. A validation error is treated
-// like a failed AI attempt so malformed or incomplete structured output cannot
-// reach a state-changing caller.
+// ChatStructured sends an OpenAI-compatible structured request and only
+// returns after the response content passes validator. A validation error is
+// treated like a failed AI attempt so malformed or incomplete structured
+// output cannot reach a state-changing caller.
 func (c *AIClient) ChatStructured(systemPrompt, userPrompt string, maxTokens int, temperature float64, validator func(string) error) (string, error) {
+	return c.chatStructured(systemPrompt, userPrompt, maxTokens, temperature, nil, validator)
+}
+
+// ChatStructuredWithSchema requests the supplied schema when the provider is
+// known to support it. Unknown OpenAI-compatible providers deliberately keep
+// the existing json_object behavior for compatibility.
+func (c *AIClient) ChatStructuredWithSchema(systemPrompt, userPrompt string, maxTokens int, temperature float64, schema *ChatJSONSchema, validator func(string) error) (string, error) {
+	return c.chatStructured(systemPrompt, userPrompt, maxTokens, temperature, schema, validator)
+}
+
+func (c *AIClient) chatStructured(systemPrompt, userPrompt string, maxTokens int, temperature float64, schema *ChatJSONSchema, validator func(string) error) (string, error) {
 	if validator == nil {
 		return "", errors.New("structured AI response validator is required")
 	}
 
 	options := &ChatCompletionRequest{
 		ResponseFormat: &ChatResponseFormat{Type: "json_object"},
+	}
+	if schema != nil && c.supportsMistralJSONSchema() {
+		options.ResponseFormat = &ChatResponseFormat{
+			Type:       "json_schema",
+			JSONSchema: schema,
+		}
 	}
 	if c.supportsGroqGPTOSSReasoning() {
 		includeReasoning := false
@@ -1995,6 +2019,14 @@ func (c *AIClient) supportsGroqGPTOSSReasoning() bool {
 	host := strings.ToLower(parsed.Hostname())
 	model := strings.ToLower(strings.TrimSpace(c.model))
 	return (host == "api.groq.com" || strings.HasSuffix(host, ".api.groq.com")) && strings.HasPrefix(model, "openai/gpt-oss-")
+}
+
+func (c *AIClient) supportsMistralJSONSchema() bool {
+	parsed, err := url.Parse(c.baseURL)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(parsed.Hostname(), "api.mistral.ai")
 }
 
 func (c *AIClient) getChatResponse(body []byte, metadata ChatCompletionRequest) (string, error) {
@@ -2109,6 +2141,8 @@ func buildTestSystemPrompt(contacts, githubURL, extraPrompt string) string {
 		"- Отвечай на вопросы о кандидате только на основании переданных фактов. Не выдумывай опыт, навыки, образование, проекты или другие сведения.",
 		"- Если у задачи поле candidateSolutions не пустое — выбери id наиболее подходящий вариант ответа по смыслу вопроса (поле solution_id).",
 		"- Если candidateSolutions пустой — самостоятельно сформулируй краткий профессиональный ответ (поле text_solution).",
+		"- В массиве solutions каждый элемент должен быть объектом только с полями task_id, solution_id или text_solution; не добавляй другие поля.",
+		"- Для каждого ответа используй ровно один из solution_id или text_solution; не выдумывай solution_id.",
 		"- Верни только валидный JSON без Markdown, пояснений и любого текста вне JSON.",
 		`- Формат ответа: {"solutions":[{"task_id":1,"solution_id":10},{"task_id":2,"text_solution":"ответ"}]}`,
 		"- Значения полей `task_id` и `solution_id` должны быть строго числами!",
@@ -2124,6 +2158,33 @@ func buildTestSystemPrompt(contacts, githubURL, extraPrompt string) string {
 		systemPrompt += "\n\nДополнительные инструкции:\n" + extraPrompt
 	}
 	return systemPrompt
+}
+
+func testSolutionsJSONSchema() *ChatJSONSchema {
+	return &ChatJSONSchema{
+		Name:   "test_solutions",
+		Strict: true,
+		Schema: map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"required":             []string{"solutions"},
+			"properties": map[string]any{
+				"solutions": map[string]any{
+					"type": "array",
+					"items": map[string]any{
+						"type":                 "object",
+						"additionalProperties": false,
+						"required":             []string{"task_id"},
+						"properties": map[string]any{
+							"task_id":       map[string]any{"type": "integer"},
+							"solution_id":   map[string]any{"type": "integer"},
+							"text_solution": map[string]any{"type": "string"},
+						},
+					},
+				},
+			},
+		},
+	}
 }
 
 func (c *AIClient) SolveTests(tasks []Task, contacts, githubURL, extraPrompt string) (map[int]SolutionFields, error) {
@@ -2143,11 +2204,12 @@ func (c *AIClient) SolveTests(tasks []Task, contacts, githubURL, extraPrompt str
 
 	userPrompt := "JSON с тестами: " + string(tasksJSON)
 
-	response, err := c.ChatStructured(
+	response, err := c.ChatStructuredWithSchema(
 		systemPrompt,
 		userPrompt,
 		512+len(tasks)*64,
 		0.2,
+		testSolutionsJSONSchema(),
 		func(response string) error {
 			var parsed TestSolutionsResponse
 			if err := parseStrictJSON(response, &parsed); err != nil {
@@ -2857,10 +2919,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 			}
 			score := evaluation.Score
 			if !finalApplyDecision(evaluation, r.minMatchScore) {
-				reason := fmt.Sprintf("AI decision rejected vacancy (%d/100, minimum %d)", evaluation.Score, r.minMatchScore)
-				if !evaluation.Apply {
-					reason = fmt.Sprintf("AI marked vacancy as not suitable (%d/100)", evaluation.Score)
-				}
+				reason := vacancyEvaluationRejectReason(evaluation, r.minMatchScore)
 				r.skipVacancy(vacancy, vacancyURL, reason, &score)
 				continue
 			}

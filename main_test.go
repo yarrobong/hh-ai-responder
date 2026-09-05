@@ -96,6 +96,7 @@ func TestVacancyEvaluationJSONValidation(t *testing.T) {
 		`{"score":101,"apply":true,"reasons":[],"missing":[]}`,
 		`{"score":82,"apply":true,"reasons":[],"missing":[] trailing}`,
 		`{"score":82,"apply":true,"reasons":null,"missing":[]}`,
+		`{"score":82,"apply":true,"reasons":["Python"],"missing":[{"skill":"FastAPI","reason":"not confirmed"}]}`,
 		`{"score":82,"apply":true,"reasons":[],"missing":[],"unexpected":true}`,
 	} {
 		if _, err := parseVacancyEvaluationJSON(raw); err == nil {
@@ -113,6 +114,12 @@ func TestFinalApplyDecisionUsesAIFlagAndThreshold(t *testing.T) {
 	}
 	if finalApplyDecision(VacancyEvaluation{Score: 99, Apply: false}, 65) {
 		t.Fatal("AI apply=false must reject even a high score")
+	}
+	if got := vacancyEvaluationRejectReason(VacancyEvaluation{Score: 65, Apply: false}, 65); got != "AI recommended not applying (65/100)" {
+		t.Fatalf("unexpected apply=false diagnostic: %q", got)
+	}
+	if got := vacancyEvaluationRejectReason(VacancyEvaluation{Score: 60, Apply: true}, 65); got != "AI score below threshold (60/100, minimum 65)" {
+		t.Fatalf("unexpected threshold diagnostic: %q", got)
 	}
 }
 
@@ -357,6 +364,9 @@ func TestStructuredVacancyRetriesInvalidResponses(t *testing.T) {
 				if payload.ResponseFormat == nil || payload.ResponseFormat.Type != "json_object" {
 					t.Errorf("structured request missing json_object response format: %+v", payload)
 				}
+				if payload.ResponseFormat != nil && payload.ResponseFormat.JSONSchema != nil {
+					t.Errorf("generic endpoint received Mistral-specific JSON schema: %+v", payload.ResponseFormat)
+				}
 				if payload.ReasoningEffort != "" || payload.IncludeReasoning != nil {
 					t.Errorf("generic endpoint received provider-specific reasoning options: %+v", payload)
 				}
@@ -438,6 +448,9 @@ func TestStructuredTestSolutionsRetryValidation(t *testing.T) {
 		if payload.ResponseFormat == nil || payload.ResponseFormat.Type != "json_object" {
 			t.Errorf("test request missing json_object response format")
 		}
+		if payload.ResponseFormat != nil && payload.ResponseFormat.JSONSchema != nil {
+			t.Errorf("generic endpoint received Mistral-specific JSON schema")
+		}
 		response := responses[0]
 		if calls.Add(1) > 1 {
 			response = responses[1]
@@ -453,6 +466,125 @@ func TestStructuredTestSolutionsRetryValidation(t *testing.T) {
 	}
 	if !answers[1].HasChoice || answers[1].SolutionID != 10 || calls.Load() != 2 {
 		t.Fatalf("structured test retry did not produce validated answer: answers=%+v calls=%d", answers, calls.Load())
+	}
+}
+
+func TestMistralStructuredVacancyUsesStrictJSONSchema(t *testing.T) {
+	previousLogger := logger
+	logger = NewLogger(io.Discard, LevelDebug)
+	t.Cleanup(func() { logger = previousLogger })
+
+	var request ChatCompletionRequest
+	client := NewAIClient(context.Background(), "https://api.mistral.ai", "ministral-8b-latest", "secret-key", time.Second, time.Second, 1)
+	client.client.Transport = aiRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Request:    r,
+			Body:       io.NopCloser(strings.NewReader(aiCompletionResponse(`{"score":82,"apply":true,"reasons":["Python matches"],"missing":["FastAPI"],"strong_match":["REST API"]}`))),
+			Header:     make(http.Header),
+		}, nil
+	})
+
+	evaluation, err := client.EvaluateVacancy(vacancyEvaluationInput{Description: "Python"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evaluation.Score != 82 || !evaluation.Apply {
+		t.Fatalf("valid Mistral evaluation was decoded incorrectly: %+v", evaluation)
+	}
+	if request.ResponseFormat == nil || request.ResponseFormat.Type != "json_schema" {
+		t.Fatalf("Mistral request did not use json_schema: %+v", request.ResponseFormat)
+	}
+	jsonSchema := request.ResponseFormat.JSONSchema
+	if jsonSchema == nil || jsonSchema.Name != "vacancy_evaluation" || !jsonSchema.Strict {
+		t.Fatalf("Mistral schema wrapper is incorrect: %+v", jsonSchema)
+	}
+	if got, ok := jsonSchema.Schema["additionalProperties"].(bool); !ok || got {
+		t.Fatalf("schema additionalProperties must be false: %v", jsonSchema.Schema["additionalProperties"])
+	}
+	properties, ok := jsonSchema.Schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("schema properties have unexpected type: %T", jsonSchema.Schema["properties"])
+	}
+	score, ok := properties["score"].(map[string]any)
+	if !ok || score["type"] != "integer" || score["minimum"] != float64(0) || score["maximum"] != float64(100) {
+		t.Fatalf("score schema is incorrect: %v", properties["score"])
+	}
+	for _, field := range []string{"reasons", "missing", "strong_match"} {
+		arraySchema, ok := properties[field].(map[string]any)
+		if !ok || arraySchema["type"] != "array" {
+			t.Fatalf("%s is not an array schema: %v", field, properties[field])
+		}
+		items, ok := arraySchema["items"].(map[string]any)
+		if !ok || items["type"] != "string" {
+			t.Fatalf("%s items must be strings: %v", field, arraySchema["items"])
+		}
+	}
+}
+
+func TestMistralVacancyObjectInsideMissingFailsLocalValidation(t *testing.T) {
+	previousLogger := logger
+	logger = NewLogger(io.Discard, LevelDebug)
+	t.Cleanup(func() { logger = previousLogger })
+
+	client := NewAIClient(context.Background(), "https://api.mistral.ai", "ministral-8b-latest", "", time.Second, time.Second, 1)
+	client.client.Transport = aiRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Request:    r,
+			Body: io.NopCloser(strings.NewReader(aiCompletionResponse(
+				`{"score":82,"apply":true,"reasons":["Python matches"],"missing":[{"skill":"FastAPI","reason":"not confirmed"}]}`,
+			))),
+			Header: make(http.Header),
+		}, nil
+	})
+
+	if _, err := client.EvaluateVacancy(vacancyEvaluationInput{Description: "Python"}); err == nil {
+		t.Fatal("vacancy evaluation with an object inside missing passed local validation")
+	}
+}
+
+func TestMistralTestSolutionsUseSchemaAndSemanticValidation(t *testing.T) {
+	previousLogger := logger
+	logger = NewLogger(io.Discard, LevelDebug)
+	previousDelay := aiRetryDelay
+	aiRetryDelay = 0
+	t.Cleanup(func() {
+		logger = previousLogger
+		aiRetryDelay = previousDelay
+	})
+
+	var calls atomic.Int32
+	var request ChatCompletionRequest
+	client := NewAIClient(context.Background(), "https://api.mistral.ai", "ministral-8b-latest", "", time.Second, time.Second, 2)
+	client.client.Transport = aiRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			return nil, err
+		}
+		content := `{"solutions":[{"task_id":1,"solution_id":999}]}`
+		if calls.Add(1) > 1 {
+			content = `{"solutions":[{"task_id":1,"solution_id":10}]}`
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Request:    r,
+			Body:       io.NopCloser(strings.NewReader(aiCompletionResponse(content))),
+			Header:     make(http.Header),
+		}, nil
+	})
+
+	answers, err := client.SolveTests([]Task{{ID: 1, CandidateSolutions: []Solution{{ID: "10"}}}}, "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !answers[1].HasChoice || answers[1].SolutionID != 10 || calls.Load() != 2 {
+		t.Fatalf("Mistral test solution validation did not fail closed then recover: answers=%+v calls=%d", answers, calls.Load())
+	}
+	if request.ResponseFormat == nil || request.ResponseFormat.Type != "json_schema" || request.ResponseFormat.JSONSchema == nil || request.ResponseFormat.JSONSchema.Name != "test_solutions" {
+		t.Fatalf("Mistral test request did not use test_solutions schema: %+v", request.ResponseFormat)
 	}
 }
 
@@ -474,11 +606,14 @@ func TestStructuredGroqGPTOSSOptions(t *testing.T) {
 			Header:     make(http.Header),
 		}, nil
 	})
-	if _, err := client.ChatStructured("system", "user", 1024, 0.1, func(string) error { return nil }); err != nil {
+	if _, err := client.ChatStructuredWithSchema("system", "user", 1024, 0.1, vacancyEvaluationJSONSchema(), func(string) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if request.ResponseFormat == nil || request.ResponseFormat.Type != "json_object" {
 		t.Fatalf("missing Groq JSON mode: %+v", request)
+	}
+	if request.ResponseFormat.JSONSchema != nil {
+		t.Fatalf("Groq request unexpectedly received Mistral JSON schema: %+v", request.ResponseFormat)
 	}
 	if request.ReasoningEffort != "low" || request.IncludeReasoning == nil || *request.IncludeReasoning {
 		t.Fatalf("missing safe GPT-OSS reasoning options: %+v", request)

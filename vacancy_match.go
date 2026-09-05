@@ -151,6 +151,12 @@ func buildVacancyEvaluationPrompt(input vacancyEvaluationInput) (string, string)
 		"Отсутствие второстепенного инструмента само по себе не должно давать отказ, если основной стек подходит.",
 		"Обязательный senior-level опыт, которого нет в данных кандидата, существенно снижает оценку.",
 		"Учитывай обязательные требования сильнее желательных и оценивай именно этого кандидата.",
+		"reasons — массив коротких строк.",
+		"missing — массив коротких строк, а не объектов.",
+		"strong_match — массив коротких строк, а не объектов.",
+		"Не помещай объекты внутрь reasons, missing или strong_match.",
+		"Не используй Markdown ** внутри строк.",
+		"Если факт не подтвержден резюме или контекстом кандидата, не используй его как преимущество.",
 		"Верни только валидный JSON без Markdown и любого текста вне JSON.",
 		`Формат: {"score":82,"apply":true,"reasons":["..."],"missing":["..."],"strong_match":["..."]}`,
 	}, "\n")
@@ -189,6 +195,46 @@ func buildVacancyEvaluationPrompt(input vacancyEvaluationInput) (string, string)
 		input.WorkSchedule, includeKeywords, matchedIncludeKeywords)
 
 	return systemPrompt, userPrompt
+}
+
+func vacancyEvaluationJSONSchema() *ChatJSONSchema {
+	return &ChatJSONSchema{
+		Name:   "vacancy_evaluation",
+		Strict: true,
+		Schema: map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"required":             []string{"score", "apply", "reasons", "missing"},
+			"properties": map[string]any{
+				"score": map[string]any{
+					"type":    "integer",
+					"minimum": 0,
+					"maximum": 100,
+				},
+				"apply": map[string]any{
+					"type": "boolean",
+				},
+				"reasons": map[string]any{
+					"type": "array",
+					"items": map[string]any{
+						"type": "string",
+					},
+				},
+				"missing": map[string]any{
+					"type": "array",
+					"items": map[string]any{
+						"type": "string",
+					},
+				},
+				"strong_match": map[string]any{
+					"type": "array",
+					"items": map[string]any{
+						"type": "string",
+					},
+				},
+			},
+		},
+	}
 }
 
 func parseVacancyEvaluationJSON(answer string) (VacancyEvaluation, error) {
@@ -237,13 +283,20 @@ func finalApplyDecision(evaluation VacancyEvaluation, minScore int) bool {
 	return evaluation.Apply && evaluation.Score >= minScore
 }
 
+func vacancyEvaluationRejectReason(evaluation VacancyEvaluation, minScore int) string {
+	if !evaluation.Apply {
+		return fmt.Sprintf("AI recommended not applying (%d/100)", evaluation.Score)
+	}
+	return fmt.Sprintf("AI score below threshold (%d/100, minimum %d)", evaluation.Score, minScore)
+}
+
 func (c *AIClient) EvaluateVacancy(input vacancyEvaluationInput) (VacancyEvaluation, error) {
 	if err := c.ctx.Err(); err != nil {
 		return VacancyEvaluation{}, err
 	}
 	systemPrompt, userPrompt := buildVacancyEvaluationPrompt(input)
 	var evaluation VacancyEvaluation
-	_, err := c.ChatStructured(systemPrompt, userPrompt, 1024, 0.1, func(response string) error {
+	_, err := c.ChatStructuredWithSchema(systemPrompt, userPrompt, 1024, 0.1, vacancyEvaluationJSONSchema(), func(response string) error {
 		parsed, err := parseVacancyEvaluationJSON(response)
 		if err != nil {
 			return err
