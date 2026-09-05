@@ -66,6 +66,7 @@ var (
 
 type Config struct {
 	SearchURL                 string
+	SearchURLs                []string
 	CookiesPath               string
 	LogLevel                  string
 	Resume                    string
@@ -1515,6 +1516,7 @@ type HHAIResponder struct {
 	ctx                       context.Context
 	baseURL                   *url.URL
 	searchParams              url.Values
+	searchProfiles            []vacancySearchProfile
 	cookiesPath               string
 	maxResponses              int
 	client                    *http.Client
@@ -1563,6 +1565,13 @@ type HHAIResponder struct {
 	eventMu            sync.Mutex
 	preflightMu        sync.Mutex
 	alreadyRespondedMu sync.Mutex
+}
+
+type vacancySearchProfile struct {
+	Name    string
+	URL     string
+	BaseURL *url.URL
+	Params  url.Values
 }
 
 type HHRequester struct {
@@ -1772,19 +1781,17 @@ func (r *HHAIResponder) getBaseHost() string {
 func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 	var baseURL *url.URL
 	var searchParams url.Values
-
-	if strings.TrimSpace(cfg.SearchURL) != "" {
-		parsed, err := url.Parse(cfg.SearchURL)
-		if err != nil {
-			return nil, err
-		}
-		if parsed.Scheme == "" || parsed.Host == "" {
-			return nil, fmt.Errorf("invalid search URL: %s", cfg.SearchURL)
-		}
-		baseURL = &url.URL{Scheme: parsed.Scheme, Host: parsed.Host}
-		q := parsed.Query()
-		q.Del("page")
-		searchParams = q
+	searchURLs := append([]string(nil), cfg.SearchURLs...)
+	if len(searchURLs) == 0 && strings.TrimSpace(cfg.SearchURL) != "" {
+		searchURLs = []string{cfg.SearchURL}
+	}
+	searchProfiles, parsedBaseURL, err := buildVacancySearchProfiles(searchURLs)
+	if err != nil {
+		return nil, err
+	}
+	baseURL = parsedBaseURL
+	if len(searchProfiles) > 0 {
+		searchParams = cloneValues(searchProfiles[0].Params)
 	}
 	jar, err := NewMemoryPersistentJar(cfg.CookiesPath)
 	if err != nil {
@@ -1843,6 +1850,7 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 
 	responder.eventWriter = out
 	responder.searchParams = searchParams
+	responder.searchProfiles = searchProfiles
 
 	// If baseURL not provided via -u, resolve from redirect_host cookie for .hh.ru
 	if responder.baseURL == nil {
@@ -1876,13 +1884,105 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 	responder.resumeFacts = resumeFacts
 	responder.resumeExperience = resumeFacts.ExperienceText
 
-	// If no search params provided, add resume parameter
-	if len(responder.searchParams) == 0 {
+	// If no search URL was provided, retain the old resume-only search behavior.
+	if len(responder.searchProfiles) == 0 {
 		responder.searchParams = make(url.Values)
 		responder.searchParams.Set("resume", responder.resumeHash)
+		responder.searchProfiles = []vacancySearchProfile{{
+			Name:    "Default search",
+			BaseURL: responder.baseURL,
+			Params:  cloneValues(responder.searchParams),
+			URL:     searchProfileURL(responder.baseURL, responder.searchParams),
+		}}
 	}
 
 	return responder, nil
+}
+
+func buildVacancySearchProfiles(searchURLs []string) ([]vacancySearchProfile, *url.URL, error) {
+	profiles := make([]vacancySearchProfile, 0, len(searchURLs))
+	var firstBaseURL *url.URL
+
+	for index, rawURL := range searchURLs {
+		rawURL = strings.TrimSpace(rawURL)
+		if rawURL == "" {
+			continue
+		}
+		parsed, err := url.Parse(rawURL)
+		if err != nil {
+			return nil, nil, fmt.Errorf("invalid search URL: %s: %w", rawURL, err)
+		}
+		if parsed.Scheme == "" || parsed.Host == "" {
+			return nil, nil, fmt.Errorf("invalid search URL: %s", rawURL)
+		}
+
+		base := &url.URL{Scheme: parsed.Scheme, Host: parsed.Host}
+		if firstBaseURL == nil {
+			firstBaseURL = base
+		}
+		params := parsed.Query()
+		params.Del("page")
+		params.Set("order_by", "publication_time")
+		params.Set("search_period", "7")
+		params.Set("items_on_page", "50")
+
+		profiles = append(profiles, vacancySearchProfile{
+			Name:    vacancySearchProfileName(index),
+			URL:     searchProfileURL(base, params),
+			BaseURL: base,
+			Params:  params,
+		})
+	}
+
+	return profiles, firstBaseURL, nil
+}
+
+func vacancySearchProfileName(index int) string {
+	knownNames := []string{
+		"Python / Django / Backend",
+		"Automation / Integrations / Implementation",
+		"Support / Product Support",
+	}
+	if index >= 0 && index < len(knownNames) {
+		return knownNames[index]
+	}
+	return fmt.Sprintf("Search profile %d", index+1)
+}
+
+func searchProfileURL(baseURL *url.URL, params url.Values) string {
+	if baseURL == nil {
+		return ""
+	}
+	profileURL := *baseURL
+	profileURL.Path = "/search/vacancy"
+	profileURL.RawPath = ""
+	profileURL.RawQuery = params.Encode()
+	return profileURL.String()
+}
+
+func parseSearchURLsConfig(raw string) ([]string, error) {
+	parts := strings.Split(raw, "||")
+	searchURLs := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			searchURLs = append(searchURLs, part)
+		}
+	}
+	if len(searchURLs) == 0 {
+		return nil, errors.New("HH_SEARCH_URLS must contain at least one URL")
+	}
+	return searchURLs, nil
+}
+
+func configuredSearchURLs(multiple, fallback string) ([]string, error) {
+	if strings.TrimSpace(multiple) != "" {
+		return parseSearchURLsConfig(multiple)
+	}
+	if strings.TrimSpace(fallback) == "" {
+		return nil, nil
+	}
+	return []string{strings.TrimSpace(fallback)}, nil
 }
 
 func (r *HHAIResponder) writeEvent(v any) {
@@ -1904,7 +2004,18 @@ func (r *HHAIResponder) ResolveURL(endpoint string) string {
 
 // buildRequest creates an HTTP request with standard headers
 func (r *HHAIResponder) buildRequest(method, endpoint string, body io.Reader, headers map[string]string) (*http.Request, error) {
-	req, err := http.NewRequestWithContext(r.ctx, method, r.ResolveURL(endpoint), body)
+	return r.buildRequestAtBase(r.baseURL, method, endpoint, body, headers)
+}
+
+func (r *HHAIResponder) buildRequestAtBase(baseURL *url.URL, method, endpoint string, body io.Reader, headers map[string]string) (*http.Request, error) {
+	if baseURL == nil {
+		return nil, errors.New("base URL is not configured")
+	}
+	ref, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("parse request endpoint: %w", err)
+	}
+	req, err := http.NewRequestWithContext(r.ctx, method, baseURL.ResolveReference(ref).String(), body)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -2879,12 +2990,20 @@ func (r *HHAIResponder) ApplyVacancyWithTest(vacancyId int, letter string) (map[
 }
 
 func (r *HHAIResponder) fetchVacancyPage(page int) ([]Vacancy, error) {
+	return r.fetchVacancyPageWithSearch(r.searchParams, r.baseURL, page)
+}
+
+func (r *HHAIResponder) fetchVacancyPageForProfile(profile vacancySearchProfile, page int) ([]Vacancy, error) {
+	return r.fetchVacancyPageWithSearch(profile.Params, profile.BaseURL, page)
+}
+
+func (r *HHAIResponder) fetchVacancyPageWithSearch(searchParams url.Values, baseURL *url.URL, page int) ([]Vacancy, error) {
 	if err := r.ctx.Err(); err != nil {
 		return nil, err
 	}
-	params := cloneValues(r.searchParams)
+	params := cloneValues(searchParams)
 	params.Set("page", strconv.Itoa(page))
-	req, err := r.buildRequest(http.MethodGet, "/search/vacancy?"+params.Encode(), nil, nil)
+	req, err := r.buildRequestAtBase(baseURL, http.MethodGet, "/search/vacancy?"+params.Encode(), nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -2898,7 +3017,56 @@ func (r *HHAIResponder) fetchVacancyPage(page int) ([]Vacancy, error) {
 		return nil, unexpectedHTTPStatus(resp.Status)
 	}
 
-	return parseVacanciesFromSearchResponse(resp.Body, r.baseURL)
+	return parseVacanciesFromSearchResponse(resp.Body, baseURL)
+}
+
+func (r *HHAIResponder) fetchVacanciesFromSearchProfiles(summary *RunSummaryResult) ([]Vacancy, error) {
+	profiles := r.searchProfiles
+	if len(profiles) == 0 {
+		profiles = []vacancySearchProfile{{
+			Name:    "Default search",
+			BaseURL: r.baseURL,
+			Params:  r.searchParams,
+			URL:     searchProfileURL(r.baseURL, r.searchParams),
+		}}
+	}
+
+	uniqueVacancies := make([]Vacancy, 0)
+	seenIDs := make(map[int]struct{})
+	summary.SearchProfiles = make([]SearchProfileSummary, 0, len(profiles))
+	for _, profile := range profiles {
+		profileSummary := SearchProfileSummary{Name: profile.Name, URL: profile.URL}
+		for page := 0; ; page++ {
+			if err := r.ctx.Err(); err != nil {
+				return nil, err
+			}
+
+			vacancies, err := r.fetchVacancyPageForProfile(profile, page)
+			if err != nil {
+				summary.SearchProfiles = append(summary.SearchProfiles, profileSummary)
+				summary.VacanciesAfterDedup = len(uniqueVacancies)
+				return nil, err
+			}
+			profileSummary.VacanciesFetched += len(vacancies)
+			summary.VacanciesFetchedRaw += len(vacancies)
+			summary.VacanciesFetched += len(vacancies)
+			if len(vacancies) == 0 {
+				break
+			}
+
+			for _, vacancy := range vacancies {
+				if _, exists := seenIDs[vacancy.ID]; exists {
+					summary.DuplicatesSkipped++
+					continue
+				}
+				seenIDs[vacancy.ID] = struct{}{}
+				uniqueVacancies = append(uniqueVacancies, vacancy)
+			}
+		}
+		summary.SearchProfiles = append(summary.SearchProfiles, profileSummary)
+	}
+	summary.VacanciesAfterDedup = len(uniqueVacancies)
+	return uniqueVacancies, nil
 }
 
 func (r *HHAIResponder) ApplyVacancies() error {
@@ -2922,327 +3090,270 @@ func (r *HHAIResponder) ApplyVacancies() error {
 
 	applicationsInRun := 0
 	eligibleVacancies := 0
-	for page := 0; ; page++ {
+	vacancies, err := r.fetchVacanciesFromSearchProfiles(&summary)
+	if err != nil {
+		summary.Errors++
+		logger.Error("Failed to fetch vacancies: %v", err)
+		return err
+	}
+	for _, profile := range summary.SearchProfiles {
+		logger.Info("SEARCH PROFILE — %s: %d vacancies", profile.Name, profile.VacanciesFetched)
+	}
+
+	for _, vacancy := range vacancies {
 		if err := r.ctx.Err(); err != nil {
 			return err
 		}
+		summary.VacanciesProcessed++
+		if r.isAlreadyResponded(vacancy.ID) {
+			summary.PreviouslyRespondedSkipped++
+			r.skipVacancy(vacancy, vacancy.Links["desktop"], "previously confirmed already responded", nil)
+			continue
+		}
+		if len(vacancy.UserLabels) > 0 || vacancy.Archived || vacancy.ResponseURL != "" {
+			summary.DeterministicSkipped++
+			r.skipVacancy(vacancy, vacancy.Links["desktop"], "already labeled, archived, or already responded", nil)
+			continue
+		}
+		if r.maxResponses > 0 && vacancy.TotalResponsesCount > r.maxResponses {
+			summary.DeterministicSkipped++
+			r.skipVacancy(vacancy, vacancy.Links["desktop"], "response count exceeds configured maximum", nil)
+			continue
+		}
 
-		vacancies, err := r.fetchVacancyPage(page)
+		vacancyURL, ok := vacancy.Links["desktop"]
+		if !ok || vacancyURL == "" {
+			summary.DeterministicSkipped++
+			r.skipVacancy(vacancy, vacancyURL, "vacancy has no desktop link", nil)
+			continue
+		}
+		if r.maxVacanciesPerRun > 0 && eligibleVacancies >= r.maxVacanciesPerRun {
+			summary.VacancyLimitSkipped++
+			r.skipVacancy(vacancy, vacancyURL, "per-run vacancy limit reached", nil)
+			return nil
+		}
+		eligibleVacancies++
+
+		vacancyDescription, err := r.GetVacancyDescription(vacancy.ID)
 		if err != nil {
 			summary.Errors++
-			logger.Error("Failed to fetch vacancies: %v", err)
-			return err
+			r.skipVacancy(vacancy, vacancyURL, "vacancy description could not be loaded", nil)
+			logger.Warn("Could not load description for vacancy %d: %v", vacancy.ID, err)
+			continue
 		}
-		summary.VacanciesFetched += len(vacancies)
-		if len(vacancies) == 0 {
-			break
+		if strings.TrimSpace(vacancyDescription) == "" {
+			summary.DeterministicSkipped++
+			r.skipVacancy(vacancy, vacancyURL, "vacancy description is empty", nil)
+			continue
 		}
 
-		for _, vacancy := range vacancies {
-			if err := r.ctx.Err(); err != nil {
-				return err
-			}
-			summary.VacanciesProcessed++
-			if r.isAlreadyResponded(vacancy.ID) {
-				summary.PreviouslyRespondedSkipped++
-				r.skipVacancy(vacancy, vacancy.Links["desktop"], "previously confirmed already responded", nil)
-				continue
-			}
-			if len(vacancy.UserLabels) > 0 || vacancy.Archived || vacancy.ResponseURL != "" {
-				summary.DeterministicSkipped++
-				r.skipVacancy(vacancy, vacancy.Links["desktop"], "already labeled, archived, or already responded", nil)
-				continue
-			}
-			if r.maxResponses > 0 && vacancy.TotalResponsesCount > r.maxResponses {
-				summary.DeterministicSkipped++
-				r.skipVacancy(vacancy, vacancy.Links["desktop"], "response count exceeds configured maximum", nil)
-				continue
-			}
+		if reason := deterministicVacancyRejectReasonWithCurrency(vacancy, vacancyDescription, r.minSalary, r.minSalaryCurrency, r.excludeKeywords); reason != "" {
+			summary.DeterministicSkipped++
+			r.skipVacancy(vacancy, vacancyURL, reason, nil)
+			continue
+		}
 
-			vacancyURL, ok := vacancy.Links["desktop"]
-			if !ok || vacancyURL == "" {
-				summary.DeterministicSkipped++
-				r.skipVacancy(vacancy, vacancyURL, "vacancy has no desktop link", nil)
-				continue
-			}
-			if r.maxVacanciesPerRun > 0 && eligibleVacancies >= r.maxVacanciesPerRun {
-				summary.VacanciesProcessed--
-				summary.VacancyLimitSkipped++
-				r.skipVacancy(vacancy, vacancyURL, "per-run vacancy limit reached", nil)
-				return nil
-			}
-			eligibleVacancies++
-
-			vacancyDescription, err := r.GetVacancyDescription(vacancy.ID)
-			if err != nil {
-				summary.Errors++
-				r.skipVacancy(vacancy, vacancyURL, "vacancy description could not be loaded", nil)
-				logger.Warn("Could not load description for vacancy %d: %v", vacancy.ID, err)
-				continue
-			}
-			if strings.TrimSpace(vacancyDescription) == "" {
-				summary.DeterministicSkipped++
-				r.skipVacancy(vacancy, vacancyURL, "vacancy description is empty", nil)
-				continue
-			}
-
-			if reason := deterministicVacancyRejectReasonWithCurrency(vacancy, vacancyDescription, r.minSalary, r.minSalaryCurrency, r.excludeKeywords); reason != "" {
-				summary.DeterministicSkipped++
-				r.skipVacancy(vacancy, vacancyURL, reason, nil)
-				continue
-			}
-
-			summary.AIEvaluated++
-			evaluation, err := r.ai.EvaluateVacancy(vacancyEvaluationInput{
-				Candidate:       r.candidateContext(*resume),
-				Vacancy:         vacancy,
-				Description:     vacancyDescription,
-				Salary:          FormatCompensation(&vacancy.Compensation),
-				Location:        vacancy.Area.Name,
-				WorkSchedule:    vacancy.WorkSchedule,
-				IncludeKeywords: r.includeKeywords,
-			})
-			if err != nil {
-				summary.Errors++
-				r.skipVacancy(vacancy, vacancyURL, "AI evaluation failed: "+err.Error(), nil)
-				continue
-			}
-			score := evaluation.Score
-			decision := vacancyDecision(evaluation, r.minMatchScore)
-			if decision == VacancyReviewRequired {
-				summary.ReviewRequired++
-				unknownReason := vacancyEvaluationRejectReason(evaluation, r.minMatchScore)
-				logger.Info("REVIEW — vacancy %d: %s", vacancy.ID, unknownReason)
-				r.writeEvent(VacancyReviewRequiredResult{
-					Type:                    "vacancy_review_required",
-					VacancyID:               vacancy.ID,
-					Name:                    vacancy.Name,
-					URL:                     vacancyURL,
-					Score:                   evaluation.Score,
-					Apply:                   evaluation.Apply,
-					Reasons:                 evaluation.Reasons,
-					Missing:                 evaluation.Missing,
-					HardRequirementsUnknown: hardRequirementsUnknown(evaluation),
-					HardRequirements:        evaluation.HardRequirements,
-				})
-				continue
-			}
-			if decision != VacancyMatch {
-				reason := vacancyEvaluationRejectReason(evaluation, r.minMatchScore)
-				r.skipVacancyWithEvaluation(vacancy, vacancyURL, reason, &score, hardRequirementsMissing(evaluation), evaluation.HardRequirements)
-				continue
-			}
-
-			preflight, preflightErr := r.GetVacancyPreflight(vacancy)
-			if preflightErr != nil {
-				summary.Errors++
-				summary.ReviewRequired++
-				reason := "vacancy preflight failed: " + preflightErr.Error()
-				logger.Warn("REVIEW — vacancy %d: %s", vacancy.ID, reason)
-				r.writeEvent(VacancyPreflight{
-					VacancyID:   vacancy.ID,
-					ResponseURL: r.ResolveURL(fmt.Sprintf("/applicant/vacancy_response?vacancyId=%d&startedWithQuestion=false&hhtmFrom=vacancy", vacancy.ID)),
-				}.event())
-				r.writeEvent(VacancyReviewRequiredResult{
-					Type:                    "vacancy_review_required",
-					VacancyID:               vacancy.ID,
-					Name:                    vacancy.Name,
-					URL:                     vacancyURL,
-					Score:                   evaluation.Score,
-					Apply:                   evaluation.Apply,
-					Reasons:                 append(append([]string{}, evaluation.Reasons...), reason),
-					Missing:                 evaluation.Missing,
-					HardRequirementsUnknown: hardRequirementsUnknown(evaluation),
-					HardRequirements:        evaluation.HardRequirements,
-				})
-				continue
-			}
-			r.writeEvent(preflight.event())
-			r.rememberConfirmedPreflight(preflight)
-
-			preflightDecision, preflightReason := vacancyPreflightDecision(preflight)
-			if preflightDecision == VacancyReviewRequired {
-				summary.ReviewRequired++
-				logger.Info("REVIEW — vacancy %d: %s", vacancy.ID, preflightReason)
-				r.writeEvent(VacancyReviewRequiredResult{
-					Type:                    "vacancy_review_required",
-					VacancyID:               vacancy.ID,
-					Name:                    vacancy.Name,
-					URL:                     vacancyURL,
-					Score:                   evaluation.Score,
-					Apply:                   evaluation.Apply,
-					Reasons:                 append(append([]string{}, evaluation.Reasons...), "preflight: "+preflightReason),
-					Missing:                 evaluation.Missing,
-					HardRequirementsUnknown: hardRequirementsUnknown(evaluation),
-					HardRequirements:        evaluation.HardRequirements,
-				})
-				continue
-			}
-			if preflightDecision != VacancyMatch {
-				r.skipVacancyWithEvaluation(vacancy, vacancyURL, "preflight: "+preflightReason, &score, hardRequirementsMissing(evaluation), evaluation.HardRequirements)
-				continue
-			}
-
-			structuredVacancy := vacancy
-			if preflight.AreaKnown {
-				structuredVacancy.Area.Name = preflight.Area
-			}
-			if preflight.WorkScheduleKnown {
-				structuredVacancy.WorkSchedule = preflight.WorkSchedule
-			}
-			if preflight.WorkExperienceKnown {
-				structuredVacancy.WorkExperience = preflight.WorkExperience
-			}
-			evaluation.HardRequirements = mergeHardRequirements(
-				localStructuredHardRequirements(preflight, r.candidateContext(*resume)),
-				evaluation.HardRequirements,
-			)
-			if err := validateHardRequirements(r.candidateContext(*resume), structuredVacancy, evaluation); err != nil {
-				summary.ReviewRequired++
-				reason := "structured preflight requirements could not be validated: " + err.Error()
-				logger.Info("REVIEW — vacancy %d: %s", vacancy.ID, reason)
-				r.writeEvent(VacancyReviewRequiredResult{
-					Type:                    "vacancy_review_required",
-					VacancyID:               vacancy.ID,
-					Name:                    vacancy.Name,
-					URL:                     vacancyURL,
-					Score:                   evaluation.Score,
-					Apply:                   evaluation.Apply,
-					Reasons:                 append(append([]string{}, evaluation.Reasons...), reason),
-					Missing:                 evaluation.Missing,
-					HardRequirementsUnknown: hardRequirementsUnknown(evaluation),
-					HardRequirements:        evaluation.HardRequirements,
-				})
-				continue
-			}
-			decision = vacancyDecision(evaluation, r.minMatchScore)
-			if decision == VacancyReviewRequired {
-				summary.ReviewRequired++
-				unknownReason := vacancyEvaluationRejectReason(evaluation, r.minMatchScore)
-				logger.Info("REVIEW — vacancy %d: %s", vacancy.ID, unknownReason)
-				r.writeEvent(VacancyReviewRequiredResult{
-					Type:                    "vacancy_review_required",
-					VacancyID:               vacancy.ID,
-					Name:                    vacancy.Name,
-					URL:                     vacancyURL,
-					Score:                   evaluation.Score,
-					Apply:                   evaluation.Apply,
-					Reasons:                 evaluation.Reasons,
-					Missing:                 evaluation.Missing,
-					HardRequirementsUnknown: hardRequirementsUnknown(evaluation),
-					HardRequirements:        evaluation.HardRequirements,
-				})
-				continue
-			}
-			if decision != VacancyMatch {
-				reason := vacancyEvaluationRejectReason(evaluation, r.minMatchScore)
-				r.skipVacancyWithEvaluation(vacancy, vacancyURL, reason, &score, hardRequirementsMissing(evaluation), evaluation.HardRequirements)
-				continue
-			}
-
-			summary.Matched++
-			r.writeEvent(VacancyMatchResult{
-				Type:                    "vacancy_match",
+		summary.AIEvaluated++
+		evaluation, err := r.ai.EvaluateVacancy(vacancyEvaluationInput{
+			Candidate:       r.candidateContext(*resume),
+			Vacancy:         vacancy,
+			Description:     vacancyDescription,
+			Salary:          FormatCompensation(&vacancy.Compensation),
+			Location:        vacancy.Area.Name,
+			WorkSchedule:    vacancy.WorkSchedule,
+			IncludeKeywords: r.includeKeywords,
+		})
+		if err != nil {
+			summary.Errors++
+			r.skipVacancy(vacancy, vacancyURL, "AI evaluation failed: "+err.Error(), nil)
+			continue
+		}
+		score := evaluation.Score
+		decision := vacancyDecision(evaluation, r.minMatchScore)
+		if decision == VacancyReviewRequired {
+			summary.ReviewRequired++
+			unknownReason := vacancyEvaluationRejectReason(evaluation, r.minMatchScore)
+			logger.Info("REVIEW — vacancy %d: %s", vacancy.ID, unknownReason)
+			r.writeEvent(VacancyReviewRequiredResult{
+				Type:                    "vacancy_review_required",
 				VacancyID:               vacancy.ID,
 				Name:                    vacancy.Name,
 				URL:                     vacancyURL,
 				Score:                   evaluation.Score,
+				Apply:                   evaluation.Apply,
 				Reasons:                 evaluation.Reasons,
 				Missing:                 evaluation.Missing,
-				HardRequirementsMissing: hardRequirementsMissing(evaluation),
+				HardRequirementsUnknown: hardRequirementsUnknown(evaluation),
 				HardRequirements:        evaluation.HardRequirements,
 			})
-			logger.Info("MATCH — vacancy %d: %d/100", vacancy.ID, evaluation.Score)
+			continue
+		}
+		if decision != VacancyMatch {
+			reason := vacancyEvaluationRejectReason(evaluation, r.minMatchScore)
+			r.skipVacancyWithEvaluation(vacancy, vacancyURL, reason, &score, hardRequirementsMissing(evaluation), evaluation.HardRequirements)
+			continue
+		}
 
-			if r.maxApplicationsPerRun > 0 && applicationsInRun >= r.maxApplicationsPerRun {
-				summary.ApplicationLimitSkipped++
-				r.skipVacancy(vacancy, vacancyURL, "per-run application limit reached", &score)
-				return nil
-			}
+		preflight, preflightErr := r.GetVacancyPreflight(vacancy)
+		if preflightErr != nil {
+			summary.Errors++
+			summary.ReviewRequired++
+			reason := "vacancy preflight failed: " + preflightErr.Error()
+			logger.Warn("REVIEW — vacancy %d: %s", vacancy.ID, reason)
+			r.writeEvent(VacancyPreflight{
+				VacancyID:   vacancy.ID,
+				ResponseURL: r.ResolveURL(fmt.Sprintf("/applicant/vacancy_response?vacancyId=%d&startedWithQuestion=false&hhtmFrom=vacancy", vacancy.ID)),
+			}.event())
+			r.writeEvent(VacancyReviewRequiredResult{
+				Type:                    "vacancy_review_required",
+				VacancyID:               vacancy.ID,
+				Name:                    vacancy.Name,
+				URL:                     vacancyURL,
+				Score:                   evaluation.Score,
+				Apply:                   evaluation.Apply,
+				Reasons:                 append(append([]string{}, evaluation.Reasons...), reason),
+				Missing:                 evaluation.Missing,
+				HardRequirementsUnknown: hardRequirementsUnknown(evaluation),
+				HardRequirements:        evaluation.HardRequirements,
+			})
+			continue
+		}
+		r.writeEvent(preflight.event())
+		r.rememberConfirmedPreflight(preflight)
 
-			var letter string
-			if preflight.LetterRequired || r.forceLetter {
-				letter, err = r.ai.GenerateLetterWithEvaluation(
-					vacancy,
-					vacancyDescription,
-					r.candidateContext(*resume),
-					evaluation,
-					r.extraLetterPrompt,
-				)
-				if err != nil || strings.TrimSpace(letter) == "" {
-					summary.Errors++
-					logger.Error("AI failed to generate letter for %s: %v", vacancyURL, err)
-					continue
-				}
-				logger.Debug("Cover letter generated for vacancy %d (characters=%d)", vacancy.ID, len(letter))
-			}
+		preflightDecision, preflightReason := vacancyPreflightDecision(preflight)
+		if preflightDecision == VacancyReviewRequired {
+			summary.ReviewRequired++
+			logger.Info("REVIEW — vacancy %d: %s", vacancy.ID, preflightReason)
+			r.writeEvent(VacancyReviewRequiredResult{
+				Type:                    "vacancy_review_required",
+				VacancyID:               vacancy.ID,
+				Name:                    vacancy.Name,
+				URL:                     vacancyURL,
+				Score:                   evaluation.Score,
+				Apply:                   evaluation.Apply,
+				Reasons:                 append(append([]string{}, evaluation.Reasons...), "preflight: "+preflightReason),
+				Missing:                 evaluation.Missing,
+				HardRequirementsUnknown: hardRequirementsUnknown(evaluation),
+				HardRequirements:        evaluation.HardRequirements,
+			})
+			continue
+		}
+		if preflightDecision != VacancyMatch {
+			r.skipVacancyWithEvaluation(vacancy, vacancyURL, "preflight: "+preflightReason, &score, hardRequirementsMissing(evaluation), evaluation.HardRequirements)
+			continue
+		}
 
-			var responseResult map[string]any
-			var solutions []QAPair
-			if preflight.TestPresent {
-				responseResult, solutions, err = r.ApplyVacancyWithTest(vacancy.ID, letter)
-			} else {
-				responseResult, err = r.ApplyVacancy(vacancy.ID, vacancyURL, letter)
-			}
+		structuredVacancy := vacancy
+		if preflight.AreaKnown {
+			structuredVacancy.Area.Name = preflight.Area
+		}
+		if preflight.WorkScheduleKnown {
+			structuredVacancy.WorkSchedule = preflight.WorkSchedule
+		}
+		if preflight.WorkExperienceKnown {
+			structuredVacancy.WorkExperience = preflight.WorkExperience
+		}
+		evaluation.HardRequirements = mergeHardRequirements(
+			localStructuredHardRequirements(preflight, r.candidateContext(*resume)),
+			evaluation.HardRequirements,
+		)
+		if err := validateHardRequirements(r.candidateContext(*resume), structuredVacancy, evaluation); err != nil {
+			summary.ReviewRequired++
+			reason := "structured preflight requirements could not be validated: " + err.Error()
+			logger.Info("REVIEW — vacancy %d: %s", vacancy.ID, reason)
+			r.writeEvent(VacancyReviewRequiredResult{
+				Type:                    "vacancy_review_required",
+				VacancyID:               vacancy.ID,
+				Name:                    vacancy.Name,
+				URL:                     vacancyURL,
+				Score:                   evaluation.Score,
+				Apply:                   evaluation.Apply,
+				Reasons:                 append(append([]string{}, evaluation.Reasons...), reason),
+				Missing:                 evaluation.Missing,
+				HardRequirementsUnknown: hardRequirementsUnknown(evaluation),
+				HardRequirements:        evaluation.HardRequirements,
+			})
+			continue
+		}
+		decision = vacancyDecision(evaluation, r.minMatchScore)
+		if decision == VacancyReviewRequired {
+			summary.ReviewRequired++
+			unknownReason := vacancyEvaluationRejectReason(evaluation, r.minMatchScore)
+			logger.Info("REVIEW — vacancy %d: %s", vacancy.ID, unknownReason)
+			r.writeEvent(VacancyReviewRequiredResult{
+				Type:                    "vacancy_review_required",
+				VacancyID:               vacancy.ID,
+				Name:                    vacancy.Name,
+				URL:                     vacancyURL,
+				Score:                   evaluation.Score,
+				Apply:                   evaluation.Apply,
+				Reasons:                 evaluation.Reasons,
+				Missing:                 evaluation.Missing,
+				HardRequirementsUnknown: hardRequirementsUnknown(evaluation),
+				HardRequirements:        evaluation.HardRequirements,
+			})
+			continue
+		}
+		if decision != VacancyMatch {
+			reason := vacancyEvaluationRejectReason(evaluation, r.minMatchScore)
+			r.skipVacancyWithEvaluation(vacancy, vacancyURL, reason, &score, hardRequirementsMissing(evaluation), evaluation.HardRequirements)
+			continue
+		}
 
-			if r.dryRun {
-				if err != nil {
-					summary.Errors++
-					logger.Error("DRY-RUN: failed to prepare application %d: %v", vacancy.ID, err)
-					r.writeEvent(ErrorResult{
-						Type: "application_error",
-						Context: map[string]any{
-							"dry_run":      true,
-							"vacancy_id":   vacancy.ID,
-							"vacancy_name": vacancy.Name,
-							"url":          vacancyURL,
-							"resume":       r.resumeHash,
-							"resume_title": resume.Title,
-						},
-						Error: err.Error(),
-						Time:  time.Now(),
-					})
-					continue
-				}
-				applicationsInRun++
-				summary.WouldApply++
-				var responsesCount *int
-				if vacancy.TotalResponsesCountKnown {
-					count := vacancy.TotalResponsesCount + 1
-					responsesCount = &count
-				}
-				logger.Info("WOULD APPLY — vacancy %d (%d/100): %s", vacancy.ID, evaluation.Score, vacancyURL)
-				r.writeEvent(ApplyResult{
-					Type:           "application_preview",
-					Resume:         r.resumeHash,
-					ResumeTitle:    resume.Title,
-					VacancyID:      vacancy.ID,
-					URL:            vacancyURL,
-					Name:           vacancy.Name,
-					Letter:         letter,
-					AppliedAt:      time.Now(),
-					ResponsesCount: responsesCount,
-					TestSolutions:  solutions,
-				})
+		summary.Matched++
+		r.writeEvent(VacancyMatchResult{
+			Type:                    "vacancy_match",
+			VacancyID:               vacancy.ID,
+			Name:                    vacancy.Name,
+			URL:                     vacancyURL,
+			Score:                   evaluation.Score,
+			Reasons:                 evaluation.Reasons,
+			Missing:                 evaluation.Missing,
+			HardRequirementsMissing: hardRequirementsMissing(evaluation),
+			HardRequirements:        evaluation.HardRequirements,
+		})
+		logger.Info("MATCH — vacancy %d: %d/100", vacancy.ID, evaluation.Score)
+
+		if r.maxApplicationsPerRun > 0 && applicationsInRun >= r.maxApplicationsPerRun {
+			summary.ApplicationLimitSkipped++
+			r.skipVacancy(vacancy, vacancyURL, "per-run application limit reached", &score)
+			return nil
+		}
+
+		var letter string
+		if preflight.LetterRequired || r.forceLetter {
+			letter, err = r.ai.GenerateLetterWithEvaluation(
+				vacancy,
+				vacancyDescription,
+				r.candidateContext(*resume),
+				evaluation,
+				r.extraLetterPrompt,
+			)
+			if err != nil || strings.TrimSpace(letter) == "" {
+				summary.Errors++
+				logger.Error("AI failed to generate letter for %s: %v", vacancyURL, err)
 				continue
 			}
+			logger.Debug("Cover letter generated for vacancy %d (characters=%d)", vacancy.ID, len(letter))
+		}
 
-			if errVal, hasErr := responseResult["error"].(string); hasErr {
-				if errVal == "negotiations-limit-exceeded" {
-					summary.Errors++
-					logger.Warn("Negotiations limit exceeded!")
-					return nil
-				}
+		var responseResult map[string]any
+		var solutions []QAPair
+		if preflight.TestPresent {
+			responseResult, solutions, err = r.ApplyVacancyWithTest(vacancy.ID, letter)
+		} else {
+			responseResult, err = r.ApplyVacancy(vacancy.ID, vacancyURL, letter)
+		}
 
-				err = fmt.Errorf("Send response error: %s", errVal)
-			}
-
+		if r.dryRun {
 			if err != nil {
 				summary.Errors++
-				logger.Error("Failed to send application %d: %v", vacancy.ID, err)
+				logger.Error("DRY-RUN: failed to prepare application %d: %v", vacancy.ID, err)
 				r.writeEvent(ErrorResult{
 					Type: "application_error",
 					Context: map[string]any{
+						"dry_run":      true,
 						"vacancy_id":   vacancy.ID,
 						"vacancy_name": vacancy.Name,
 						"url":          vacancyURL,
@@ -3254,40 +3365,89 @@ func (r *HHAIResponder) ApplyVacancies() error {
 				})
 				continue
 			}
-
-			if len(solutions) > 0 {
-				logger.Debug("test answers prepared (count=%d)", len(solutions))
+			applicationsInRun++
+			summary.WouldApply++
+			var responsesCount *int
+			if vacancy.TotalResponsesCountKnown {
+				count := vacancy.TotalResponsesCount + 1
+				responsesCount = &count
 			}
+			logger.Info("WOULD APPLY — vacancy %d (%d/100): %s", vacancy.ID, evaluation.Score, vacancyURL)
+			r.writeEvent(ApplyResult{
+				Type:           "application_preview",
+				Resume:         r.resumeHash,
+				ResumeTitle:    resume.Title,
+				VacancyID:      vacancy.ID,
+				URL:            vacancyURL,
+				Name:           vacancy.Name,
+				Letter:         letter,
+				AppliedAt:      time.Now(),
+				ResponsesCount: responsesCount,
+				TestSolutions:  solutions,
+			})
+			continue
+		}
 
-			if successStr, ok := responseResult["success"].(string); ok && successStr == "true" {
-				applicationsInRun++
-				summary.Applied++
-				var responsesCount *int
-				if vacancy.TotalResponsesCountKnown {
-					count := vacancy.TotalResponsesCount + 1
-					responsesCount = &count
-				}
-				if responsesCount != nil {
-					logger.Info("Application successfully sent (responses: %d): %s", *responsesCount, vacancyURL)
-				} else {
-					logger.Info("Application successfully sent (responses: unknown): %s", vacancyURL)
-				}
-				r.writeEvent(ApplyResult{
-					Type:           "application",
-					Resume:         r.resumeHash,
-					ResumeTitle:    resume.Title,
-					VacancyID:      vacancy.ID,
-					URL:            vacancyURL,
-					Name:           vacancy.Name,
-					Letter:         letter,
-					AppliedAt:      time.Now(),
-					ResponsesCount: responsesCount,
-					TestSolutions:  solutions,
-				})
-			} else {
+		if errVal, hasErr := responseResult["error"].(string); hasErr {
+			if errVal == "negotiations-limit-exceeded" {
 				summary.Errors++
-				logger.Warn("Application sent but response wrong: %s", vacancyURL)
+				logger.Warn("Negotiations limit exceeded!")
+				return nil
 			}
+
+			err = fmt.Errorf("Send response error: %s", errVal)
+		}
+
+		if err != nil {
+			summary.Errors++
+			logger.Error("Failed to send application %d: %v", vacancy.ID, err)
+			r.writeEvent(ErrorResult{
+				Type: "application_error",
+				Context: map[string]any{
+					"vacancy_id":   vacancy.ID,
+					"vacancy_name": vacancy.Name,
+					"url":          vacancyURL,
+					"resume":       r.resumeHash,
+					"resume_title": resume.Title,
+				},
+				Error: err.Error(),
+				Time:  time.Now(),
+			})
+			continue
+		}
+
+		if len(solutions) > 0 {
+			logger.Debug("test answers prepared (count=%d)", len(solutions))
+		}
+
+		if successStr, ok := responseResult["success"].(string); ok && successStr == "true" {
+			applicationsInRun++
+			summary.Applied++
+			var responsesCount *int
+			if vacancy.TotalResponsesCountKnown {
+				count := vacancy.TotalResponsesCount + 1
+				responsesCount = &count
+			}
+			if responsesCount != nil {
+				logger.Info("Application successfully sent (responses: %d): %s", *responsesCount, vacancyURL)
+			} else {
+				logger.Info("Application successfully sent (responses: unknown): %s", vacancyURL)
+			}
+			r.writeEvent(ApplyResult{
+				Type:           "application",
+				Resume:         r.resumeHash,
+				ResumeTitle:    resume.Title,
+				VacancyID:      vacancy.ID,
+				URL:            vacancyURL,
+				Name:           vacancy.Name,
+				Letter:         letter,
+				AppliedAt:      time.Now(),
+				ResponsesCount: responsesCount,
+				TestSolutions:  solutions,
+			})
+		} else {
+			summary.Errors++
+			logger.Warn("Application sent but response wrong: %s", vacancyURL)
 		}
 	}
 
@@ -3680,7 +3840,14 @@ func parseConfig() (Config, error) {
 	})
 
 	if !flags["u"] {
-		cfg.SearchURL = getEnv("HH_SEARCH_URL", cfg.SearchURL)
+		fallbackSearchURL := getEnv("HH_SEARCH_URL", cfg.SearchURL)
+		cfg.SearchURLs, err = configuredSearchURLs(os.Getenv("HH_SEARCH_URLS"), fallbackSearchURL)
+		if err != nil {
+			return Config{}, err
+		}
+		if strings.TrimSpace(os.Getenv("HH_SEARCH_URLS")) == "" {
+			cfg.SearchURL = fallbackSearchURL
+		}
 	}
 	if !flags["r"] {
 		cfg.Resume = getEnv("HH_RESUME", cfg.Resume)

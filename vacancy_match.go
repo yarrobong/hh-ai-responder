@@ -58,21 +58,31 @@ type VacancyMatchResult struct {
 	HardRequirements        []HardRequirementEvaluation `json:"hard_requirements,omitempty"`
 }
 
+type SearchProfileSummary struct {
+	Name             string `json:"name"`
+	URL              string `json:"url,omitempty"`
+	VacanciesFetched int    `json:"vacancies_fetched"`
+}
+
 type RunSummaryResult struct {
-	Type                       string `json:"type"`
-	VacanciesSeen              int    `json:"vacancies_seen"`
-	VacanciesFetched           int    `json:"vacancies_fetched"`
-	VacanciesProcessed         int    `json:"vacancies_processed"`
-	PreviouslyRespondedSkipped int    `json:"previously_responded_skipped"`
-	DeterministicSkipped       int    `json:"deterministic_skipped"`
-	AIEvaluated                int    `json:"ai_evaluated"`
-	Matched                    int    `json:"matched"`
-	ReviewRequired             int    `json:"review_required"`
-	WouldApply                 int    `json:"would_apply"`
-	Applied                    int    `json:"applied"`
-	Errors                     int    `json:"errors"`
-	VacancyLimitSkipped        int    `json:"vacancy_limit_skipped,omitempty"`
-	ApplicationLimitSkipped    int    `json:"application_limit_skipped,omitempty"`
+	Type                       string                 `json:"type"`
+	SearchProfiles             []SearchProfileSummary `json:"search_profiles,omitempty"`
+	VacanciesSeen              int                    `json:"vacancies_seen"`
+	VacanciesFetched           int                    `json:"vacancies_fetched"`
+	VacanciesFetchedRaw        int                    `json:"vacancies_fetched_raw"`
+	VacanciesAfterDedup        int                    `json:"vacancies_after_dedup"`
+	DuplicatesSkipped          int                    `json:"duplicates_skipped"`
+	VacanciesProcessed         int                    `json:"vacancies_processed"`
+	PreviouslyRespondedSkipped int                    `json:"previously_responded_skipped"`
+	DeterministicSkipped       int                    `json:"deterministic_skipped"`
+	AIEvaluated                int                    `json:"ai_evaluated"`
+	Matched                    int                    `json:"matched"`
+	ReviewRequired             int                    `json:"review_required"`
+	WouldApply                 int                    `json:"would_apply"`
+	Applied                    int                    `json:"applied"`
+	Errors                     int                    `json:"errors"`
+	VacancyLimitSkipped        int                    `json:"vacancy_limit_skipped,omitempty"`
+	ApplicationLimitSkipped    int                    `json:"application_limit_skipped,omitempty"`
 }
 
 type VacancyDecision string
