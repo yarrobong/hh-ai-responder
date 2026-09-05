@@ -57,17 +57,17 @@ func TestVacancyDecisionUsesTriStateHardRequirements(t *testing.T) {
 	}{
 		{
 			name:       "known contradiction rejects",
-			evaluation: VacancyEvaluation{Score: 99, Apply: true, HardRequirementsMissing: []string{"English C1"}},
+			evaluation: VacancyEvaluation{Score: 99, Apply: true, HardRequirements: []HardRequirementEvaluation{{Requirement: "English C1", Category: hardRequirementCategoryLanguage, Status: hardRequirementStatusMissing, VacancyEvidence: "English C1 required", CandidateEvidence: "Candidate explicitly has no English C1"}}},
 			want:       VacancyReject,
 		},
 		{
 			name:       "unknown requires review",
-			evaluation: VacancyEvaluation{Score: 99, Apply: true, HardRequirementsUnknown: []string{"education"}},
+			evaluation: VacancyEvaluation{Score: 99, Apply: true, HardRequirements: []HardRequirementEvaluation{{Requirement: "education", Category: hardRequirementCategoryEducation, Status: hardRequirementStatusUnknown, VacancyEvidence: "Higher education required", CandidateEvidence: "not provided"}}},
 			want:       VacancyReviewRequired,
 		},
 		{
 			name:       "unknown takes precedence over apply false",
-			evaluation: VacancyEvaluation{Score: 99, Apply: false, HardRequirementsUnknown: []string{"location"}},
+			evaluation: VacancyEvaluation{Score: 99, Apply: false, HardRequirements: []HardRequirementEvaluation{{Requirement: "location", Category: hardRequirementCategoryLocation, Status: hardRequirementStatusUnknown, VacancyEvidence: "Office location required", CandidateEvidence: "not provided"}}},
 			want:       VacancyReviewRequired,
 		},
 		{
@@ -116,8 +116,8 @@ func TestNoExperienceRequirementDoesNotConflictWithCandidateExperience(t *testin
 }
 
 func TestVacancyEvaluationRequiresUnknownRequirementsArray(t *testing.T) {
-	if _, err := parseVacancyEvaluationJSON(`{"score":82,"apply":true,"reasons":[],"missing":[],"hard_requirements_missing":[]}`); err == nil {
-		t.Fatal("evaluation without hard_requirements_unknown was accepted")
+	if _, err := parseVacancyEvaluationJSON(`{"score":82,"apply":true,"reasons":[],"missing":[]}`); err == nil {
+		t.Fatal("evaluation without hard_requirements was accepted")
 	}
 }
 
@@ -198,7 +198,7 @@ func TestSolveTestsUsesTextSolutionContract(t *testing.T) {
 }
 
 func TestVacancyEvaluationJSONValidation(t *testing.T) {
-	valid, err := parseVacancyEvaluationJSON(`{"score":82,"apply":true,"reasons":["Python"],"missing":["FastAPI"],"hard_requirements_missing":[],"hard_requirements_unknown":[],"strong_match":["REST API"]}`)
+	valid, err := parseVacancyEvaluationJSON(`{"score":82,"apply":true,"reasons":["Python"],"missing":["FastAPI"],"hard_requirements":[],"strong_match":["REST API"]}`)
 	if err != nil {
 		t.Fatalf("valid evaluation rejected: %v", err)
 	}
@@ -207,12 +207,12 @@ func TestVacancyEvaluationJSONValidation(t *testing.T) {
 	}
 
 	for _, raw := range []string{
-		`{"score":-1,"apply":true,"reasons":[],"missing":[],"hard_requirements_missing":[],"hard_requirements_unknown":[]}`,
-		`{"score":101,"apply":true,"reasons":[],"missing":[],"hard_requirements_missing":[],"hard_requirements_unknown":[]}`,
-		`{"score":82,"apply":true,"reasons":[],"missing":[],"hard_requirements_missing":[],"hard_requirements_unknown":[] trailing}`,
-		`{"score":82,"apply":true,"reasons":null,"missing":[],"hard_requirements_missing":[],"hard_requirements_unknown":[]}`,
-		`{"score":82,"apply":true,"reasons":["Python"],"missing":[{"skill":"FastAPI","reason":"not confirmed"}],"hard_requirements_missing":[],"hard_requirements_unknown":[]}`,
-		`{"score":82,"apply":true,"reasons":[],"missing":[],"hard_requirements_missing":[],"hard_requirements_unknown":[],"unexpected":true}`,
+		`{"score":-1,"apply":true,"reasons":[],"missing":[],"hard_requirements":[]}`,
+		`{"score":101,"apply":true,"reasons":[],"missing":[],"hard_requirements":[]}`,
+		`{"score":82,"apply":true,"reasons":[],"missing":[],"hard_requirements":[] trailing}`,
+		`{"score":82,"apply":true,"reasons":null,"missing":[],"hard_requirements":[]}`,
+		`{"score":82,"apply":true,"reasons":["Python"],"missing":[{"skill":"FastAPI","reason":"not confirmed"}],"hard_requirements":[]}`,
+		`{"score":82,"apply":true,"reasons":[],"missing":[],"hard_requirements":[],"unexpected":true}`,
 		`{"score":82,"apply":true,"reasons":[],"missing":[]}`,
 	} {
 		if _, err := parseVacancyEvaluationJSON(raw); err == nil {
@@ -231,10 +231,10 @@ func TestFinalApplyDecisionUsesAIFlagAndThreshold(t *testing.T) {
 	if finalApplyDecision(VacancyEvaluation{Score: 99, Apply: false}, 65) {
 		t.Fatal("AI apply=false must reject even a high score")
 	}
-	if finalApplyDecision(VacancyEvaluation{Score: 95, Apply: true, HardRequirementsMissing: []string{"minimum 3 years commercial Python experience"}}, 65) {
+	if finalApplyDecision(VacancyEvaluation{Score: 95, Apply: true, HardRequirements: []HardRequirementEvaluation{{Requirement: "minimum 3 years commercial Python experience", Category: hardRequirementCategoryExperienceYears, Status: hardRequirementStatusMissing, VacancyEvidence: "3 years required", CandidateEvidence: "Explicitly no such experience"}}}, 65) {
 		t.Fatal("known hard requirement mismatch must reject regardless of score and AI apply flag")
 	}
-	if !finalApplyDecision(VacancyEvaluation{Score: 70, Apply: true, Missing: []string{"FastAPI"}, HardRequirementsMissing: []string{}}, 65) {
+	if !finalApplyDecision(VacancyEvaluation{Score: 70, Apply: true, Missing: []string{"FastAPI"}, HardRequirements: []HardRequirementEvaluation{}}, 65) {
 		t.Fatal("score above threshold with no hard requirement mismatch should match")
 	}
 	if got := vacancyEvaluationRejectReason(VacancyEvaluation{Score: 65, Apply: false}, 65); got != "AI recommended not applying (65/100)" {
@@ -243,7 +243,7 @@ func TestFinalApplyDecisionUsesAIFlagAndThreshold(t *testing.T) {
 	if got := vacancyEvaluationRejectReason(VacancyEvaluation{Score: 60, Apply: true}, 65); got != "AI score below threshold (60/100, minimum 65)" {
 		t.Fatalf("unexpected threshold diagnostic: %q", got)
 	}
-	if got := vacancyEvaluationRejectReason(VacancyEvaluation{Score: 72, Apply: true, HardRequirementsMissing: []string{"minimum 3 years commercial Python experience"}}, 65); got != "hard requirements not met: minimum 3 years commercial Python experience" {
+	if got := vacancyEvaluationRejectReason(VacancyEvaluation{Score: 72, Apply: true, HardRequirements: []HardRequirementEvaluation{{Requirement: "minimum 3 years commercial Python experience", Category: hardRequirementCategoryOther, Status: hardRequirementStatusMissing, VacancyEvidence: "3 years required", CandidateEvidence: "Explicitly no such experience"}}}, 65); got != "hard requirements not met: minimum 3 years commercial Python experience" {
 		t.Fatalf("unexpected hard requirement diagnostic: %q", got)
 	}
 }
@@ -274,7 +274,7 @@ func TestVacancyEvaluationPromptContainsCandidateAndVacancyFacts(t *testing.T) {
 			t.Errorf("evaluation prompt does not contain %q: %s", expected, userPrompt)
 		}
 	}
-	for _, expected := range []string{"только валидный JSON", "Не выдумывай", "основной стек подходит", "Название должности НЕ подтверждает образование", "hard_requirements_missing", "hard_requirements_unknown"} {
+	for _, expected := range []string{"только валидный JSON", "Не выдумывай", "основной стек подходит", "Название должности НЕ подтверждает образование", "hard_requirements", "candidate_evidence", "vacancy_evidence"} {
 		if !strings.Contains(systemPrompt, expected) {
 			t.Errorf("evaluation system prompt does not contain %q: %s", expected, systemPrompt)
 		}
@@ -465,7 +465,7 @@ func TestStructuredVacancyRetriesInvalidResponses(t *testing.T) {
 		aiRetryDelay = previousDelay
 	})
 
-	valid := `{"score":88,"apply":true,"reasons":["Python matches"],"missing":[],"hard_requirements_missing":[],"hard_requirements_unknown":[]}`
+	valid := `{"score":88,"apply":true,"reasons":["Python matches"],"missing":[],"hard_requirements":[]}`
 	tests := []struct {
 		name      string
 		first     string
@@ -476,7 +476,7 @@ func TestStructuredVacancyRetriesInvalidResponses(t *testing.T) {
 		{name: "empty then valid", first: "", second: valid},
 		{name: "malformed then valid", first: "not json", second: valid},
 		{name: "incomplete then valid", first: `{"score":88,"apply":true}`, second: valid},
-		{name: "score outside range then valid", first: `{"score":101,"apply":true,"reasons":[],"missing":[],"hard_requirements_missing":[],"hard_requirements_unknown":[]}`, second: valid},
+		{name: "score outside range then valid", first: `{"score":101,"apply":true,"reasons":[],"missing":[],"hard_requirements":[]}`, second: valid},
 		{name: "all attempts malformed", first: "not json", second: `{"score":88}`, wantErr: true, wantCalls: 2},
 	}
 
@@ -610,7 +610,7 @@ func TestMistralStructuredVacancyUsesStrictJSONSchema(t *testing.T) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Request:    r,
-			Body:       io.NopCloser(strings.NewReader(aiCompletionResponse(`{"score":82,"apply":true,"reasons":["Python matches"],"missing":["FastAPI"],"hard_requirements_missing":[],"hard_requirements_unknown":[],"strong_match":["REST API"]}`))),
+			Body:       io.NopCloser(strings.NewReader(aiCompletionResponse(`{"score":82,"apply":true,"reasons":["Python matches"],"missing":["FastAPI"],"hard_requirements":[],"strong_match":["REST API"]}`))),
 			Header:     make(http.Header),
 		}, nil
 	})
@@ -640,7 +640,7 @@ func TestMistralStructuredVacancyUsesStrictJSONSchema(t *testing.T) {
 	if err := json.Unmarshal(requiredJSON, &required); err != nil {
 		t.Fatalf("schema required has unexpected type: %T", jsonSchema.Schema["required"])
 	}
-	for _, field := range []string{"score", "apply", "reasons", "missing", "hard_requirements_missing", "hard_requirements_unknown"} {
+	for _, field := range []string{"score", "apply", "reasons", "missing", "hard_requirements"} {
 		if !slices.Contains(required, field) {
 			t.Fatalf("schema does not require %q: %v", field, required)
 		}
@@ -653,19 +653,23 @@ func TestMistralStructuredVacancyUsesStrictJSONSchema(t *testing.T) {
 	if !ok || score["type"] != "integer" || score["minimum"] != float64(0) || score["maximum"] != float64(100) {
 		t.Fatalf("score schema is incorrect: %v", properties["score"])
 	}
-	for _, field := range []string{"reasons", "missing", "hard_requirements_missing", "hard_requirements_unknown", "strong_match"} {
+	for _, field := range []string{"reasons", "missing", "hard_requirements", "strong_match"} {
 		arraySchema, ok := properties[field].(map[string]any)
 		if !ok || arraySchema["type"] != "array" {
 			t.Fatalf("%s is not an array schema: %v", field, properties[field])
 		}
 		items, ok := arraySchema["items"].(map[string]any)
-		if !ok || items["type"] != "string" {
+		if field == "hard_requirements" {
+			if !ok || items["type"] != "object" || items["additionalProperties"] != false {
+				t.Fatalf("hard_requirements items must be strict objects: %v", arraySchema["items"])
+			}
+		} else if !ok || items["type"] != "string" {
 			t.Fatalf("%s items must be strings: %v", field, arraySchema["items"])
 		}
 	}
 }
 
-func TestMistralVacancyObjectInsideHardRequirementsMissingFailsLocalValidation(t *testing.T) {
+func TestMistralVacancyObjectWithUnknownFieldFailsLocalValidation(t *testing.T) {
 	previousLogger := logger
 	logger = NewLogger(io.Discard, LevelDebug)
 	t.Cleanup(func() { logger = previousLogger })
@@ -676,14 +680,14 @@ func TestMistralVacancyObjectInsideHardRequirementsMissingFailsLocalValidation(t
 			StatusCode: http.StatusOK,
 			Request:    r,
 			Body: io.NopCloser(strings.NewReader(aiCompletionResponse(
-				`{"score":82,"apply":true,"reasons":["Python matches"],"missing":[],"hard_requirements_missing":[{"requirement":"minimum 3 years"}],"hard_requirements_unknown":[]}`,
+				`{"score":82,"apply":true,"reasons":["Python matches"],"missing":[],"hard_requirements":[{"requirement":"minimum 3 years","category":"experience_years","status":"unknown","vacancy_evidence":"3 years required","candidate_evidence":"not provided","unexpected":true}]}`,
 			))),
 			Header: make(http.Header),
 		}, nil
 	})
 
 	if _, err := client.EvaluateVacancy(vacancyEvaluationInput{Description: "Python"}); err == nil {
-		t.Fatal("vacancy evaluation with an object inside hard_requirements_missing passed local validation")
+		t.Fatal("vacancy evaluation with an unknown hard requirement field passed local validation")
 	}
 }
 
@@ -696,13 +700,13 @@ func TestHardRequirementSkipEventIncludesDiagnosticDetails(t *testing.T) {
 	var events bytes.Buffer
 	r := &HHAIResponder{eventWriter: &events}
 	evaluation := VacancyEvaluation{
-		Score:                   72,
-		Apply:                   true,
-		HardRequirementsMissing: []string{"minimum 3 years commercial Python experience"},
+		Score:            72,
+		Apply:            true,
+		HardRequirements: []HardRequirementEvaluation{{Requirement: "minimum 3 years commercial Python experience", Category: hardRequirementCategoryOther, Status: hardRequirementStatusMissing, VacancyEvidence: "3 years required", CandidateEvidence: "Explicit negative fact"}},
 	}
 	score := evaluation.Score
 	reason := vacancyEvaluationRejectReason(evaluation, 65)
-	r.skipVacancyWithHardRequirements(Vacancy{ID: 123, Name: "Python backend"}, "https://example.test/vacancy/123", reason, &score, evaluation.HardRequirementsMissing)
+	r.skipVacancyWithEvaluation(Vacancy{ID: 123, Name: "Python backend"}, "https://example.test/vacancy/123", reason, &score, hardRequirementsMissing(evaluation), evaluation.HardRequirements)
 
 	if !strings.Contains(logs.String(), "SKIP — hard requirements not met (score 72/100): minimum 3 years commercial Python experience") {
 		t.Fatalf("hard requirement diagnostic was not logged: %s", logs.String())
@@ -711,7 +715,7 @@ func TestHardRequirementSkipEventIncludesDiagnosticDetails(t *testing.T) {
 	if err := json.Unmarshal(events.Bytes(), &event); err != nil {
 		t.Fatalf("skip event is not valid JSON: %v", err)
 	}
-	if event.Reason != reason || !slices.Equal(event.HardRequirementsMissing, evaluation.HardRequirementsMissing) {
+	if event.Reason != reason || !slices.Equal(event.HardRequirementsMissing, hardRequirementsMissing(evaluation)) || len(event.HardRequirements) != 1 {
 		t.Fatalf("hard requirement details were not preserved in event: %+v", event)
 	}
 }
@@ -846,7 +850,7 @@ func TestDryRunVacancyAboveThresholdProducesPreviewWithoutWrite(t *testing.T) {
 	defer hhServer.Close()
 
 	aiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, "{\"choices\":[{\"message\":{\"content\":\"{\\\"score\\\":88,\\\"apply\\\":true,\\\"reasons\\\":[\\\"Python matches\\\"],\\\"missing\\\":[],\\\"hard_requirements_missing\\\":[],\\\"hard_requirements_unknown\\\":[],\\\"strong_match\\\":[\\\"Python\\\"]}\"}}]}")
+		_, _ = io.WriteString(w, "{\"choices\":[{\"message\":{\"content\":\"{\\\"score\\\":88,\\\"apply\\\":true,\\\"reasons\\\":[\\\"Python matches\\\"],\\\"missing\\\":[],\\\"hard_requirements\\\":[],\\\"strong_match\\\":[\\\"Python\\\"]}\"}}]}")
 	}))
 	defer aiServer.Close()
 
@@ -913,7 +917,7 @@ func TestDryRunUnknownHardRequirementRequiresReview(t *testing.T) {
 	defer hhServer.Close()
 
 	aiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"{\"score\":92,\"apply\":true,\"reasons\":[\"Python matches\"],\"missing\":[],\"hard_requirements_missing\":[],\"hard_requirements_unknown\":[\"высшее образование\",\"локация кандидата\"]}"}}]}`)
+		_, _ = io.WriteString(w, aiCompletionResponse(`{"score":92,"apply":true,"reasons":["Python matches"],"missing":[],"hard_requirements":[{"requirement":"высшее образование","category":"education","status":"unknown","vacancy_evidence":"Требуется высшее образование","candidate_evidence":"not provided"},{"requirement":"офис в Ташкенте","category":"location","status":"unknown","vacancy_evidence":"Работа в офисе Ташкента","candidate_evidence":"not provided"}]}`))
 	}))
 	defer aiServer.Close()
 

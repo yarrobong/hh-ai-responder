@@ -109,6 +109,17 @@ type CandidateContext struct {
 	Contacts    string
 }
 
+// HardRequirementEvaluation is an evidence-backed assessment of one
+// mandatory vacancy requirement. The evaluator is deliberately conservative:
+// unknown means that the available candidate data is insufficient to decide.
+type HardRequirementEvaluation struct {
+	Requirement       string `json:"requirement"`
+	Category          string `json:"category"`
+	Status            string `json:"status"`
+	VacancyEvidence   string `json:"vacancy_evidence"`
+	CandidateEvidence string `json:"candidate_evidence"`
+}
+
 type Vacancy struct {
 	ID                       int               `json:"vacancyId"`
 	Name                     string            `json:"name"`
@@ -148,13 +159,12 @@ func (v *Vacancy) UnmarshalJSON(data []byte) error {
 }
 
 type VacancyEvaluation struct {
-	Score                   int      `json:"score"`
-	Apply                   bool     `json:"apply"`
-	Reasons                 []string `json:"reasons"`
-	Missing                 []string `json:"missing"`
-	HardRequirementsMissing []string `json:"hard_requirements_missing"`
-	HardRequirementsUnknown []string `json:"hard_requirements_unknown"`
-	StrongMatch             []string `json:"strong_match,omitempty"`
+	Score            int                         `json:"score"`
+	Apply            bool                        `json:"apply"`
+	Reasons          []string                    `json:"reasons"`
+	Missing          []string                    `json:"missing"`
+	HardRequirements []HardRequirementEvaluation `json:"hard_requirements"`
+	StrongMatch      []string                    `json:"strong_match,omitempty"`
 }
 
 type NamedObject struct {
@@ -2968,13 +2978,14 @@ func (r *HHAIResponder) ApplyVacancies() error {
 					Apply:                   evaluation.Apply,
 					Reasons:                 evaluation.Reasons,
 					Missing:                 evaluation.Missing,
-					HardRequirementsUnknown: evaluation.HardRequirementsUnknown,
+					HardRequirementsUnknown: hardRequirementsUnknown(evaluation),
+					HardRequirements:        evaluation.HardRequirements,
 				})
 				continue
 			}
 			if decision != VacancyMatch {
 				reason := vacancyEvaluationRejectReason(evaluation, r.minMatchScore)
-				r.skipVacancyWithHardRequirements(vacancy, vacancyURL, reason, &score, evaluation.HardRequirementsMissing)
+				r.skipVacancyWithEvaluation(vacancy, vacancyURL, reason, &score, hardRequirementsMissing(evaluation), evaluation.HardRequirements)
 				continue
 			}
 
@@ -2987,7 +2998,8 @@ func (r *HHAIResponder) ApplyVacancies() error {
 				Score:                   evaluation.Score,
 				Reasons:                 evaluation.Reasons,
 				Missing:                 evaluation.Missing,
-				HardRequirementsMissing: evaluation.HardRequirementsMissing,
+				HardRequirementsMissing: hardRequirementsMissing(evaluation),
+				HardRequirements:        evaluation.HardRequirements,
 			})
 			logger.Info("MATCH — vacancy %d: %d/100", vacancy.ID, evaluation.Score)
 
