@@ -1,3 +1,5 @@
 module hh-ai-responder
 
-go 1.25
+go 1.25.0
+
+require golang.org/x/net v0.58.0

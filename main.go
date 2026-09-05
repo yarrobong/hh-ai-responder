@@ -111,6 +111,7 @@ type Vacancy struct {
 	ID                     int               `json:"vacancyId"`
 	Name                   string            `json:"name"`
 	WorkSchedule           string            `json:"@workSchedule"`
+	WorkExperience         string            `json:"workExperience"`
 	Links                  map[string]string `json:"links"`
 	TotalResponsesCount    int               `json:"totalResponsesCount"`
 	Area                   NamedObject       `json:"area"`
@@ -2686,12 +2687,7 @@ func (r *HHAIResponder) fetchVacancyPage(page int) ([]Vacancy, error) {
 		return nil, unexpectedHTTPStatus(resp.Status)
 	}
 
-	var vacancies []Vacancy
-	if err := decodeEmbeddedJSON(resp.Body, `,"vacancies":`, &vacancies); err != nil {
-		return nil, err
-	}
-
-	return vacancies, nil
+	return parseVacanciesFromSearchResponse(resp.Body, r.baseURL)
 }
 
 func (r *HHAIResponder) ApplyVacancies() error {
