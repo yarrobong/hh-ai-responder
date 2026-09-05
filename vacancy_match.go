@@ -704,6 +704,7 @@ func candidateRequirementMentioned(candidate CandidateContext, requirement strin
 }
 
 var numericExperiencePattern = regexp.MustCompile(`(?i)([0-9]+)\s*(?:\+\s*)?(лет|года|год|месяц(?:а|ев|ы)?|years?|months?)`)
+var experienceRangePattern = regexp.MustCompile(`(?i)([0-9]+)\s*-\s*[0-9]+\s*(лет|года|год|месяц(?:а|ев|ы)?|years?|months?)`)
 
 var roleSpecificExperienceMarkers = []string{
 	"sre", "devops", "devsecops", "java", "python", "django", "fastapi", "golang", "go ",
@@ -718,6 +719,17 @@ var roleSpecificExperienceMarkers = []string{
 // candidate experience.
 func descriptionExperienceMinimumMonths(requirement, evidence string) (int, bool, bool) {
 	text := normalizeEvidenceText(strings.Join([]string{requirement, evidence}, " "))
+	if match := experienceRangePattern.FindStringSubmatch(text); len(match) == 3 {
+		months, err := strconv.Atoi(match[1])
+		if err != nil || months < 0 {
+			return 0, false, false
+		}
+		unit := strings.ToLower(match[2])
+		if strings.Contains(unit, "месяц") || strings.Contains(unit, "month") {
+			return months, true, !containsRoleSpecificExperienceMarker(text)
+		}
+		return months * 12, true, !containsRoleSpecificExperienceMarker(text)
+	}
 	match := numericExperiencePattern.FindStringSubmatch(text)
 	if len(match) != 3 {
 		return 0, false, false

@@ -57,24 +57,35 @@ func TestDescriptionSpecificExperienceDoesNotUseTotalExperience(t *testing.T) {
 }
 
 func TestDescriptionExperienceUsesExplicitTotalDurationPolicy(t *testing.T) {
-	candidate := CandidateContext{TotalExperienceMonthsKnown: true, TotalExperienceMonths: 11}
-	softGap := deriveHardRequirements(candidate, Vacancy{WorkExperience: "between1And3"}, "Опыт от 1 года", []HardRequirementCandidate{{
-		Requirement: "опыт от 1 года", Category: hardRequirementCategoryExperienceYears, VacancyEvidence: "Опыт от 1 года",
-	}})
-	if len(softGap) != 1 || softGap[0].Status != hardRequirementStatusUnknown || !softGap[0].Soft {
-		t.Fatalf("one-year description requirement was not a soft gap: %+v", softGap)
+	tests := []struct {
+		name        string
+		months      int
+		description string
+		wantStatus  string
+		wantSoft    bool
+	}{
+		{name: "eleven months is a soft gap for one to three years", months: 11, description: "Опыт 1–3 года", wantStatus: hardRequirementStatusUnknown, wantSoft: true},
+		{name: "eight months is missing for one to three years", months: 8, description: "Опыт 1–3 года", wantStatus: hardRequirementStatusMissing},
+		{name: "eleven months misses two years", months: 11, description: "Опыт от 2 лет", wantStatus: hardRequirementStatusMissing},
+		{name: "eleven months misses three years", months: 11, description: "Опыт от 3 лет", wantStatus: hardRequirementStatusMissing},
+		{name: "devops duration is role specific", months: 11, description: "1 год DevOps", wantStatus: hardRequirementStatusUnknown},
+		{name: "sre duration is role specific", months: 11, description: "2 года SRE", wantStatus: hardRequirementStatusUnknown},
+		{name: "java duration is role specific", months: 11, description: "3 года Java", wantStatus: hardRequirementStatusUnknown},
 	}
-	largeGap := deriveHardRequirements(candidate, Vacancy{WorkExperience: "between1And3"}, "Опыт от 3 лет", []HardRequirementCandidate{{
-		Requirement: "опыт от 3 лет", Category: hardRequirementCategoryExperienceYears, VacancyEvidence: "Опыт от 3 лет",
-	}})
-	if len(largeGap) != 1 || largeGap[0].Status != hardRequirementStatusMissing || largeGap[0].Soft {
-		t.Fatalf("three-year generic requirement was not a hard mismatch: %+v", largeGap)
-	}
-	roleSpecific := deriveHardRequirements(CandidateContext{TotalExperienceMonthsKnown: true, TotalExperienceMonths: 50}, Vacancy{}, "Нужно 3 года SRE", []HardRequirementCandidate{{
-		Requirement: "3 года SRE", Category: hardRequirementCategoryExperienceYears, VacancyEvidence: "Нужно 3 года SRE",
-	}})
-	if len(roleSpecific) != 1 || roleSpecific[0].Status != hardRequirementStatusUnknown {
-		t.Fatalf("role-specific requirement used generic total experience: %+v", roleSpecific)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := deriveHardRequirements(
+				CandidateContext{TotalExperienceMonthsKnown: true, TotalExperienceMonths: test.months},
+				Vacancy{},
+				test.description,
+				[]HardRequirementCandidate{{
+					Requirement: test.description, Category: hardRequirementCategoryExperienceYears, VacancyEvidence: test.description,
+				}},
+			)
+			if len(got) != 1 || got[0].Status != test.wantStatus || got[0].Soft != test.wantSoft {
+				t.Fatalf("got requirements=%+v, want status=%s soft=%t", got, test.wantStatus, test.wantSoft)
+			}
+		})
 	}
 }
 
