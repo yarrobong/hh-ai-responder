@@ -710,7 +710,41 @@ func containsNormalizedText(haystack, needle string) bool {
 }
 
 func candidateRequirementMentioned(candidate CandidateContext, requirement string) bool {
-	return containsNormalizedText(candidate.Skills, requirement) || containsNormalizedText(candidate.Experience, requirement)
+	if skill, ok := candidate.Profile.ResolveSkill(requirement); ok {
+		if skill.Negative || skill.Source == CandidateSourceUserConfirmed {
+			return !skill.Negative && skill.Level != SkillLevelUnknown && skill.Level != SkillLevelHeardOf
+		}
+		if skill.Level != SkillLevelUnknown && skill.Level != SkillLevelHeardOf {
+			return true
+		}
+	}
+	return explicitTermMentioned(candidate.Skills, requirement) || explicitTermMentioned(candidate.Experience, requirement)
+}
+
+// explicitTermMentioned uses token equality instead of substring matching.
+// This prevents unrelated names such as GitHub from satisfying Git, while
+// still allowing multi-word skills such as REST API.
+func explicitTermMentioned(text, requirement string) bool {
+	want := strings.Fields(canonicalSkillName(requirement))
+	if len(want) == 0 {
+		return false
+	}
+	text = strings.ToLower(text)
+	text = strings.NewReplacer("/", " ", ",", " ", ";", " ", "(", " ", ")", " ", "\n", " ", "•", " ", "|", " ").Replace(text)
+	have := strings.Fields(text)
+	for start := 0; start+len(want) <= len(have); start++ {
+		matched := true
+		for offset, word := range want {
+			if have[start+offset] != word {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
 }
 
 var numericExperiencePattern = regexp.MustCompile(`(?i)([0-9]+)\s*(?:\+\s*)?(лет|года|год|месяц(?:а|ев|ы)?|years?|months?)`)
@@ -1088,6 +1122,14 @@ func locationsMatch(candidateValue, vacancyValue string) bool {
 }
 
 func candidateEvidenceGrounded(candidate CandidateContext, evidence string) bool {
+	for _, word := range meaningfulWords(evidence) {
+		if skill, ok := candidate.Profile.ResolveSkill(word); ok && !skill.Negative && skill.Level != SkillLevelUnknown && skill.Level != SkillLevelHeardOf {
+			return true
+		}
+	}
+	if explicitTermMentioned(candidate.Skills, evidence) || explicitTermMentioned(candidate.Experience, evidence) {
+		return true
+	}
 	context := strings.ToLower(strings.Join([]string{candidate.Skills, candidate.Experience, candidate.Location, candidate.Contacts}, "\n"))
 	words := meaningfulWords(evidence)
 	if len(words) == 0 {
@@ -1102,6 +1144,9 @@ func candidateEvidenceGrounded(candidate CandidateContext, evidence string) bool
 }
 
 func explicitNegativeCandidateFact(candidate CandidateContext, requirement string) bool {
+	if skill, ok := candidate.Profile.ResolveSkill(requirement); ok && skill.Negative {
+		return true
+	}
 	context := strings.ToLower(strings.Join([]string{candidate.Skills, candidate.Experience, candidate.Location}, "\n"))
 	for _, marker := range []string{"не владе", "не знаю", "нет опыта", "нет навыка", "нет знаний", "— нет", "- нет", ": нет", "отсутствует", "не готов", "не имею", "не работал"} {
 		if strings.Contains(context, marker) && candidateEvidenceGrounded(candidate, requirement) {

@@ -101,6 +101,7 @@ type Config struct {
 	MaxVacanciesPerRun        int
 	MaxApplicationsPerRun     int
 	AlreadyRespondedStatePath string
+	CandidateProfilePath      string
 }
 
 type CandidateContext struct {
@@ -116,6 +117,7 @@ type CandidateContext struct {
 	EducationDetails           string
 	TotalExperienceMonthsKnown bool
 	TotalExperienceMonths      int
+	Profile                    CandidateProfile `json:"candidate_profile,omitempty"`
 }
 
 // HardRequirementCandidate is the only hard-requirement shape accepted from
@@ -1139,6 +1141,8 @@ type ChatToReply struct {
 	Salary              string
 	Skills              string
 	IsDiscard           bool
+	AlwaysEmphasize     string
+	AvoidClaiming       string
 }
 
 func (r *HHAIResponder) getChatsAwaitingReply(maxPages int) ([]ChatToReply, error) {
@@ -1218,6 +1222,8 @@ func (r *HHAIResponder) getChatsAwaitingReply(maxPages int) ([]ChatToReply, erro
 			if !slices.Contains(chat.Resources.Resume, strconv.FormatInt(resume.Id, 10)) {
 				continue
 			}
+			candidate := r.candidateContext(*resume)
+			alwaysEmphasize, avoidClaiming := candidate.Profile.TrustedCommunicationRules()
 
 			vacancy, vacancyExists := chatsResponse.Resources.Vacancies[chat.Resources.Vacancy[0]]
 			if !vacancyExists {
@@ -1245,12 +1251,14 @@ func (r *HHAIResponder) getChatsAwaitingReply(maxPages int) ([]ChatToReply, erro
 				ApplicantId:         r.userId,
 				FirstName:           r.firstName,
 				LastName:            r.lastName,
-				ResumeExperience:    r.resumeExperience,
+				ResumeExperience:    candidate.Experience,
 				ResumeID:            resume.Id,
 				ResumeHash:          resume.Hash,
 				ResumeTitle:         resume.Title,
-				Skills:              resume.Skills,
-				Salary:              resume.Salary,
+				Skills:              candidate.Skills,
+				Salary:              candidate.Salary,
+				AlwaysEmphasize:     alwaysEmphasize,
+				AvoidClaiming:       avoidClaiming,
 			}
 
 			if last.WorkflowTransition != nil && last.WorkflowTransition.ApplicantState == "DISCARD" {
@@ -1339,6 +1347,12 @@ func (r *HHAIResponder) AutoRespondChats() error {
 			chatToReply.Skills,
 			chatToReply.ResumeExperience,
 		)
+		if chatToReply.AlwaysEmphasize != "" {
+			systemPrompt += "\nЕсли это правдиво и уместно, подчёркивай: " + chatToReply.AlwaysEmphasize
+		}
+		if chatToReply.AvoidClaiming != "" {
+			systemPrompt += "\nНикогда не утверждай наличие: " + chatToReply.AvoidClaiming
+		}
 
 		var temperature = 0.5
 		userPrompt := "Сообщение работодателя:\n\n" + strings.TrimSpace(chatToReply.ReplyToMessage) + "\n---\n"
@@ -1525,6 +1539,8 @@ type HHAIResponder struct {
 	resumeHash                string
 	resumeExperience          string
 	resumeFacts               ResumeFacts
+	candidateProfile          CandidateProfile
+	candidateProfilePath      string
 	latestResumeHash          string
 	resumes                   []ResumeItem
 	userId                    int64
@@ -1834,6 +1850,13 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 		maxVacanciesPerRun:        cfg.MaxVacanciesPerRun,
 		maxApplicationsPerRun:     cfg.MaxApplicationsPerRun,
 		alreadyRespondedStatePath: cfg.AlreadyRespondedStatePath,
+		candidateProfilePath:      cfg.CandidateProfilePath,
+	}
+	if responder.candidateProfilePath != "" {
+		responder.candidateProfile, err = LoadCandidateProfile(responder.candidateProfilePath)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	responder.requester = NewHHRequester(ctx, client, cfg.RequestInterval)
@@ -1883,6 +1906,15 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 	}
 	responder.resumeFacts = resumeFacts
 	responder.resumeExperience = resumeFacts.ExperienceText
+	if responder.candidateProfilePath != "" {
+		if fullName := strings.TrimSpace(responder.GetFullName()); fullName != "" && sourcePriority(responder.candidateProfile.Identity.FullName.Source) <= sourcePriority(CandidateSourceHHResume) {
+			responder.candidateProfile.Identity.FullName = ProfileStringFact{Value: fullName, ProfileFact: ProfileFact{Source: CandidateSourceHHResume, Confirmed: true, ConfirmedAt: time.Now(), Evidence: []string{"HH account profile"}}}
+		}
+		responder.candidateProfile.MergeHHResumeFacts(*resume, resumeFacts, time.Now())
+		if err := SaveCandidateProfile(responder.candidateProfilePath, responder.candidateProfile); err != nil {
+			return nil, fmt.Errorf("save merged candidate profile: %w", err)
+		}
+	}
 
 	// If no search URL was provided, retain the old resume-only search behavior.
 	if len(responder.searchProfiles) == 0 {
@@ -2284,6 +2316,14 @@ func buildLetterSystemPrompt(candidate CandidateContext, extraPrompt string) str
 	if strings.TrimSpace(candidate.Contacts) != "" {
 		systemPrompt += "\nКонтакты для указания в письме: " + candidate.Contacts
 	}
+	if alwaysEmphasize, avoidClaiming := candidate.Profile.TrustedCommunicationRules(); alwaysEmphasize != "" || avoidClaiming != "" {
+		if alwaysEmphasize != "" {
+			systemPrompt += "\nЕсли это правдиво и уместно, подчёркивай: " + alwaysEmphasize
+		}
+		if avoidClaiming != "" {
+			systemPrompt += "\nНикогда не утверждай наличие: " + avoidClaiming
+		}
+	}
 
 	if strings.TrimSpace(extraPrompt) != "" {
 		systemPrompt += "\nДополнительные инструкции:\n" + extraPrompt
@@ -2293,20 +2333,89 @@ func buildLetterSystemPrompt(candidate CandidateContext, extraPrompt string) str
 }
 
 func (r *HHAIResponder) candidateContext(resume ResumeItem) CandidateContext {
+	profile := r.candidateProfile
+	fullName := r.GetFullName()
+	if profile.Identity.FullName.Confirmed && sourceTrustedForEmployerCommunication(profile.Identity.FullName.Source) && strings.TrimSpace(profile.Identity.FullName.Value) != "" {
+		fullName = profile.Identity.FullName.Value
+	}
+	location := resume.Area
+	if profile.Identity.Location.Confirmed && sourceTrustedForEmployerCommunication(profile.Identity.Location.Source) && strings.TrimSpace(profile.Identity.Location.Value) != "" {
+		location = profile.Identity.Location.Value
+	}
+	skills := joinNonEmptyStrings(", ", profile.TrustedSkillsText(), resume.Skills)
+	experience := joinNonEmptyStrings("\n\n", profile.TrustedExperienceText(), profile.TrustedProjectsText(), r.resumeExperience)
+	educationKnown := r.resumeFacts.EducationKnown
+	educationLevel := r.resumeFacts.EducationLevel
+	educationDetails := r.resumeFacts.EducationDetails
+	if level, details, ok := profile.TrustedEducation(); ok {
+		educationKnown, educationLevel, educationDetails = true, level, details
+	}
+	totalExperienceKnown := r.resumeFacts.TotalExperienceMonthsKnown
+	totalExperienceMonths := r.resumeFacts.TotalExperienceMonths
+	if profile.TotalExperienceMonths.Confirmed && sourceTrustedForEmployerCommunication(profile.TotalExperienceMonths.Source) {
+		totalExperienceKnown, totalExperienceMonths = true, profile.TotalExperienceMonths.Value
+	}
 	return CandidateContext{
-		FullName:                   r.GetFullName(),
+		FullName:                   fullName,
 		ResumeTitle:                resume.Title,
 		Salary:                     resume.Salary,
-		Experience:                 r.resumeExperience,
-		Skills:                     resume.Skills,
-		Location:                   resume.Area,
+		Experience:                 experience,
+		Skills:                     skills,
+		Location:                   location,
 		Contacts:                   r.contacts,
-		EducationKnown:             r.resumeFacts.EducationKnown,
-		EducationLevel:             r.resumeFacts.EducationLevel,
-		EducationDetails:           r.resumeFacts.EducationDetails,
-		TotalExperienceMonthsKnown: r.resumeFacts.TotalExperienceMonthsKnown,
-		TotalExperienceMonths:      r.resumeFacts.TotalExperienceMonths,
+		EducationKnown:             educationKnown,
+		EducationLevel:             educationLevel,
+		EducationDetails:           educationDetails,
+		TotalExperienceMonthsKnown: totalExperienceKnown,
+		TotalExperienceMonths:      totalExperienceMonths,
+		Profile:                    profile,
 	}
+}
+
+func (r *HHAIResponder) addPendingQuestionForRequirement(vacancy Vacancy, requirement HardRequirementEvaluation) {
+	if requirement.Status != hardRequirementStatusUnknown || isOptionalRequirement(requirement) {
+		return
+	}
+	topic := strings.TrimSpace(requirement.Requirement)
+	if topic == "" {
+		return
+	}
+	question := fmt.Sprintf("Работал ли ты с %s? Укажи только подтверждённый уровень и конкретный опыт.", topic)
+	if requirement.Category == hardRequirementCategoryEducation {
+		question = "Какой подтверждённый уровень образования и специальность подходят к требованию: " + topic + "?"
+	} else if requirement.Category == hardRequirementCategoryLocation {
+		question = "Подходят ли тебе условия/локация из требования: " + topic + "?"
+	} else if requirement.Category == hardRequirementCategoryLanguage {
+		question = "Какой у тебя подтверждённый уровень языка/языков для требования: " + topic + "?"
+	}
+	added := r.candidateProfile.AddPendingQuestion(PendingProfileQuestion{
+		Topic: topic, Question: question, Category: requirement.Category, VacancyID: vacancy.ID, Reason: "required " + requirement.Category,
+	})
+	if !added {
+		return
+	}
+	if r.candidateProfilePath == "" {
+		return
+	}
+	if err := SaveCandidateProfile(r.candidateProfilePath, r.candidateProfile); err != nil {
+		if logger != nil {
+			logger.Warn("Could not save pending candidate profile question for vacancy %d: %v", vacancy.ID, err)
+		}
+		return
+	}
+	if logger != nil {
+		logger.Info("Profile question added for unknown requirement %q", topic)
+	}
+}
+
+func joinNonEmptyStrings(separator string, values ...string) string {
+	var nonEmpty []string
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			nonEmpty = append(nonEmpty, value)
+		}
+	}
+	return strings.Join(nonEmpty, separator)
 }
 
 func candidateLocation(location string) string {
@@ -3172,6 +3281,9 @@ func (r *HHAIResponder) ApplyVacancies() error {
 		decision := vacancyDecision(evaluation, r.minMatchScore)
 		if decision == VacancyReviewRequired {
 			summary.ReviewRequired++
+			for _, requirement := range evaluation.HardRequirements {
+				r.addPendingQuestionForRequirement(vacancy, requirement)
+			}
 			unknownReason := vacancyEvaluationRejectReason(evaluation, r.minMatchScore)
 			logger.Info("REVIEW — vacancy %d: %s", vacancy.ID, unknownReason)
 			r.writeEvent(VacancyReviewRequiredResult{
@@ -3784,14 +3896,15 @@ func parseConfig() (Config, error) {
 
 	cfg := Config{
 		// Safe by default: writes require an explicit HH_DRY_RUN=false.
-		DryRun:            true,
-		AutoApply:         true,
-		AutoChat:          true,
-		AutoTouch:         true,
-		AutoJobStatus:     true,
-		ChatMode:          "review",
-		MinMatchScore:     65,
-		MinSalaryCurrency: "RUR",
+		DryRun:               true,
+		AutoApply:            true,
+		AutoChat:             true,
+		AutoTouch:            true,
+		AutoJobStatus:        true,
+		ChatMode:             "review",
+		MinMatchScore:        65,
+		MinSalaryCurrency:    "RUR",
+		CandidateProfilePath: filepath.Join(wd, "candidate_profile.json"),
 	}
 	var includeKeywordsRaw, excludeKeywordsRaw string
 
@@ -3830,6 +3943,7 @@ func parseConfig() (Config, error) {
 	flag.IntVar(&cfg.MaxVacanciesPerRun, "max-vacancies-per-run", 20, "Максимум вакансий для pipeline за один проход; 0 — без лимита")
 	flag.IntVar(&cfg.MaxApplicationsPerRun, "max-applications-per-run", 10, "Максимум успешных/предпросмотренных откликов за один проход; 0 — без лимита")
 	flag.StringVar(&cfg.AlreadyRespondedStatePath, "already-responded-state", filepath.Join(wd, ".hh-already-responded.json"), "Локальный JSON-файл подтверждённых предыдущих откликов")
+	flag.StringVar(&cfg.CandidateProfilePath, "candidate-profile", filepath.Join(wd, "candidate_profile.json"), "Локальный профиль кандидата")
 	flag.Parse()
 
 	_ = loadDotEnv(".env")
@@ -3854,6 +3968,9 @@ func parseConfig() (Config, error) {
 	}
 	if !flags["already-responded-state"] {
 		cfg.AlreadyRespondedStatePath = getEnv("HH_ALREADY_RESPONDED_STATE", cfg.AlreadyRespondedStatePath)
+	}
+	if !flags["candidate-profile"] {
+		cfg.CandidateProfilePath = getEnv("HH_CANDIDATE_PROFILE", cfg.CandidateProfilePath)
 	}
 	if !flags["ai-base-url"] {
 		cfg.AIBaseURL = getEnv("HH_AI_BASE_URL", cfg.AIBaseURL)
@@ -4291,6 +4408,13 @@ func (r *HHAIResponder) Run() {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "profile" {
+		if err := runProfileCommand(os.Args[2:], os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		return
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 

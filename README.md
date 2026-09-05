@@ -86,7 +86,23 @@ cp example.env .env
 | `HH_RUN_ONCE`          | `-run-once`          | Выполнить разрешённые задачи один раз и завершиться.                 |
 | `HH_MAX_VACANCIES_PER_RUN` | `-max-vacancies-per-run` | Максимум вакансий после базовой eligibility-проверки за проход; `0` — без лимита, по умолчанию `20`. |
 | `HH_MAX_APPLICATIONS_PER_RUN` | `-max-applications-per-run` | Максимум откликов/превью за проход; `0` — без лимита, по умолчанию `10`. |
+| `HH_CANDIDATE_PROFILE` | `-candidate-profile` | Локальная база знаний кандидата; по умолчанию `candidate_profile.json`, файл не коммитится. |
 | `HH_ALREADY_RESPONDED_STATE` | `-already-responded-state` | Локальный JSON со списком vacancy ID, подтверждённых read-only preflight как уже откликнутые. |
+
+### Локальный профиль кандидата
+
+Профиль расширяет данные HH resume и хранит сведения кандидата с источником и временем последнего подтверждения, включая структурированные факты из HH и верифицированные факты GitHub. AI не может записать факт или установить `confirmed=true`; производные сведения не используются как утверждения в сопроводительных письмах и чатах.
+
+Без cookies и запросов к HH можно запустить начальный опрос:
+
+```bash
+./hh-ai-responder profile
+./hh-ai-responder profile bootstrap
+./hh-ai-responder profile show
+./hh-ai-responder profile questions
+```
+
+Если важное требование вакансии неизвестно, automation run только добавляет дедуплицированный pending-вопрос в профиль и переводит вакансию в `REVIEW_REQUIRED`. Ответить на него можно при следующем запуске `profile`. Уровни навыка: `unknown`, `heard_of`, `basic`, `working`, `confident`, `advanced`. `Docker`, `Kubernetes`, `GitHub` и `Git` не считаются взаимозаменяемыми без явного deterministic alias.
 
 Например, для Chat-GPT нужно указать сл:
 
