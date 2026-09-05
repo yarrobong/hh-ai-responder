@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -25,6 +26,7 @@ func TestCandidateContextKeepsSalaryAndExperienceMapping(t *testing.T) {
 		Title:  "Python developer",
 		Salary: "100000 руб",
 		Skills: "Python, Django",
+		Area:   "Екатеринбург",
 	}
 
 	candidate := r.candidateContext(resume)
@@ -34,6 +36,9 @@ func TestCandidateContextKeepsSalaryAndExperienceMapping(t *testing.T) {
 	if candidate.Experience != r.resumeExperience {
 		t.Fatalf("experience mismatch: got %q, want %q", candidate.Experience, r.resumeExperience)
 	}
+	if candidate.Location != resume.Area {
+		t.Fatalf("location mismatch: got %q, want %q", candidate.Location, resume.Area)
+	}
 
 	prompt := buildLetterSystemPrompt(candidate, "")
 	if !strings.Contains(prompt, "Зарплата: 100000 руб") {
@@ -41,6 +46,116 @@ func TestCandidateContextKeepsSalaryAndExperienceMapping(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "реальный опыт") {
 		t.Errorf("letter prompt does not contain experience: %s", prompt)
+	}
+}
+
+func TestVacancyDecisionUsesTriStateHardRequirements(t *testing.T) {
+	tests := []struct {
+		name       string
+		evaluation VacancyEvaluation
+		want       VacancyDecision
+	}{
+		{
+			name:       "known contradiction rejects",
+			evaluation: VacancyEvaluation{Score: 99, Apply: true, HardRequirementsMissing: []string{"English C1"}},
+			want:       VacancyReject,
+		},
+		{
+			name:       "unknown requires review",
+			evaluation: VacancyEvaluation{Score: 99, Apply: true, HardRequirementsUnknown: []string{"education"}},
+			want:       VacancyReviewRequired,
+		},
+		{
+			name:       "unknown takes precedence over apply false",
+			evaluation: VacancyEvaluation{Score: 99, Apply: false, HardRequirementsUnknown: []string{"location"}},
+			want:       VacancyReviewRequired,
+		},
+		{
+			name:       "apply false rejects",
+			evaluation: VacancyEvaluation{Score: 99, Apply: false},
+			want:       VacancyReject,
+		},
+		{
+			name:       "score threshold rejects",
+			evaluation: VacancyEvaluation{Score: 64, Apply: true},
+			want:       VacancyReject,
+		},
+		{
+			name:       "confirmed match applies",
+			evaluation: VacancyEvaluation{Score: 65, Apply: true},
+			want:       VacancyMatch,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := vacancyDecision(test.evaluation, 65); got != test.want {
+				t.Fatalf("decision: got %s, want %s", got, test.want)
+			}
+			if got := finalApplyDecision(test.evaluation, 65); got != (test.want == VacancyMatch) {
+				t.Fatalf("final apply decision: got %t for %s", got, test.want)
+			}
+		})
+	}
+}
+
+func TestNoExperienceRequirementDoesNotConflictWithCandidateExperience(t *testing.T) {
+	systemPrompt, userPrompt := buildVacancyEvaluationPrompt(vacancyEvaluationInput{
+		Candidate:   CandidateContext{Experience: "5 лет опыта в backend-разработке"},
+		Vacancy:     Vacancy{Name: "Python developer"},
+		Description: "Опыт не требуется. Обучение на месте.",
+	})
+	if !strings.Contains(systemPrompt, "«без опыта»") || !strings.Contains(systemPrompt, "наличие опыта кандидата не является hard mismatch") {
+		t.Fatalf("prompt does not protect no-experience semantics: %s", systemPrompt)
+	}
+	if !strings.Contains(userPrompt, "5 лет опыта") {
+		t.Fatalf("candidate experience was not included in prompt: %s", userPrompt)
+	}
+	if got := vacancyDecision(VacancyEvaluation{Score: 80, Apply: true}, 65); got != VacancyMatch {
+		t.Fatalf("candidate with experience was rejected for a no-experience vacancy: %s", got)
+	}
+}
+
+func TestVacancyEvaluationRequiresUnknownRequirementsArray(t *testing.T) {
+	if _, err := parseVacancyEvaluationJSON(`{"score":82,"apply":true,"reasons":[],"missing":[],"hard_requirements_missing":[]}`); err == nil {
+		t.Fatal("evaluation without hard_requirements_unknown was accepted")
+	}
+}
+
+func TestVacancyResponseCountKnownness(t *testing.T) {
+	var known Vacancy
+	if err := json.Unmarshal([]byte(`{"vacancyId":1,"totalResponsesCount":0}`), &known); err != nil {
+		t.Fatal(err)
+	}
+	if !known.TotalResponsesCountKnown || known.TotalResponsesCount != 0 {
+		t.Fatalf("explicit zero response count was not preserved: %+v", known)
+	}
+
+	var unknown Vacancy
+	if err := json.Unmarshal([]byte(`{"vacancyId":2}`), &unknown); err != nil {
+		t.Fatal(err)
+	}
+	if unknown.TotalResponsesCountKnown {
+		t.Fatalf("absent response count was treated as known: %+v", unknown)
+	}
+	var nullCount Vacancy
+	if err := json.Unmarshal([]byte(`{"vacancyId":3,"totalResponsesCount":null}`), &nullCount); err != nil {
+		t.Fatal(err)
+	}
+	if nullCount.TotalResponsesCountKnown {
+		t.Fatalf("null response count was treated as known: %+v", nullCount)
+	}
+
+	preview, err := json.Marshal(ApplyResult{Type: "application_preview"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(preview), "responses_count") {
+		t.Fatalf("unknown response count was fabricated in preview: %s", preview)
+	}
+	count := 2
+	preview, err = json.Marshal(ApplyResult{Type: "application_preview", ResponsesCount: &count})
+	if err != nil || !strings.Contains(string(preview), `"responses_count":2`) {
+		t.Fatalf("known response count was not serialized: %s (err=%v)", preview, err)
 	}
 }
 
@@ -83,7 +198,7 @@ func TestSolveTestsUsesTextSolutionContract(t *testing.T) {
 }
 
 func TestVacancyEvaluationJSONValidation(t *testing.T) {
-	valid, err := parseVacancyEvaluationJSON(`{"score":82,"apply":true,"reasons":["Python"],"missing":["FastAPI"],"strong_match":["REST API"]}`)
+	valid, err := parseVacancyEvaluationJSON(`{"score":82,"apply":true,"reasons":["Python"],"missing":["FastAPI"],"hard_requirements_missing":[],"hard_requirements_unknown":[],"strong_match":["REST API"]}`)
 	if err != nil {
 		t.Fatalf("valid evaluation rejected: %v", err)
 	}
@@ -92,12 +207,13 @@ func TestVacancyEvaluationJSONValidation(t *testing.T) {
 	}
 
 	for _, raw := range []string{
-		`{"score":-1,"apply":true,"reasons":[],"missing":[]}`,
-		`{"score":101,"apply":true,"reasons":[],"missing":[]}`,
-		`{"score":82,"apply":true,"reasons":[],"missing":[] trailing}`,
-		`{"score":82,"apply":true,"reasons":null,"missing":[]}`,
-		`{"score":82,"apply":true,"reasons":["Python"],"missing":[{"skill":"FastAPI","reason":"not confirmed"}]}`,
-		`{"score":82,"apply":true,"reasons":[],"missing":[],"unexpected":true}`,
+		`{"score":-1,"apply":true,"reasons":[],"missing":[],"hard_requirements_missing":[],"hard_requirements_unknown":[]}`,
+		`{"score":101,"apply":true,"reasons":[],"missing":[],"hard_requirements_missing":[],"hard_requirements_unknown":[]}`,
+		`{"score":82,"apply":true,"reasons":[],"missing":[],"hard_requirements_missing":[],"hard_requirements_unknown":[] trailing}`,
+		`{"score":82,"apply":true,"reasons":null,"missing":[],"hard_requirements_missing":[],"hard_requirements_unknown":[]}`,
+		`{"score":82,"apply":true,"reasons":["Python"],"missing":[{"skill":"FastAPI","reason":"not confirmed"}],"hard_requirements_missing":[],"hard_requirements_unknown":[]}`,
+		`{"score":82,"apply":true,"reasons":[],"missing":[],"hard_requirements_missing":[],"hard_requirements_unknown":[],"unexpected":true}`,
+		`{"score":82,"apply":true,"reasons":[],"missing":[]}`,
 	} {
 		if _, err := parseVacancyEvaluationJSON(raw); err == nil {
 			t.Errorf("invalid evaluation was accepted: %s", raw)
@@ -115,11 +231,20 @@ func TestFinalApplyDecisionUsesAIFlagAndThreshold(t *testing.T) {
 	if finalApplyDecision(VacancyEvaluation{Score: 99, Apply: false}, 65) {
 		t.Fatal("AI apply=false must reject even a high score")
 	}
+	if finalApplyDecision(VacancyEvaluation{Score: 95, Apply: true, HardRequirementsMissing: []string{"minimum 3 years commercial Python experience"}}, 65) {
+		t.Fatal("known hard requirement mismatch must reject regardless of score and AI apply flag")
+	}
+	if !finalApplyDecision(VacancyEvaluation{Score: 70, Apply: true, Missing: []string{"FastAPI"}, HardRequirementsMissing: []string{}}, 65) {
+		t.Fatal("score above threshold with no hard requirement mismatch should match")
+	}
 	if got := vacancyEvaluationRejectReason(VacancyEvaluation{Score: 65, Apply: false}, 65); got != "AI recommended not applying (65/100)" {
 		t.Fatalf("unexpected apply=false diagnostic: %q", got)
 	}
 	if got := vacancyEvaluationRejectReason(VacancyEvaluation{Score: 60, Apply: true}, 65); got != "AI score below threshold (60/100, minimum 65)" {
 		t.Fatalf("unexpected threshold diagnostic: %q", got)
+	}
+	if got := vacancyEvaluationRejectReason(VacancyEvaluation{Score: 72, Apply: true, HardRequirementsMissing: []string{"minimum 3 years commercial Python experience"}}, 65); got != "hard requirements not met: minimum 3 years commercial Python experience" {
+		t.Fatalf("unexpected hard requirement diagnostic: %q", got)
 	}
 }
 
@@ -131,10 +256,12 @@ func TestVacancyEvaluationPromptContainsCandidateAndVacancyFacts(t *testing.T) {
 			Salary:      "100000 руб",
 			Skills:      "Python, Django",
 			Experience:  "Реальный опыт с API",
+			Location:    "Екатеринбург",
 		},
 		Vacancy: Vacancy{
-			Name:    "Backend developer",
-			Company: Company{Name: "Example"},
+			Name:           "Backend developer",
+			WorkExperience: "Опыт 1–3 года",
+			Company:        Company{Name: "Example"},
 		},
 		Description:     "Разработка REST API",
 		Salary:          "120000-150000 руб",
@@ -142,12 +269,12 @@ func TestVacancyEvaluationPromptContainsCandidateAndVacancyFacts(t *testing.T) {
 		WorkSchedule:    "удаленная работа",
 		IncludeKeywords: []string{"Django", "REST API"},
 	})
-	for _, expected := range []string{"Имя Кандидата", "Python developer", "100000 руб", "Python, Django", "Реальный опыт с API", "Backend developer", "Example", "Разработка REST API", "120000-150000 руб", "Екатеринбург", "удаленная работа", "Django, REST API"} {
+	for _, expected := range []string{"Имя Кандидата", "Python developer", "100000 руб", "Python, Django", "Реальный опыт с API", "Локация кандидата: Екатеринбург", "Образование кандидата: не передано", "Структурированная длительность опыта кандидата: не передана; не вычисляй её по датам", "Backend developer", "Example", "Опыт 1–3 года", "Требуемый опыт из карточки HH: Опыт 1–3 года", "Разработка REST API", "120000-150000 руб", "удаленная работа", "Django, REST API"} {
 		if !strings.Contains(userPrompt, expected) {
 			t.Errorf("evaluation prompt does not contain %q: %s", expected, userPrompt)
 		}
 	}
-	for _, expected := range []string{"только валидный JSON", "Не выдумывай", "основной стек подходит"} {
+	for _, expected := range []string{"только валидный JSON", "Не выдумывай", "основной стек подходит", "Название должности НЕ подтверждает образование", "hard_requirements_missing", "hard_requirements_unknown"} {
 		if !strings.Contains(systemPrompt, expected) {
 			t.Errorf("evaluation system prompt does not contain %q: %s", expected, systemPrompt)
 		}
@@ -338,7 +465,7 @@ func TestStructuredVacancyRetriesInvalidResponses(t *testing.T) {
 		aiRetryDelay = previousDelay
 	})
 
-	valid := `{"score":88,"apply":true,"reasons":["Python matches"],"missing":[]}`
+	valid := `{"score":88,"apply":true,"reasons":["Python matches"],"missing":[],"hard_requirements_missing":[],"hard_requirements_unknown":[]}`
 	tests := []struct {
 		name      string
 		first     string
@@ -349,7 +476,7 @@ func TestStructuredVacancyRetriesInvalidResponses(t *testing.T) {
 		{name: "empty then valid", first: "", second: valid},
 		{name: "malformed then valid", first: "not json", second: valid},
 		{name: "incomplete then valid", first: `{"score":88,"apply":true}`, second: valid},
-		{name: "score outside range then valid", first: `{"score":101,"apply":true,"reasons":[],"missing":[]}`, second: valid},
+		{name: "score outside range then valid", first: `{"score":101,"apply":true,"reasons":[],"missing":[],"hard_requirements_missing":[],"hard_requirements_unknown":[]}`, second: valid},
 		{name: "all attempts malformed", first: "not json", second: `{"score":88}`, wantErr: true, wantCalls: 2},
 	}
 
@@ -483,7 +610,7 @@ func TestMistralStructuredVacancyUsesStrictJSONSchema(t *testing.T) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Request:    r,
-			Body:       io.NopCloser(strings.NewReader(aiCompletionResponse(`{"score":82,"apply":true,"reasons":["Python matches"],"missing":["FastAPI"],"strong_match":["REST API"]}`))),
+			Body:       io.NopCloser(strings.NewReader(aiCompletionResponse(`{"score":82,"apply":true,"reasons":["Python matches"],"missing":["FastAPI"],"hard_requirements_missing":[],"hard_requirements_unknown":[],"strong_match":["REST API"]}`))),
 			Header:     make(http.Header),
 		}, nil
 	})
@@ -505,6 +632,19 @@ func TestMistralStructuredVacancyUsesStrictJSONSchema(t *testing.T) {
 	if got, ok := jsonSchema.Schema["additionalProperties"].(bool); !ok || got {
 		t.Fatalf("schema additionalProperties must be false: %v", jsonSchema.Schema["additionalProperties"])
 	}
+	requiredJSON, err := json.Marshal(jsonSchema.Schema["required"])
+	if err != nil {
+		t.Fatalf("schema required could not be encoded: %v", err)
+	}
+	var required []string
+	if err := json.Unmarshal(requiredJSON, &required); err != nil {
+		t.Fatalf("schema required has unexpected type: %T", jsonSchema.Schema["required"])
+	}
+	for _, field := range []string{"score", "apply", "reasons", "missing", "hard_requirements_missing", "hard_requirements_unknown"} {
+		if !slices.Contains(required, field) {
+			t.Fatalf("schema does not require %q: %v", field, required)
+		}
+	}
 	properties, ok := jsonSchema.Schema["properties"].(map[string]any)
 	if !ok {
 		t.Fatalf("schema properties have unexpected type: %T", jsonSchema.Schema["properties"])
@@ -513,7 +653,7 @@ func TestMistralStructuredVacancyUsesStrictJSONSchema(t *testing.T) {
 	if !ok || score["type"] != "integer" || score["minimum"] != float64(0) || score["maximum"] != float64(100) {
 		t.Fatalf("score schema is incorrect: %v", properties["score"])
 	}
-	for _, field := range []string{"reasons", "missing", "strong_match"} {
+	for _, field := range []string{"reasons", "missing", "hard_requirements_missing", "hard_requirements_unknown", "strong_match"} {
 		arraySchema, ok := properties[field].(map[string]any)
 		if !ok || arraySchema["type"] != "array" {
 			t.Fatalf("%s is not an array schema: %v", field, properties[field])
@@ -525,7 +665,7 @@ func TestMistralStructuredVacancyUsesStrictJSONSchema(t *testing.T) {
 	}
 }
 
-func TestMistralVacancyObjectInsideMissingFailsLocalValidation(t *testing.T) {
+func TestMistralVacancyObjectInsideHardRequirementsMissingFailsLocalValidation(t *testing.T) {
 	previousLogger := logger
 	logger = NewLogger(io.Discard, LevelDebug)
 	t.Cleanup(func() { logger = previousLogger })
@@ -536,14 +676,43 @@ func TestMistralVacancyObjectInsideMissingFailsLocalValidation(t *testing.T) {
 			StatusCode: http.StatusOK,
 			Request:    r,
 			Body: io.NopCloser(strings.NewReader(aiCompletionResponse(
-				`{"score":82,"apply":true,"reasons":["Python matches"],"missing":[{"skill":"FastAPI","reason":"not confirmed"}]}`,
+				`{"score":82,"apply":true,"reasons":["Python matches"],"missing":[],"hard_requirements_missing":[{"requirement":"minimum 3 years"}],"hard_requirements_unknown":[]}`,
 			))),
 			Header: make(http.Header),
 		}, nil
 	})
 
 	if _, err := client.EvaluateVacancy(vacancyEvaluationInput{Description: "Python"}); err == nil {
-		t.Fatal("vacancy evaluation with an object inside missing passed local validation")
+		t.Fatal("vacancy evaluation with an object inside hard_requirements_missing passed local validation")
+	}
+}
+
+func TestHardRequirementSkipEventIncludesDiagnosticDetails(t *testing.T) {
+	previousLogger := logger
+	var logs bytes.Buffer
+	logger = NewLogger(&logs, LevelInfo)
+	t.Cleanup(func() { logger = previousLogger })
+
+	var events bytes.Buffer
+	r := &HHAIResponder{eventWriter: &events}
+	evaluation := VacancyEvaluation{
+		Score:                   72,
+		Apply:                   true,
+		HardRequirementsMissing: []string{"minimum 3 years commercial Python experience"},
+	}
+	score := evaluation.Score
+	reason := vacancyEvaluationRejectReason(evaluation, 65)
+	r.skipVacancyWithHardRequirements(Vacancy{ID: 123, Name: "Python backend"}, "https://example.test/vacancy/123", reason, &score, evaluation.HardRequirementsMissing)
+
+	if !strings.Contains(logs.String(), "SKIP — hard requirements not met (score 72/100): minimum 3 years commercial Python experience") {
+		t.Fatalf("hard requirement diagnostic was not logged: %s", logs.String())
+	}
+	var event VacancySkippedResult
+	if err := json.Unmarshal(events.Bytes(), &event); err != nil {
+		t.Fatalf("skip event is not valid JSON: %v", err)
+	}
+	if event.Reason != reason || !slices.Equal(event.HardRequirementsMissing, evaluation.HardRequirementsMissing) {
+		t.Fatalf("hard requirement details were not preserved in event: %+v", event)
 	}
 }
 
@@ -677,7 +846,7 @@ func TestDryRunVacancyAboveThresholdProducesPreviewWithoutWrite(t *testing.T) {
 	defer hhServer.Close()
 
 	aiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, "{\"choices\":[{\"message\":{\"content\":\"{\\\"score\\\":88,\\\"apply\\\":true,\\\"reasons\\\":[\\\"Python matches\\\"],\\\"missing\\\":[],\\\"strong_match\\\":[\\\"Python\\\"]}\"}}]}")
+		_, _ = io.WriteString(w, "{\"choices\":[{\"message\":{\"content\":\"{\\\"score\\\":88,\\\"apply\\\":true,\\\"reasons\\\":[\\\"Python matches\\\"],\\\"missing\\\":[],\\\"hard_requirements_missing\\\":[],\\\"hard_requirements_unknown\\\":[],\\\"strong_match\\\":[\\\"Python\\\"]}\"}}]}")
 	}))
 	defer aiServer.Close()
 
@@ -706,8 +875,76 @@ func TestDryRunVacancyAboveThresholdProducesPreviewWithoutWrite(t *testing.T) {
 	}
 	if !strings.Contains(events.String(), "\"type\":\"run_summary\"") ||
 		!strings.Contains(events.String(), "\"ai_evaluated\":1") ||
-		!strings.Contains(events.String(), "\"would_apply\":1") {
+		!strings.Contains(events.String(), "\"would_apply\":1") ||
+		!strings.Contains(events.String(), "\"vacancies_fetched\":1") ||
+		!strings.Contains(events.String(), "\"vacancies_processed\":1") ||
+		!strings.Contains(events.String(), "\"vacancies_seen\":1") {
 		t.Fatalf("dry-run summary is incomplete: %s", events.String())
+	}
+	if strings.Contains(events.String(), "responses_count") {
+		t.Fatalf("dry-run fabricated unknown response count: %s", events.String())
+	}
+}
+
+func TestDryRunUnknownHardRequirementRequiresReview(t *testing.T) {
+	previousLogger := logger
+	logger = NewLogger(io.Discard, LevelDebug)
+	t.Cleanup(func() { logger = previousLogger })
+
+	var events bytes.Buffer
+	var writeCalls atomic.Int32
+	hhServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeCalls.Add(1)
+		}
+		switch r.URL.Path {
+		case "/search/vacancy":
+			if r.URL.Query().Get("page") == "1" {
+				_, _ = io.WriteString(w, "prefix,\"vacancies\":[]}")
+				return
+			}
+			_, _ = io.WriteString(w, "prefix,\"vacancies\":[{\"vacancyId\":456,\"name\":\"Python backend developer\",\"links\":{\"desktop\":\"https://example.test/vacancy/456\"},\"company\":{\"name\":\"Example\"}}]}")
+		case "/vacancy/456":
+			_, _ = io.WriteString(w, "{\"redirectConfig\":{},\"vacancyView\":{\"description\":\"Требуется высшее образование и работа в офисе Ташкента\"}}")
+		default:
+			t.Fatalf("unexpected HH endpoint: %s", r.URL.Path)
+		}
+	}))
+	defer hhServer.Close()
+
+	aiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"{\"score\":92,\"apply\":true,\"reasons\":[\"Python matches\"],\"missing\":[],\"hard_requirements_missing\":[],\"hard_requirements_unknown\":[\"высшее образование\",\"локация кандидата\"]}"}}]}`)
+	}))
+	defer aiServer.Close()
+
+	ctx := context.Background()
+	r := &HHAIResponder{
+		ctx:           ctx,
+		baseURL:       mustURL(t, hhServer.URL),
+		requester:     NewHHRequester(ctx, hhServer.Client(), 0),
+		ai:            NewAIClient(ctx, aiServer.URL, "test-model", "", time.Second, time.Second, 1),
+		autoApply:     true,
+		dryRun:        true,
+		resumeHash:    "resume-hash",
+		resumes:       []ResumeItem{{Hash: "resume-hash", Title: "Python developer", Skills: "Python, SQL"}},
+		minMatchScore: 65,
+		eventWriter:   &events,
+	}
+
+	if err := r.ApplyVacancies(); err != nil {
+		t.Fatal(err)
+	}
+	if writeCalls.Load() != 0 {
+		t.Fatalf("review-only dry-run used HH write requests: %d", writeCalls.Load())
+	}
+	got := events.String()
+	if !strings.Contains(got, `"type":"vacancy_review_required"`) ||
+		strings.Contains(got, `"type":"vacancy_match"`) ||
+		strings.Contains(got, `"type":"application_preview"`) ||
+		!strings.Contains(got, `"review_required":1`) ||
+		!strings.Contains(got, `"matched":0`) ||
+		!strings.Contains(got, `"would_apply":0`) {
+		t.Fatalf("unknown hard requirement was not isolated as review: %s", got)
 	}
 }
 

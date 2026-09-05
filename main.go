@@ -105,34 +105,56 @@ type CandidateContext struct {
 	Salary      string
 	Experience  string
 	Skills      string
+	Location    string
 	Contacts    string
 }
 
 type Vacancy struct {
-	ID                     int               `json:"vacancyId"`
-	Name                   string            `json:"name"`
-	WorkSchedule           string            `json:"@workSchedule"`
-	WorkExperience         string            `json:"workExperience"`
-	Links                  map[string]string `json:"links"`
-	TotalResponsesCount    int               `json:"totalResponsesCount"`
-	Area                   NamedObject       `json:"area"`
-	Company                Company           `json:"company"`
-	Compensation           Compensation      `json:"compensation"`
-	CreationTime           string            `json:"creationTime"`
-	LastChangeTime         ChangeTime        `json:"lastChangeTime"`
-	UserLabels             []string          `json:"userLabels"`
-	ResponseLetterRequired bool              `json:"@responseLetterRequired"`
-	UserTestPresent        bool              `json:"userTestPresent"`
-	Archived               bool              `json:"archived"`
-	ResponseURL            string            `json:"response_url"`
+	ID                       int               `json:"vacancyId"`
+	Name                     string            `json:"name"`
+	WorkSchedule             string            `json:"@workSchedule"`
+	WorkExperience           string            `json:"workExperience"`
+	Links                    map[string]string `json:"links"`
+	TotalResponsesCount      int               `json:"totalResponsesCount"`
+	Area                     NamedObject       `json:"area"`
+	Company                  Company           `json:"company"`
+	Compensation             Compensation      `json:"compensation"`
+	CreationTime             string            `json:"creationTime"`
+	LastChangeTime           ChangeTime        `json:"lastChangeTime"`
+	UserLabels               []string          `json:"userLabels"`
+	ResponseLetterRequired   bool              `json:"@responseLetterRequired"`
+	UserTestPresent          bool              `json:"userTestPresent"`
+	Archived                 bool              `json:"archived"`
+	ResponseURL              string            `json:"response_url"`
+	TotalResponsesCountKnown bool              `json:"-"`
+}
+
+// UnmarshalJSON tracks whether HH actually supplied the response count. A
+// zero count is valid data; an absent count must not be presented as zero.
+func (v *Vacancy) UnmarshalJSON(data []byte) error {
+	type vacancyAlias Vacancy
+	var decoded vacancyAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	*v = Vacancy(decoded)
+	responseCount, ok := fields["totalResponsesCount"]
+	v.TotalResponsesCountKnown = ok && !bytes.Equal(bytes.TrimSpace(responseCount), []byte("null"))
+	return nil
 }
 
 type VacancyEvaluation struct {
-	Score       int      `json:"score"`
-	Apply       bool     `json:"apply"`
-	Reasons     []string `json:"reasons"`
-	Missing     []string `json:"missing"`
-	StrongMatch []string `json:"strong_match,omitempty"`
+	Score                   int      `json:"score"`
+	Apply                   bool     `json:"apply"`
+	Reasons                 []string `json:"reasons"`
+	Missing                 []string `json:"missing"`
+	HardRequirementsMissing []string `json:"hard_requirements_missing"`
+	HardRequirementsUnknown []string `json:"hard_requirements_unknown"`
+	StrongMatch             []string `json:"strong_match,omitempty"`
 }
 
 type NamedObject struct {
@@ -245,7 +267,7 @@ type ApplyResult struct {
 	Name           string    `json:"name"`
 	Letter         string    `json:"letter"`
 	AppliedAt      time.Time `json:"applied_at"`
-	ResponsesCount int       `json:"responses_count"`
+	ResponsesCount *int      `json:"responses_count,omitempty"`
 	TestSolutions  []QAPair  `json:"test_solutions,omitempty"`
 }
 
@@ -2088,9 +2110,10 @@ func buildLetterSystemPrompt(candidate CandidateContext, extraPrompt string) str
 Ты ищешь работу в качестве: %s
 Зарплата: %s
 Твои навыки: %s
+Локация кандидата: %s
 Твой опыт:
 
-%s`, candidate.FullName, candidate.ResumeTitle, candidate.Salary, candidate.Skills, candidate.Experience)
+%s`, candidate.FullName, candidate.ResumeTitle, candidate.Salary, candidate.Skills, candidateLocation(candidate.Location), candidate.Experience)
 
 	if strings.TrimSpace(candidate.Contacts) != "" {
 		systemPrompt += "\nКонтакты для указания в письме: " + candidate.Contacts
@@ -2110,8 +2133,16 @@ func (r *HHAIResponder) candidateContext(resume ResumeItem) CandidateContext {
 		Salary:      resume.Salary,
 		Experience:  r.resumeExperience,
 		Skills:      resume.Skills,
+		Location:    resume.Area,
 		Contacts:    r.contacts,
 	}
+}
+
+func candidateLocation(location string) string {
+	if strings.TrimSpace(location) == "" {
+		return "не указана"
+	}
+	return location
 }
 
 func (c *AIClient) GenerateLetter(v Vacancy, vacancyDescription string, candidate CandidateContext, extraPrompt string) (string, error) {
@@ -2830,7 +2861,10 @@ func (r *HHAIResponder) ApplyVacancies() error {
 	}
 
 	summary := RunSummaryResult{Type: "run_summary"}
-	defer func() { r.writeEvent(summary) }()
+	defer func() {
+		summary.VacanciesSeen = summary.VacanciesProcessed
+		r.writeEvent(summary)
+	}()
 
 	resume := r.GetCurrentResume()
 	if resume == nil {
@@ -2850,7 +2884,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 			logger.Error("Failed to fetch vacancies: %v", err)
 			return err
 		}
-		summary.VacanciesSeen += len(vacancies)
+		summary.VacanciesFetched += len(vacancies)
 		if len(vacancies) == 0 {
 			break
 		}
@@ -2859,6 +2893,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 			if err := r.ctx.Err(); err != nil {
 				return err
 			}
+			summary.VacanciesProcessed++
 			if len(vacancy.UserLabels) > 0 || vacancy.Archived || vacancy.ResponseURL != "" {
 				summary.DeterministicSkipped++
 				r.skipVacancy(vacancy, vacancy.Links["desktop"], "already labeled, archived, or already responded", nil)
@@ -2877,6 +2912,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 				continue
 			}
 			if r.maxVacanciesPerRun > 0 && eligibleVacancies >= r.maxVacanciesPerRun {
+				summary.VacanciesProcessed--
 				summary.VacancyLimitSkipped++
 				r.skipVacancy(vacancy, vacancyURL, "per-run vacancy limit reached", nil)
 				return nil
@@ -2918,21 +2954,40 @@ func (r *HHAIResponder) ApplyVacancies() error {
 				continue
 			}
 			score := evaluation.Score
-			if !finalApplyDecision(evaluation, r.minMatchScore) {
+			decision := vacancyDecision(evaluation, r.minMatchScore)
+			if decision == VacancyReviewRequired {
+				summary.ReviewRequired++
+				unknownReason := vacancyEvaluationRejectReason(evaluation, r.minMatchScore)
+				logger.Info("REVIEW — vacancy %d: %s", vacancy.ID, unknownReason)
+				r.writeEvent(VacancyReviewRequiredResult{
+					Type:                    "vacancy_review_required",
+					VacancyID:               vacancy.ID,
+					Name:                    vacancy.Name,
+					URL:                     vacancyURL,
+					Score:                   evaluation.Score,
+					Apply:                   evaluation.Apply,
+					Reasons:                 evaluation.Reasons,
+					Missing:                 evaluation.Missing,
+					HardRequirementsUnknown: evaluation.HardRequirementsUnknown,
+				})
+				continue
+			}
+			if decision != VacancyMatch {
 				reason := vacancyEvaluationRejectReason(evaluation, r.minMatchScore)
-				r.skipVacancy(vacancy, vacancyURL, reason, &score)
+				r.skipVacancyWithHardRequirements(vacancy, vacancyURL, reason, &score, evaluation.HardRequirementsMissing)
 				continue
 			}
 
 			summary.Matched++
 			r.writeEvent(VacancyMatchResult{
-				Type:      "vacancy_match",
-				VacancyID: vacancy.ID,
-				Name:      vacancy.Name,
-				URL:       vacancyURL,
-				Score:     evaluation.Score,
-				Reasons:   evaluation.Reasons,
-				Missing:   evaluation.Missing,
+				Type:                    "vacancy_match",
+				VacancyID:               vacancy.ID,
+				Name:                    vacancy.Name,
+				URL:                     vacancyURL,
+				Score:                   evaluation.Score,
+				Reasons:                 evaluation.Reasons,
+				Missing:                 evaluation.Missing,
+				HardRequirementsMissing: evaluation.HardRequirementsMissing,
 			})
 			logger.Info("MATCH — vacancy %d: %d/100", vacancy.ID, evaluation.Score)
 
@@ -2988,6 +3043,11 @@ func (r *HHAIResponder) ApplyVacancies() error {
 				}
 				applicationsInRun++
 				summary.WouldApply++
+				var responsesCount *int
+				if vacancy.TotalResponsesCountKnown {
+					count := vacancy.TotalResponsesCount + 1
+					responsesCount = &count
+				}
 				logger.Info("WOULD APPLY — vacancy %d (%d/100): %s", vacancy.ID, evaluation.Score, vacancyURL)
 				r.writeEvent(ApplyResult{
 					Type:           "application_preview",
@@ -2998,7 +3058,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 					Name:           vacancy.Name,
 					Letter:         letter,
 					AppliedAt:      time.Now(),
-					ResponsesCount: vacancy.TotalResponsesCount + 1,
+					ResponsesCount: responsesCount,
 					TestSolutions:  solutions,
 				})
 				continue
@@ -3039,8 +3099,16 @@ func (r *HHAIResponder) ApplyVacancies() error {
 			if successStr, ok := responseResult["success"].(string); ok && successStr == "true" {
 				applicationsInRun++
 				summary.Applied++
-				newCount := vacancy.TotalResponsesCount + 1
-				logger.Info("Application successfully sent (responses: %d): %s", newCount, vacancyURL)
+				var responsesCount *int
+				if vacancy.TotalResponsesCountKnown {
+					count := vacancy.TotalResponsesCount + 1
+					responsesCount = &count
+				}
+				if responsesCount != nil {
+					logger.Info("Application successfully sent (responses: %d): %s", *responsesCount, vacancyURL)
+				} else {
+					logger.Info("Application successfully sent (responses: unknown): %s", vacancyURL)
+				}
 				r.writeEvent(ApplyResult{
 					Type:           "application",
 					Resume:         r.resumeHash,
@@ -3050,7 +3118,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 					Name:           vacancy.Name,
 					Letter:         letter,
 					AppliedAt:      time.Now(),
-					ResponsesCount: newCount,
+					ResponsesCount: responsesCount,
 					TestSolutions:  solutions,
 				})
 			} else {
