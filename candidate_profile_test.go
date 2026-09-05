@@ -114,6 +114,97 @@ func TestCandidateProfileSaveLoad(t *testing.T) {
 	}
 }
 
+func TestImportCandidateProfileValidAndCreatesBackup(t *testing.T) {
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "ready.json")
+	targetPath := filepath.Join(dir, "candidate_profile.json")
+	now := time.Now()
+	current := NewCandidateProfile(now)
+	current.Skills = []CandidateSkill{{Name: "Git", Level: SkillLevelConfident, ProfileFact: confirmedProfileFact(CandidateSourceUserConfirmed, now)}}
+	if err := SaveCandidateProfile(targetPath, current); err != nil {
+		t.Fatal(err)
+	}
+	incoming := NewCandidateProfile(now)
+	incoming.Skills = []CandidateSkill{
+		{Name: "Git", Level: SkillLevelHeardOf, ProfileFact: ProfileFact{Source: CandidateSourceHHResume, Confirmed: true, ConfirmedAt: now, Evidence: []string{"HH"}}},
+		{Name: "Docker", Level: SkillLevelWorking, ProfileFact: ProfileFact{Source: CandidateSourceHHResume, Confirmed: true, ConfirmedAt: now, Evidence: []string{"HH"}}},
+	}
+	if err := SaveCandidateProfile(sourcePath, incoming); err != nil {
+		t.Fatal(err)
+	}
+	if err := ImportCandidateProfile(sourcePath, targetPath); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadCandidateProfile(targetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	git, ok := loaded.ResolveSkill("Git")
+	if !ok || git.Source != CandidateSourceUserConfirmed || git.Level != SkillLevelConfident {
+		t.Fatalf("user_confirmed fact lost during import: %+v", git)
+	}
+	docker, ok := loaded.ResolveSkill("Docker")
+	if !ok || docker.Source != CandidateSourceHHResume {
+		t.Fatalf("valid imported HH fact missing: %+v", docker)
+	}
+	backup, err := LoadCandidateProfile(targetPath + ".bak")
+	if err != nil {
+		t.Fatalf("backup is missing or invalid: %v", err)
+	}
+	if backup.Skills[0].Source != CandidateSourceUserConfirmed {
+		t.Fatalf("backup does not contain old profile: %+v", backup)
+	}
+}
+
+func TestImportCandidateProfileRejectsInvalidJSONAndSchema(t *testing.T) {
+	dir := t.TempDir()
+	targetPath := filepath.Join(dir, "candidate_profile.json")
+	for name, content := range map[string]string{
+		"json":   "{not json",
+		"schema": `{"version":1,"unknown":true}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			sourcePath := filepath.Join(dir, name+".json")
+			if err := os.WriteFile(sourcePath, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := ImportCandidateProfile(sourcePath, targetPath); err == nil {
+				t.Fatal("invalid import was accepted")
+			}
+			if _, err := os.Stat(targetPath); !os.IsNotExist(err) {
+				t.Fatalf("invalid import changed destination: %v", err)
+			}
+		})
+	}
+}
+
+func TestImportCandidateProfileRejectsSecretsAndSecuresPermissions(t *testing.T) {
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "secret.json")
+	targetPath := filepath.Join(dir, "candidate_profile.json")
+	if err := os.WriteFile(sourcePath, []byte(`{"version":1,"api_key":"secret"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ImportCandidateProfile(sourcePath, targetPath); err == nil {
+		t.Fatal("secret-bearing import was accepted")
+	}
+	if _, err := os.Stat(targetPath); !os.IsNotExist(err) {
+		t.Fatalf("secret import created destination: %v", err)
+	}
+
+	safe := NewCandidateProfile(time.Now())
+	safe.Skills = []CandidateSkill{{Name: "Python", Level: SkillLevelWorking, ProfileFact: confirmedProfileFact(CandidateSourceUserConfirmed, time.Now())}}
+	if err := SaveCandidateProfile(sourcePath, safe); err != nil {
+		t.Fatal(err)
+	}
+	if err := ImportCandidateProfile(sourcePath, targetPath); err != nil {
+		t.Fatal(err)
+	}
+	if mode := fileMode(t, targetPath).Perm(); mode != 0o600 {
+		t.Fatalf("imported profile permissions = %o, want 600", mode)
+	}
+}
+
 func TestCorruptCandidateProfileFailsSafe(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "candidate_profile.json")
 	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
@@ -190,9 +281,9 @@ func TestAnsweringPendingQuestionChangesFutureEvaluation(t *testing.T) {
 
 func TestDerivedFactIsExcludedFromCoverLetterContext(t *testing.T) {
 	now := time.Now()
-	candidate := CandidateContext{Profile: CandidateProfile{Skills: []CandidateSkill{{Name: "Kubernetes", Level: SkillLevelWorking, ProfileFact: ProfileFact{Source: CandidateSourceDerived, Confirmed: false, ConfirmedAt: now}}}}}
+	candidate := CandidateContext{Profile: CandidateProfile{Skills: []CandidateSkill{{Name: "DerivedOnlyTechnology", Level: SkillLevelWorking, ProfileFact: ProfileFact{Source: CandidateSourceDerived, Confirmed: false, ConfirmedAt: now}}}}}
 	prompt := buildLetterSystemPrompt(candidate, "")
-	if strings.Contains(prompt, "Kubernetes") {
+	if strings.Contains(prompt, "DerivedOnlyTechnology") {
 		t.Fatalf("derived skill appeared in cover-letter context: %s", prompt)
 	}
 }

@@ -1238,6 +1238,7 @@ func (c *AIClient) GenerateLetterWithEvaluation(v Vacancy, vacancyDescription st
 	if err := c.ctx.Err(); err != nil {
 		return "", err
 	}
+	candidate.Stories = selectRelevantCandidateStories(candidate.Stories, v, vacancyDescription)
 	systemPrompt := buildLetterSystemPrompt(candidate, extraPrompt)
 	userPrompt := fmt.Sprintf(
 		"Название вакансии: %s\nКомпания: %s\nОписание вакансии:\n%s\n\n"+

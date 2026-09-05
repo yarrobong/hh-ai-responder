@@ -866,6 +866,9 @@ func TestOrdinaryLetterDoesNotForceJSONMode(t *testing.T) {
 	if request.ResponseFormat != nil || request.ReasoningEffort != "" || request.IncludeReasoning != nil {
 		t.Fatalf("ordinary letter unexpectedly used structured options: %+v", request)
 	}
+	if len(request.Messages) < 1 || request.Messages[0].Role != "system" || !strings.Contains(request.Messages[0].Content, candidateCommunicationProfile) {
+		t.Fatal("letter AI request is missing the communication profile in its system prompt")
+	}
 }
 
 func TestGeneratedLetterRejectsRoundedExperienceClaim(t *testing.T) {

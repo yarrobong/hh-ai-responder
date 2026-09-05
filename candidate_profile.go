@@ -303,6 +303,9 @@ func LoadCandidateProfile(path string) (CandidateProfile, error) {
 	if profileContainsSecret(raw) {
 		return CandidateProfile{}, errors.New("candidate profile contains a forbidden secret field")
 	}
+	if err := validateCandidateProfileJSONSchema(raw); err != nil {
+		return CandidateProfile{}, err
+	}
 	var profile CandidateProfile
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
@@ -316,6 +319,24 @@ func LoadCandidateProfile(path string) (CandidateProfile, error) {
 		profile.Version = 1
 	}
 	return profile, nil
+}
+
+func validateCandidateProfileJSONSchema(raw []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return fmt.Errorf("candidate profile root must be a JSON object: %w", err)
+	}
+	for _, field := range []string{"version", "updated_at", "identity", "work_preferences", "employer_communication_preferences"} {
+		value, ok := fields[field]
+		if !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return fmt.Errorf("candidate profile schema is missing %q", field)
+		}
+	}
+	var version int
+	if err := json.Unmarshal(fields["version"], &version); err != nil || version != 1 {
+		return fmt.Errorf("candidate profile schema version must be 1")
+	}
+	return nil
 }
 
 func SaveCandidateProfile(path string, profile CandidateProfile) error {
@@ -345,6 +366,232 @@ func SaveCandidateProfile(path string, profile CandidateProfile) error {
 		return fmt.Errorf("replace candidate profile: %w", err)
 	}
 	return nil
+}
+
+func ImportCandidateProfile(sourcePath, targetPath string) error {
+	if strings.TrimSpace(sourcePath) == "" || strings.TrimSpace(targetPath) == "" {
+		return errors.New("candidate profile import paths must not be empty")
+	}
+	if _, err := os.Stat(sourcePath); err != nil {
+		return fmt.Errorf("import source profile: %w", err)
+	}
+
+	// Load the source before touching the destination. LoadCandidateProfile is
+	// strict about JSON shape, allowed sources and secret-bearing fields.
+	incoming, err := LoadCandidateProfile(sourcePath)
+	if err != nil {
+		return fmt.Errorf("import candidate profile: %w", err)
+	}
+
+	oldRaw, oldErr := os.ReadFile(targetPath)
+	hasOld := oldErr == nil
+	if oldErr != nil && !errors.Is(oldErr, os.ErrNotExist) {
+		return fmt.Errorf("read existing candidate profile: %w", oldErr)
+	}
+	merged := incoming
+	if hasOld {
+		current, err := LoadCandidateProfile(targetPath)
+		if err != nil {
+			return fmt.Errorf("validate existing candidate profile: %w", err)
+		}
+		merged = mergeCandidateProfiles(current, incoming)
+	}
+	if err := validateCandidateProfile(merged); err != nil {
+		return fmt.Errorf("validate imported candidate profile: %w", err)
+	}
+	encoded, err := json.Marshal(merged)
+	if err != nil {
+		return fmt.Errorf("encode imported candidate profile: %w", err)
+	}
+	if profileContainsSecret(encoded) {
+		return errors.New("imported candidate profile contains a forbidden secret field")
+	}
+
+	if hasOld {
+		backupPath := targetPath + ".bak"
+		if err := os.WriteFile(backupPath, oldRaw, 0o600); err != nil {
+			return fmt.Errorf("backup existing candidate profile: %w", err)
+		}
+		if err := os.Chmod(backupPath, 0o600); err != nil {
+			return fmt.Errorf("secure candidate profile backup: %w", err)
+		}
+	}
+	if err := SaveCandidateProfile(targetPath, merged); err != nil {
+		return fmt.Errorf("save imported candidate profile: %w", err)
+	}
+	return nil
+}
+
+func mergeCandidateProfiles(current, incoming CandidateProfile) CandidateProfile {
+	result := current
+	if result.Version == 0 {
+		result.Version = 1
+	}
+	result.Identity.FullName = preferStringFact(result.Identity.FullName, incoming.Identity.FullName)
+	result.Identity.Location = preferStringFact(result.Identity.Location, incoming.Identity.Location)
+	result.Education = mergeEducationFacts(result.Education, incoming.Education)
+	result.WorkExperience = mergeWorkExperienceFacts(result.WorkExperience, incoming.WorkExperience)
+	result.Projects = mergeProjectFacts(result.Projects, incoming.Projects)
+	result.Skills = mergeSkillFacts(result.Skills, incoming.Skills)
+	result.Languages = mergeLanguageFacts(result.Languages, incoming.Languages)
+	result.TotalExperienceMonths = preferIntFact(result.TotalExperienceMonths, incoming.TotalExperienceMonths)
+	result.WorkPreferences.PreferredRoles = preferStringFact(result.WorkPreferences.PreferredRoles, incoming.WorkPreferences.PreferredRoles)
+	result.WorkPreferences.PrimaryRoles = preferStringFact(result.WorkPreferences.PrimaryRoles, incoming.WorkPreferences.PrimaryRoles)
+	result.WorkPreferences.SecondaryRoles = preferStringFact(result.WorkPreferences.SecondaryRoles, incoming.WorkPreferences.SecondaryRoles)
+	result.WorkPreferences.WorkMode = preferStringFact(result.WorkPreferences.WorkMode, incoming.WorkPreferences.WorkMode)
+	result.WorkPreferences.Relocation = preferStringFact(result.WorkPreferences.Relocation, incoming.WorkPreferences.Relocation)
+	result.WorkPreferences.BusinessTrips = preferStringFact(result.WorkPreferences.BusinessTrips, incoming.WorkPreferences.BusinessTrips)
+	result.WorkPreferences.SalaryMinimum = preferIntFact(result.WorkPreferences.SalaryMinimum, incoming.WorkPreferences.SalaryMinimum)
+	result.EmployerCommunicationPreferences.Salary = preferStringFact(result.EmployerCommunicationPreferences.Salary, incoming.EmployerCommunicationPreferences.Salary)
+	result.EmployerCommunicationPreferences.Interview = preferStringFact(result.EmployerCommunicationPreferences.Interview, incoming.EmployerCommunicationPreferences.Interview)
+	result.EmployerCommunicationPreferences.Documents = preferStringFact(result.EmployerCommunicationPreferences.Documents, incoming.EmployerCommunicationPreferences.Documents)
+	result.EmployerCommunicationPreferences.OtherPreferences = preferStringFact(result.EmployerCommunicationPreferences.OtherPreferences, incoming.EmployerCommunicationPreferences.OtherPreferences)
+	result.EmployerCommunicationPreferences.AlwaysEmphasize = preferListFact(result.EmployerCommunicationPreferences.AlwaysEmphasize, incoming.EmployerCommunicationPreferences.AlwaysEmphasize)
+	result.EmployerCommunicationPreferences.AvoidClaiming = preferListFact(result.EmployerCommunicationPreferences.AvoidClaiming, incoming.EmployerCommunicationPreferences.AvoidClaiming)
+	for _, question := range incoming.UnknownPendingFacts {
+		result.AddPendingQuestion(question)
+	}
+	if incoming.UpdatedAt.After(result.UpdatedAt) {
+		result.UpdatedAt = incoming.UpdatedAt
+	}
+	return result
+}
+
+func preferProfileFact(current, incoming ProfileFact) ProfileFact {
+	if current.Source == "" && incoming.Source != "" {
+		return incoming
+	}
+	if incoming.Source != "" && sourcePriority(incoming.Source) >= sourcePriority(current.Source) {
+		return incoming
+	}
+	return current
+}
+
+func preferStringFact(current, incoming ProfileStringFact) ProfileStringFact {
+	if strings.TrimSpace(current.Value) == "" {
+		return incoming
+	}
+	if strings.TrimSpace(incoming.Value) == "" {
+		return current
+	}
+	if selected := preferProfileFact(current.ProfileFact, incoming.ProfileFact); selected.Source == incoming.Source && selected.ConfirmedAt.Equal(incoming.ConfirmedAt) {
+		return incoming
+	}
+	return current
+}
+
+func preferIntFact(current, incoming ProfileIntFact) ProfileIntFact {
+	if current.Source == "" {
+		return incoming
+	}
+	if incoming.Source != "" && sourcePriority(incoming.Source) >= sourcePriority(current.Source) {
+		return incoming
+	}
+	return current
+}
+
+func preferListFact(current, incoming ProfileListFact) ProfileListFact {
+	if len(current.Values) == 0 {
+		return incoming
+	}
+	if len(incoming.Values) == 0 {
+		return current
+	}
+	if selected := preferProfileFact(current.ProfileFact, incoming.ProfileFact); selected.Source == incoming.Source && selected.ConfirmedAt.Equal(incoming.ConfirmedAt) {
+		return incoming
+	}
+	return current
+}
+
+func mergeEducationFacts(current, incoming []EducationFact) []EducationFact {
+	result := append([]EducationFact(nil), current...)
+	for _, fact := range incoming {
+		key := normalizeProfileName(strings.Join([]string{fact.Level, fact.Institution, fact.Specialty}, "|"))
+		found := false
+		for i, existing := range result {
+			if key != "" && normalizeProfileName(strings.Join([]string{existing.Level, existing.Institution, existing.Specialty}, "|")) == key {
+				result[i].ProfileFact = preferProfileFact(existing.ProfileFact, fact.ProfileFact)
+				if sourcePriority(fact.Source) >= sourcePriority(existing.Source) {
+					result[i] = fact
+				}
+				found = true
+				break
+			}
+		}
+		if !found {
+			result = append(result, fact)
+		}
+	}
+	return result
+}
+
+func mergeWorkExperienceFacts(current, incoming []WorkExperienceFact) []WorkExperienceFact {
+	result := append([]WorkExperienceFact(nil), current...)
+	for _, fact := range incoming {
+		key := normalizeProfileName(strings.Join([]string{fact.Company, fact.Role, fact.Description}, "|"))
+		found := false
+		for i, existing := range result {
+			if key != "" && normalizeProfileName(strings.Join([]string{existing.Company, existing.Role, existing.Description}, "|")) == key {
+				if sourcePriority(fact.Source) >= sourcePriority(existing.Source) {
+					result[i] = fact
+				}
+				found = true
+				break
+			}
+		}
+		if !found {
+			result = append(result, fact)
+		}
+	}
+	return result
+}
+
+func mergeProjectFacts(current, incoming []ProjectFact) []ProjectFact {
+	result := append([]ProjectFact(nil), current...)
+	for _, fact := range incoming {
+		found := false
+		for i, existing := range result {
+			if normalizeProfileName(existing.Name) == normalizeProfileName(fact.Name) && normalizeProfileName(fact.Name) != "" {
+				if sourcePriority(fact.Source) >= sourcePriority(existing.Source) {
+					result[i] = fact
+				}
+				found = true
+				break
+			}
+		}
+		if !found {
+			result = append(result, fact)
+		}
+	}
+	return result
+}
+
+func mergeSkillFacts(current, incoming []CandidateSkill) []CandidateSkill {
+	result := CandidateProfile{Skills: append([]CandidateSkill(nil), current...)}
+	for _, fact := range incoming {
+		result.mergeSkill(fact)
+	}
+	return result.Skills
+}
+
+func mergeLanguageFacts(current, incoming []LanguageFact) []LanguageFact {
+	result := append([]LanguageFact(nil), current...)
+	for _, fact := range incoming {
+		found := false
+		for i, existing := range result {
+			if normalizeProfileName(existing.Name) == normalizeProfileName(fact.Name) && normalizeProfileName(fact.Name) != "" {
+				if sourcePriority(fact.Source) >= sourcePriority(existing.Source) {
+					result[i] = fact
+				}
+				found = true
+				break
+			}
+		}
+		if !found {
+			result = append(result, fact)
+		}
+	}
+	return result
 }
 
 func normalizeProfileName(value string) string {
@@ -435,10 +682,15 @@ func (p CandidateProfile) TrustedProjectsText() string {
 }
 
 func (p CandidateProfile) TrustedEducation() (string, string, bool) {
+	var selected EducationFact
+	found := false
 	for _, fact := range p.Education {
-		if fact.Confirmed && sourceTrustedForEmployerCommunication(fact.Source) {
-			return fact.Level, strings.TrimSpace(strings.Join([]string{fact.Institution, fact.Specialty, fact.Details}, ", ")), true
+		if fact.Confirmed && sourceTrustedForEmployerCommunication(fact.Source) && (!found || sourcePriority(fact.Source) > sourcePriority(selected.Source)) {
+			selected, found = fact, true
 		}
+	}
+	if found {
+		return selected.Level, strings.TrimSpace(strings.Join([]string{selected.Institution, selected.Specialty, selected.Details}, ", ")), true
 	}
 	return "", "", false
 }
@@ -605,23 +857,63 @@ func parseSkillLevelAnswer(value string) (SkillLevel, error) {
 
 func runProfileCommand(args []string, in io.Reader, out io.Writer) error {
 	path := defaultCandidateProfilePath()
+	storiesPath := defaultCandidateStoriesPath()
 	command := ""
+	importSource := ""
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
-		case "show", "questions", "bootstrap":
+		case "show", "questions", "bootstrap", "import", "stories", "communication":
 			if command != "" {
-				return errors.New("usage: profile [show|questions|bootstrap] [-candidate-profile path]")
+				return profileUsageError()
 			}
 			command = args[i]
+			if command == "import" {
+				if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" || strings.HasPrefix(args[i+1], "-") {
+					return errors.New("usage: profile import file [-candidate-profile path]")
+				}
+				importSource = args[i+1]
+				i++
+			}
 		case "-candidate-profile":
 			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
-				return errors.New("usage: profile [show|questions|bootstrap] [-candidate-profile path]")
+				return profileUsageError()
 			}
 			path = args[i+1]
 			i++
+		case "-candidate-stories":
+			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
+				return profileUsageError()
+			}
+			storiesPath = args[i+1]
+			i++
 		default:
-			return errors.New("usage: profile [show|questions|bootstrap] [-candidate-profile path]")
+			return profileUsageError()
 		}
+	}
+	if command == "import" {
+		return ImportCandidateProfile(importSource, path)
+	}
+	if command == "communication" {
+		_, err := io.WriteString(out, candidateCommunicationProfile)
+		if err != nil {
+			return err
+		}
+		if !strings.HasSuffix(candidateCommunicationProfile, "\n") {
+			_, err = io.WriteString(out, "\n")
+		}
+		return err
+	}
+	if command == "stories" {
+		stories, err := LoadCandidateStories(storiesPath)
+		if err != nil {
+			return err
+		}
+		encoded, err := formatCandidateStories(stories)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(out, encoded)
+		return err
 	}
 	profile, err := LoadCandidateProfile(path)
 	if err != nil {
@@ -649,8 +941,12 @@ func runProfileCommand(args []string, in io.Reader, out io.Writer) error {
 	case "":
 		return runInteractiveProfile(&profile, path, in, out)
 	default:
-		return errors.New("usage: profile [show|questions|bootstrap] [-candidate-profile path]")
+		return profileUsageError()
 	}
+}
+
+func profileUsageError() error {
+	return errors.New("usage: profile [show|questions|bootstrap|import file|stories|communication] [-candidate-profile path] [-candidate-stories path]")
 }
 
 func defaultCandidateProfilePath() string {

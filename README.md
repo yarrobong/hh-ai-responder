@@ -87,9 +87,35 @@ cp example.env .env
 | `HH_MAX_VACANCIES_PER_RUN` | `-max-vacancies-per-run` | Максимум вакансий после базовой eligibility-проверки за проход; `0` — без лимита, по умолчанию `20`. |
 | `HH_MAX_APPLICATIONS_PER_RUN` | `-max-applications-per-run` | Максимум откликов/превью за проход; `0` — без лимита, по умолчанию `10`. |
 | `HH_CANDIDATE_PROFILE` | `-candidate-profile` | Локальная база знаний кандидата; по умолчанию `candidate_profile.json`, файл не коммитится. |
+| `HH_CANDIDATE_STORIES` | `-candidate-stories` | Необязательные примеры опыта; по умолчанию `candidate_stories.json`. Используются только в релевантных cover letters, максимум 2 кейса. |
 | `HH_ALREADY_RESPONDED_STATE` | `-already-responded-state` | Локальный JSON со списком vacancy ID, подтверждённых read-only preflight как уже откликнутые. |
 
 ### Локальный профиль кандидата
+
+Общий [Communication Profile](candidate_communication.md) задаёт позиционирование, тон, структуру ответов и правила достоверности. Он автоматически включается в AI-промпты сопроводительных писем и ответов рекрутерам в HH chats. Для подготовки к собеседованиям используйте этот же файл как инструкцию вместе с подтверждёнными данными кандидата; отдельного режима собеседований в приложении нет. Файл встроен в бинарник через `go:embed`: после изменения пересоберите приложение (`go build .`). Посмотреть его можно командой `./hh-ai-responder profile communication`.
+
+`candidate_stories.json` содержит примеры опыта, но не расширяет факты `candidate_profile.json` и не участвует в vacancy matching. В письмо попадают только кейсы с явным совпадением ключевых слов, ролей или технологий с текстом вакансии; добавляется не более 1–2 кейсов. Если подтверждение результата или достижения вызывает сомнение, кейс не используется. Посмотреть загруженные stories можно командой `./hh-ai-responder profile stories`.
+
+Минимальный формат stories:
+
+```json
+{
+  "version": 1,
+  "stories": [
+    {
+      "id": "api-integration",
+      "title": "Интеграция API",
+      "keywords": ["API", "интеграции"],
+      "technologies": ["Python"],
+      "task": "Подтверждённая задача",
+      "action": "Что сделал кандидат",
+      "result": "Только подтверждённый результат"
+    }
+  ]
+}
+```
+
+Заполняйте stories только реальными примерами. Поля `keywords`, `roles` и `technologies` используются для детерминированного отбора релевантных кейсов, а не доказывают наличие навыка.
 
 Профиль расширяет данные HH resume и хранит сведения кандидата с источником и временем последнего подтверждения, включая структурированные факты из HH и верифицированные факты GitHub. AI не может записать факт или установить `confirmed=true`; производные сведения не используются как утверждения в сопроводительных письмах и чатах.
 
@@ -98,11 +124,16 @@ cp example.env .env
 ```bash
 ./hh-ai-responder profile
 ./hh-ai-responder profile bootstrap
+./hh-ai-responder profile import ready_candidate_profile.json
 ./hh-ai-responder profile show
 ./hh-ai-responder profile questions
+./hh-ai-responder profile stories
+./hh-ai-responder profile communication
 ```
 
 Если важное требование вакансии неизвестно, automation run только добавляет дедуплицированный pending-вопрос в профиль и переводит вакансию в `REVIEW_REQUIRED`. Ответить на него можно при следующем запуске `profile`. Уровни навыка: `unknown`, `heard_of`, `basic`, `working`, `confident`, `advanced`. `Docker`, `Kubernetes`, `GitHub` и `Git` не считаются взаимозаменяемыми без явного deterministic alias.
+
+`profile import <file>` валидирует готовый JSON, перед заменой сохраняет старый профиль в `candidate_profile.json.bak`, объединяет факты по приоритету источников и записывает результат с правами `0600`.
 
 Например, для Chat-GPT нужно указать сл:
 

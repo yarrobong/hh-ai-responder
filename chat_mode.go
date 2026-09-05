@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 var externalLinkPattern = regexp.MustCompile(`(?i)(https?://|www\.)[^\s]+|(^|[\s(])([a-z0-9-]+\.)+(ru|com|net|org|io|dev|me)(/[^\s)]*)?`)
@@ -29,6 +30,9 @@ func chatReplyReviewReasonForContext(mode string, dryRun bool, lastEmployerMessa
 			return fmt.Sprintf("high-risk %s in %s", reason, source.name)
 		}
 	}
+	if strings.TrimSpace(generatedReply) != "" && !isReplyOption(generatedReply, replyOptions) && utf8.RuneCountInString(strings.TrimSpace(generatedReply)) > 400 {
+		return "generated reply is too long for HR chat"
+	}
 	if mode == "review" {
 		return "chat mode review"
 	}
@@ -36,6 +40,16 @@ func chatReplyReviewReasonForContext(mode string, dryRun bool, lastEmployerMessa
 		return "dry-run"
 	}
 	return ""
+}
+
+func isReplyOption(reply string, options []string) bool {
+	reply = strings.TrimSpace(reply)
+	for _, option := range options {
+		if reply == strings.TrimSpace(option) {
+			return true
+		}
+	}
+	return false
 }
 
 // classifyHighRiskChatMessage returns a short review reason. The classifier is
