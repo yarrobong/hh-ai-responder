@@ -321,6 +321,199 @@ func TestVacancyEvaluationAIErrorAndMalformedJSONFailClosed(t *testing.T) {
 	}
 }
 
+func TestStructuredVacancyRetriesInvalidResponses(t *testing.T) {
+	previousLogger := logger
+	logger = NewLogger(io.Discard, LevelDebug)
+	previousDelay := aiRetryDelay
+	aiRetryDelay = 0
+	t.Cleanup(func() {
+		logger = previousLogger
+		aiRetryDelay = previousDelay
+	})
+
+	valid := `{"score":88,"apply":true,"reasons":["Python matches"],"missing":[]}`
+	tests := []struct {
+		name      string
+		first     string
+		second    string
+		wantErr   bool
+		wantCalls int
+	}{
+		{name: "empty then valid", first: "", second: valid},
+		{name: "malformed then valid", first: "not json", second: valid},
+		{name: "incomplete then valid", first: `{"score":88,"apply":true}`, second: valid},
+		{name: "score outside range then valid", first: `{"score":101,"apply":true,"reasons":[],"missing":[]}`, second: valid},
+		{name: "all attempts malformed", first: "not json", second: `{"score":88}`, wantErr: true, wantCalls: 2},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var payload ChatCompletionRequest
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					t.Errorf("request JSON is invalid: %v", err)
+				}
+				if payload.ResponseFormat == nil || payload.ResponseFormat.Type != "json_object" {
+					t.Errorf("structured request missing json_object response format: %+v", payload)
+				}
+				if payload.ReasoningEffort != "" || payload.IncludeReasoning != nil {
+					t.Errorf("generic endpoint received provider-specific reasoning options: %+v", payload)
+				}
+				if payload.MaxTokens != 1024 {
+					t.Errorf("unexpected structured token budget: %d", payload.MaxTokens)
+				}
+				content := test.first
+				if calls.Add(1) > 1 {
+					content = test.second
+				}
+				_, _ = io.WriteString(w, aiCompletionResponse(content))
+			}))
+			defer server.Close()
+
+			client := NewAIClient(context.Background(), server.URL, "test-model", "secret-key", time.Second, time.Second, 2)
+			_, err := client.EvaluateVacancy(vacancyEvaluationInput{Description: "Python"})
+			if (err != nil) != test.wantErr {
+				t.Fatalf("unexpected error state: %v", err)
+			}
+			wantCalls := test.wantCalls
+			if wantCalls == 0 {
+				wantCalls = 2
+			}
+			if got := int(calls.Load()); got != wantCalls {
+				t.Fatalf("unexpected attempt count: got %d, want %d", got, wantCalls)
+			}
+		})
+	}
+}
+
+func aiCompletionResponse(content string) string {
+	data, _ := json.Marshal(ChatCompletionResponse{
+		Choices: []ChatCompletionChoice{{Message: AIMessage{Content: content}}},
+	})
+	return string(data)
+}
+
+func TestStructuredDiagnosticsExcludePayloads(t *testing.T) {
+	previousLogger := logger
+	logger = NewLogger(io.Discard, LevelDebug)
+	t.Cleanup(func() { logger = previousLogger })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"","reasoning":"private reasoning"},"finish_reason":"length"}],"usage":{"completion_tokens":7,"total_tokens":9}}`)
+	}))
+	defer server.Close()
+	client := NewAIClient(context.Background(), server.URL, "private-model", "secret-key", time.Second, time.Second, 1)
+	_, err := client.EvaluateVacancy(vacancyEvaluationInput{Description: "private prompt"})
+	if err == nil {
+		t.Fatal("empty structured response should fail")
+	}
+	for _, forbidden := range []string{"private prompt", "private reasoning", "secret-key", `"content"`} {
+		if strings.Contains(err.Error(), forbidden) {
+			t.Fatalf("diagnostic contains sensitive data %q: %v", forbidden, err)
+		}
+	}
+}
+
+func TestStructuredTestSolutionsRetryValidation(t *testing.T) {
+	previousLogger := logger
+	logger = NewLogger(io.Discard, LevelDebug)
+	previousDelay := aiRetryDelay
+	aiRetryDelay = 0
+	t.Cleanup(func() {
+		logger = previousLogger
+		aiRetryDelay = previousDelay
+	})
+
+	responses := []string{
+		`{"choices":[{"message":{"content":"{\"solutions\":[{\"task_id\":1,\"solution_id\":999}]}"}}]}`,
+		`{"choices":[{"message":{"content":"{\"solutions\":[{\"task_id\":1,\"solution_id\":10}]}"}}]}`,
+	}
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload ChatCompletionRequest
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("request JSON is invalid: %v", err)
+		}
+		if payload.ResponseFormat == nil || payload.ResponseFormat.Type != "json_object" {
+			t.Errorf("test request missing json_object response format")
+		}
+		response := responses[0]
+		if calls.Add(1) > 1 {
+			response = responses[1]
+		}
+		_, _ = io.WriteString(w, response)
+	}))
+	defer server.Close()
+
+	client := NewAIClient(context.Background(), server.URL, "test-model", "", time.Second, time.Second, 2)
+	answers, err := client.SolveTests([]Task{{ID: 1, CandidateSolutions: []Solution{{ID: "10"}}}}, "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !answers[1].HasChoice || answers[1].SolutionID != 10 || calls.Load() != 2 {
+		t.Fatalf("structured test retry did not produce validated answer: answers=%+v calls=%d", answers, calls.Load())
+	}
+}
+
+func TestStructuredGroqGPTOSSOptions(t *testing.T) {
+	previousLogger := logger
+	logger = NewLogger(io.Discard, LevelDebug)
+	t.Cleanup(func() { logger = previousLogger })
+
+	var request ChatCompletionRequest
+	client := NewAIClient(context.Background(), "https://api.groq.com/openai", "openai/gpt-oss-120b", "secret-key", time.Second, time.Second, 1)
+	client.client.Transport = aiRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Request:    r,
+			Body:       io.NopCloser(strings.NewReader(`{"choices":[{"message":{"content":"{}"}}]}`)),
+			Header:     make(http.Header),
+		}, nil
+	})
+	if _, err := client.ChatStructured("system", "user", 1024, 0.1, func(string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if request.ResponseFormat == nil || request.ResponseFormat.Type != "json_object" {
+		t.Fatalf("missing Groq JSON mode: %+v", request)
+	}
+	if request.ReasoningEffort != "low" || request.IncludeReasoning == nil || *request.IncludeReasoning {
+		t.Fatalf("missing safe GPT-OSS reasoning options: %+v", request)
+	}
+}
+
+func TestOrdinaryLetterDoesNotForceJSONMode(t *testing.T) {
+	previousLogger := logger
+	logger = NewLogger(io.Discard, LevelDebug)
+	t.Cleanup(func() { logger = previousLogger })
+
+	var request ChatCompletionRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("request JSON is invalid: %v", err)
+		}
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"Письмо"}}]}`)
+	}))
+	defer server.Close()
+	client := NewAIClient(context.Background(), server.URL, "test-model", "", time.Second, time.Second, 1)
+	letter, err := client.GenerateLetter(Vacancy{Name: "Backend"}, "Python", CandidateContext{ResumeTitle: "Python developer"}, "")
+	if err != nil || letter != "Письмо" {
+		t.Fatalf("ordinary letter failed: letter=%q err=%v", letter, err)
+	}
+	if request.ResponseFormat != nil || request.ReasoningEffort != "" || request.IncludeReasoning != nil {
+		t.Fatalf("ordinary letter unexpectedly used structured options: %+v", request)
+	}
+}
+
+type aiRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f aiRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
 func TestDryRunVacancyAboveThresholdProducesPreviewWithoutWrite(t *testing.T) {
 	previousLogger := logger
 	logger = NewLogger(io.Discard, LevelDebug)

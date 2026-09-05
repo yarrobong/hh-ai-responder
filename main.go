@@ -31,7 +31,6 @@ import (
 const (
 	acceptHeader            = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
 	acceptLanguageHeader    = "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7"
-	aiRetryDelay            = 3 * time.Second
 	botRecruiterAnswer      = "Спасибо!\nВаши ответы отправлены работодателю. Если ваш отклик его заинтересует, он напишет в этом же чате или позвонит по номеру, который вы указали."
 	chatCompletionsPath     = "/v1/chat/completions"
 	defaultAIAttempts       = 2
@@ -45,6 +44,8 @@ const (
 	secCHUAHeader           = `"Chromium";v="151", "Google Chrome";v="151", "Not-A.Brand";v="99"`
 	userAgent               = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
 )
+
+var aiRetryDelay = 3 * time.Second
 
 type LogLevel int
 
@@ -1576,19 +1577,34 @@ type AIMessage struct {
 }
 
 type ChatCompletionRequest struct {
-	Model       string      `json:"model"`
-	Messages    []AIMessage `json:"messages"`
-	Stream      bool        `json:"stream"`
-	MaxTokens   int         `json:"max_tokens,omitempty"`
-	Temperature float64     `json:"temperature,omitempty"`
+	Model            string              `json:"model"`
+	Messages         []AIMessage         `json:"messages"`
+	Stream           bool                `json:"stream"`
+	MaxTokens        int                 `json:"max_tokens,omitempty"`
+	Temperature      float64             `json:"temperature,omitempty"`
+	ResponseFormat   *ChatResponseFormat `json:"response_format,omitempty"`
+	ReasoningEffort  string              `json:"reasoning_effort,omitempty"`
+	IncludeReasoning *bool               `json:"include_reasoning,omitempty"`
 }
 
 type ChatCompletionResponse struct {
 	Choices []ChatCompletionChoice `json:"choices"`
+	Usage   ChatCompletionUsage    `json:"usage"`
 }
 
 type ChatCompletionChoice struct {
-	Message AIMessage `json:"message"`
+	Message      AIMessage `json:"message"`
+	FinishReason string    `json:"finish_reason"`
+}
+
+type ChatCompletionUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
+type ChatResponseFormat struct {
+	Type string `json:"type"`
 }
 
 type AccountInfo struct {
@@ -1901,12 +1917,41 @@ func NewAIClient(ctx context.Context, baseURL, model, apiKey string, timeout, co
 }
 
 func (c *AIClient) Chat(systemPrompt, userPrompt string, maxTokens int, temperature float64) (string, error) {
+	return c.chat(systemPrompt, userPrompt, maxTokens, temperature, nil, nil)
+}
+
+// ChatStructured sends an OpenAI-compatible JSON-mode request and only returns
+// after the response content passes validator. A validation error is treated
+// like a failed AI attempt so malformed or incomplete structured output cannot
+// reach a state-changing caller.
+func (c *AIClient) ChatStructured(systemPrompt, userPrompt string, maxTokens int, temperature float64, validator func(string) error) (string, error) {
+	if validator == nil {
+		return "", errors.New("structured AI response validator is required")
+	}
+
+	options := &ChatCompletionRequest{
+		ResponseFormat: &ChatResponseFormat{Type: "json_object"},
+	}
+	if c.supportsGroqGPTOSSReasoning() {
+		includeReasoning := false
+		options.ReasoningEffort = "low"
+		options.IncludeReasoning = &includeReasoning
+	}
+	return c.chat(systemPrompt, userPrompt, maxTokens, temperature, options, validator)
+}
+
+func (c *AIClient) chat(systemPrompt, userPrompt string, maxTokens int, temperature float64, options *ChatCompletionRequest, validator func(string) error) (string, error) {
 	payload := ChatCompletionRequest{
 		Model:       c.model,
 		Messages:    []AIMessage{{Role: "system", Content: systemPrompt}, {Role: "user", Content: userPrompt}},
 		Stream:      false,
 		MaxTokens:   maxTokens,
 		Temperature: temperature,
+	}
+	if options != nil {
+		payload.ResponseFormat = options.ResponseFormat
+		payload.ReasoningEffort = options.ReasoningEffort
+		payload.IncludeReasoning = options.IncludeReasoning
 	}
 
 	body, err := json.Marshal(payload)
@@ -1917,6 +1962,9 @@ func (c *AIClient) Chat(systemPrompt, userPrompt string, maxTokens int, temperat
 	var lastErr error
 	for attempt := 1; attempt <= c.attempts; attempt++ {
 		result, err := c.getChatResponse(body, payload)
+		if err == nil && validator != nil {
+			err = validator(result)
+		}
 		if err == nil {
 			return result, nil
 		}
@@ -1937,6 +1985,16 @@ func (c *AIClient) Chat(systemPrompt, userPrompt string, maxTokens int, temperat
 	}
 
 	return "", lastErr
+}
+
+func (c *AIClient) supportsGroqGPTOSSReasoning() bool {
+	parsed, err := url.Parse(c.baseURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	model := strings.ToLower(strings.TrimSpace(c.model))
+	return (host == "api.groq.com" || strings.HasSuffix(host, ".api.groq.com")) && strings.HasPrefix(model, "openai/gpt-oss-")
 }
 
 func (c *AIClient) getChatResponse(body []byte, metadata ChatCompletionRequest) (string, error) {
@@ -1969,18 +2027,24 @@ func (c *AIClient) getChatResponse(body []byte, metadata ChatCompletionRequest) 
 		return "", err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("ai request failed: %d", resp.StatusCode)
+		return "", fmt.Errorf("ai request failed (model=%s status=%d)", metadata.Model, resp.StatusCode)
 	}
 
 	var result ChatCompletionResponse
 	if err := json.Unmarshal(data, &result); err != nil {
-		return "", err
+		return "", fmt.Errorf("ai response decode failed (model=%s status=%d): %w", metadata.Model, resp.StatusCode, err)
 	}
 	if len(result.Choices) == 0 {
-		return "", errors.New("ai response has no choices")
+		return "", fmt.Errorf("ai response has no choices (model=%s status=%d completion_tokens=%d total_tokens=%d)", metadata.Model, resp.StatusCode, result.Usage.CompletionTokens, result.Usage.TotalTokens)
 	}
 
-	return strings.TrimSpace(result.Choices[0].Message.Content), nil
+	content := strings.TrimSpace(result.Choices[0].Message.Content)
+	if content == "" {
+		return "", fmt.Errorf("ai response has empty content (model=%s status=%d finish_reason=%s completion_tokens=%d total_tokens=%d)",
+			metadata.Model, resp.StatusCode, result.Choices[0].FinishReason, result.Usage.CompletionTokens, result.Usage.TotalTokens)
+	}
+
+	return content, nil
 }
 
 func buildLetterSystemPrompt(candidate CandidateContext, extraPrompt string) string {
@@ -2079,19 +2143,26 @@ func (c *AIClient) SolveTests(tasks []Task, contacts, githubURL, extraPrompt str
 
 	userPrompt := "JSON с тестами: " + string(tasksJSON)
 
-	response, err := c.Chat(
+	response, err := c.ChatStructured(
 		systemPrompt,
 		userPrompt,
 		512+len(tasks)*64,
 		0.2,
+		func(response string) error {
+			var parsed TestSolutionsResponse
+			if err := parseStrictJSON(response, &parsed); err != nil {
+				return err
+			}
+			_, err := validateTestSolutions(tasks, parsed)
+			return err
+		},
 	)
 	if err != nil {
 		return nil, err
 	}
 
 	var parsed TestSolutionsResponse
-	if err := parseJSON(response, &parsed); err != nil {
-		logger.Warn("AI returned invalid test JSON: %s", strings.TrimSpace(response))
+	if err := parseStrictJSON(response, &parsed); err != nil {
 		return nil, err
 	}
 	return validateTestSolutions(tasks, parsed)
@@ -3798,19 +3869,24 @@ func unexpectedHTTPStatus(status int) error {
 	return fmt.Errorf("unexpected HTTP status %d %s", status, http.StatusText(status))
 }
 
-func parseJSON[T any](answer string, target *T) error {
-	start := strings.Index(answer, "{")
-	end := strings.LastIndex(answer, "}")
-
-	if start == -1 || end == -1 || end < start {
-		return errors.New("ai returned invalid JSON")
+func parseStrictJSON[T any](answer string, target *T) error {
+	decoder := json.NewDecoder(strings.NewReader(answer))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return fmt.Errorf("ai returned invalid JSON: %w", err)
 	}
-
-	raw := answer[start : end+1]
-
-	if err := json.Unmarshal([]byte(raw), target); err != nil {
-		return fmt.Errorf("json unmarshal failed: %w", err)
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return errors.New("ai returned invalid JSON: trailing data")
+		}
+		return fmt.Errorf("ai returned invalid JSON: trailing data: %w", err)
 	}
-
 	return nil
+}
+
+// parseJSON is kept as a compatibility wrapper for callers outside the
+// structured-output path. Structured AI responses must use parseStrictJSON.
+func parseJSON[T any](answer string, target *T) error {
+	return parseStrictJSON(answer, target)
 }

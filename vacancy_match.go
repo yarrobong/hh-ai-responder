@@ -242,11 +242,19 @@ func (c *AIClient) EvaluateVacancy(input vacancyEvaluationInput) (VacancyEvaluat
 		return VacancyEvaluation{}, err
 	}
 	systemPrompt, userPrompt := buildVacancyEvaluationPrompt(input)
-	response, err := c.Chat(systemPrompt, userPrompt, 512, 0.1)
+	var evaluation VacancyEvaluation
+	_, err := c.ChatStructured(systemPrompt, userPrompt, 1024, 0.1, func(response string) error {
+		parsed, err := parseVacancyEvaluationJSON(response)
+		if err != nil {
+			return err
+		}
+		evaluation = parsed
+		return nil
+	})
 	if err != nil {
 		return VacancyEvaluation{}, err
 	}
-	return parseVacancyEvaluationJSON(response)
+	return evaluation, nil
 }
 
 func (c *AIClient) GenerateLetterWithEvaluation(v Vacancy, vacancyDescription string, candidate CandidateContext, evaluation VacancyEvaluation, extraPrompt string) (string, error) {
