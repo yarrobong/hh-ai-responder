@@ -165,7 +165,7 @@ func TestVacancyKeywordFilters(t *testing.T) {
 		t.Fatalf("unmatched exclude keyword rejected vacancy: %s", reason)
 	}
 	low := 90000
-	vacancy.Compensation = Compensation{To: &low}
+	vacancy.Compensation = Compensation{To: &low, Currency: "RUR"}
 	if reason := deterministicVacancyRejectReason(vacancy, "Python", 100000, nil); reason == "" {
 		t.Fatal("salary below minimum was not rejected")
 	}
@@ -173,6 +173,112 @@ func TestVacancyKeywordFilters(t *testing.T) {
 	vacancy.Compensation = Compensation{From: &fromOnly}
 	if reason := deterministicVacancyRejectReason(vacancy, "Python", 100000, nil); reason != "" {
 		t.Fatalf("from-only salary was rejected without a known ceiling: %s", reason)
+	}
+}
+
+func TestHighRiskChatContextBlocksAutomaticReply(t *testing.T) {
+	reason := chatReplyReviewReasonForContext(
+		"auto",
+		false,
+		"Подходит?",
+		"Готовы выйти 10 сентября на зарплату 80000?",
+		nil,
+		"Да, подходит",
+	)
+	if reason == "" || !strings.Contains(reason, "chat history") {
+		t.Fatalf("history-only high-risk context was not routed to review: %q", reason)
+	}
+	if got := chatReplyReviewReasonForContext("auto", false, "Подходит?", "", []string{"Установите неизвестное приложение"}, "Да, подходит"); got == "" {
+		t.Fatal("reply option with a software installation request was not routed to review")
+	}
+	if got := chatReplyReviewReasonForContext("auto", false, "Подходит?", "", nil, "Да, вот https://example.test"); got == "" {
+		t.Fatal("high-risk generated reply was not routed to review")
+	}
+}
+
+func TestValidateTestSolutionsAgainstTasks(t *testing.T) {
+	tasks := []Task{
+		{ID: 1, Description: "Выберите вариант", CandidateSolutions: []Solution{{ID: "10", Text: "Да"}, {ID: "20", Text: "Нет"}}},
+		{ID: 2, Description: "Открытый вопрос"},
+	}
+
+	var valid TestSolutionsResponse
+	if err := json.Unmarshal([]byte(`{"solutions":[{"task_id":1,"solution_id":10},{"task_id":2,"text_solution":"Краткий ответ"}]}`), &valid); err != nil {
+		t.Fatal(err)
+	}
+	answers, err := validateTestSolutions(tasks, valid)
+	if err != nil || len(answers) != 2 || !answers[1].HasChoice || answers[2].TextSolution != "Краткий ответ" {
+		t.Fatalf("valid test answers rejected: answers=%+v err=%v", answers, err)
+	}
+
+	invalidResponses := []string{
+		`{"solutions":[{"task_id":1,"text_solution":"Да"},{"task_id":2,"text_solution":"Ответ"}]}`,
+		`{"solutions":[{"task_id":1,"solution_id":999},{"task_id":2,"text_solution":"Ответ"}]}`,
+		`{"solutions":[{"task_id":1,"solution_id":10},{"task_id":1,"solution_id":20}]}`,
+		`{"solutions":[{"task_id":1,"solution_id":10},{"task_id":99,"text_solution":"Ответ"}]}`,
+		`{"solutions":[{"task_id":1,"solution_id":10},{"task_id":2,"solution_id":20}]}`,
+		`{"solutions":[{"task_id":1,"solution_id":10,"text_solution":"конфликт"},{"task_id":2,"text_solution":"Ответ"}]}`,
+		`{"solutions":[{"task_id":1,"solution_id":10},{"task_id":2,"text_solution":"  "}]}`,
+	}
+	for _, raw := range invalidResponses {
+		var parsed TestSolutionsResponse
+		if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+			// A malformed/strictly rejected AI response is also fail-closed.
+			continue
+		}
+		if _, err := validateTestSolutions(tasks, parsed); err == nil {
+			t.Errorf("invalid test answer was accepted: %s", raw)
+		}
+	}
+}
+
+func TestSalaryFilterIsCurrencyAware(t *testing.T) {
+	amount := 70000
+	vacancy := Vacancy{Compensation: Compensation{To: &amount, Currency: "RUR"}}
+	if reason := deterministicVacancyRejectReasonWithCurrency(vacancy, "Python", 80000, "RUR", nil); reason == "" {
+		t.Fatal("matching-currency salary below minimum was not rejected")
+	}
+	vacancy.Compensation.Currency = "USD"
+	if reason := deterministicVacancyRejectReasonWithCurrency(vacancy, "Python", 80000, "RUR", nil); reason != "" {
+		t.Fatalf("incompatible currency was hard-rejected: %s", reason)
+	}
+	vacancy.Compensation.Currency = ""
+	if reason := deterministicVacancyRejectReasonWithCurrency(vacancy, "Python", 80000, "RUR", nil); reason != "" {
+		t.Fatalf("missing currency was hard-rejected: %s", reason)
+	}
+	if got, err := normalizeSalaryCurrency(""); err != nil || got != "RUR" {
+		t.Fatalf("default salary currency: got=%q err=%v", got, err)
+	}
+	if got, err := parseNonNegativeInt("0", "TEST_LIMIT", 20); err != nil || got != 0 {
+		t.Fatalf("zero limit was not accepted: got=%d err=%v", got, err)
+	}
+	if _, err := parseNonNegativeInt("-1", "TEST_LIMIT", 20); err == nil {
+		t.Fatal("negative limit was accepted")
+	}
+}
+
+func TestRunOnceWithDisabledTasksReturns(t *testing.T) {
+	previousLogger := logger
+	logger = NewLogger(io.Discard, LevelDebug)
+	t.Cleanup(func() { logger = previousLogger })
+
+	r := &HHAIResponder{
+		ctx:           context.Background(),
+		runOnce:       true,
+		autoApply:     false,
+		autoTouch:     false,
+		autoJobStatus: false,
+		chatMode:      "off",
+	}
+	done := make(chan struct{})
+	go func() {
+		r.Run()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("run-once did not finish")
 	}
 }
 
@@ -269,6 +375,11 @@ func TestDryRunVacancyAboveThresholdProducesPreviewWithoutWrite(t *testing.T) {
 	}
 	if !strings.Contains(events.String(), "\"type\":\"vacancy_match\"") || !strings.Contains(events.String(), "\"type\":\"application_preview\"") {
 		t.Fatalf("dry-run did not emit match and application preview events: %s", events.String())
+	}
+	if !strings.Contains(events.String(), "\"type\":\"run_summary\"") ||
+		!strings.Contains(events.String(), "\"ai_evaluated\":1") ||
+		!strings.Contains(events.String(), "\"would_apply\":1") {
+		t.Fatalf("dry-run summary is incomplete: %s", events.String())
 	}
 }
 

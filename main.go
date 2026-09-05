@@ -89,9 +89,13 @@ type Config struct {
 	AutoJobStatus           bool
 	ChatMode                string
 	MinSalary               int
+	MinSalaryCurrency       string
 	IncludeKeywords         []string
 	ExcludeKeywords         []string
 	MinMatchScore           int
+	RunOnce                 bool
+	MaxVacanciesPerRun      int
+	MaxApplicationsPerRun   int
 }
 
 type CandidateContext struct {
@@ -179,9 +183,49 @@ type TestSolutionsResponse struct {
 }
 
 type TestSolution struct {
-	TaskID       int    `json:"task_id"`
-	SolutionID   *int   `json:"solution_id,omitempty"`
-	TextSolution string `json:"text_solution,omitempty"`
+	TaskID              int    `json:"task_id"`
+	SolutionID          *int   `json:"solution_id,omitempty"`
+	TextSolution        string `json:"text_solution,omitempty"`
+	SolutionIDPresent   bool   `json:"-"`
+	TextSolutionPresent bool   `json:"-"`
+}
+
+func (s *TestSolution) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		TaskID       *int    `json:"task_id"`
+		SolutionID   *int    `json:"solution_id"`
+		TextSolution *string `json:"text_solution"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&wire); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return errors.New("test solution contains trailing data")
+	}
+
+	if wire.TaskID == nil {
+		return errors.New("test solution is missing task_id")
+	}
+	s.TaskID = *wire.TaskID
+	s.SolutionID = wire.SolutionID
+	s.SolutionIDPresent = hasJSONField(data, "solution_id")
+	s.TextSolutionPresent = hasJSONField(data, "text_solution")
+	if wire.TextSolution != nil {
+		s.TextSolution = *wire.TextSolution
+	}
+	return nil
+}
+
+func hasJSONField(data []byte, field string) bool {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return false
+	}
+	_, ok := fields[field]
+	return ok
 }
 
 type SolutionFields struct {
@@ -1233,6 +1277,19 @@ func (r *HHAIResponder) AutoRespondChats() error {
 
 		var temperature = 0.5
 		userPrompt := "Сообщение работодателя:\n\n" + strings.TrimSpace(chatToReply.ReplyToMessage) + "\n---\n"
+		chatDataResponse, err := r.GetChatData(chatToReply.ChatId, chatToReply.ApplicantId)
+		if err != nil {
+			logger.Warn("Can't load messages from chat #%d: %v", chatToReply.ChatId, err)
+			continue
+		}
+		// Always load the chat history, including chats with text buttons. The
+		// history is part of the safety decision, not only an AI prompt detail.
+		if !chatDataResponse.ChatStates.WriteMessageState.Allowed || len(chatDataResponse.Chat.Messages.Items) >= 20 {
+			logger.Debug("Ignore chat #%d", chatToReply.ChatId)
+			r.ignoredChats = append(r.ignoredChats, chatToReply.ChatId)
+			continue
+		}
+		chatHistory := JoinChatMessages(chatDataResponse)
 		if len(chatToReply.ReplyOptions) > 0 {
 			temperature = 0.1
 			userPrompt += fmt.Sprintf(
@@ -1246,18 +1303,6 @@ func (r *HHAIResponder) AutoRespondChats() error {
 				"- "+strings.Join(chatToReply.ReplyOptions, "\n - "),
 			)
 		} else {
-			chatDataResponse, err := r.GetChatData(chatToReply.ChatId, chatToReply.ApplicantId)
-			if err != nil {
-				logger.Warn("Can't load messages from chat #%d: %v", chatToReply.ChatId, err)
-				continue
-			}
-			// Свинья запретила ей писать
-			if !chatDataResponse.ChatStates.WriteMessageState.Allowed || len(chatDataResponse.Chat.Messages.Items) >= 20 {
-				logger.Debug("Ignore chat #%d", chatDataResponse.Chat.ID)
-				r.ignoredChats = append(r.ignoredChats, chatToReply.ChatId)
-				continue
-			}
-
 			userPrompt += fmt.Sprintf(`
 Название вакансии: %s
 Зарплата: %s
@@ -1274,9 +1319,8 @@ func (r *HHAIResponder) AutoRespondChats() error {
 4. Если в имени контактного лица содержатся слова робот, бот или ии, то отвечай максимально кратко, сухо, без приветствий и вежливости.
 5. Если спрашивают зарплатные ожидания, называй только значение из резюме и не интерпретируй его как почасовую или месячную оплату без подтверждённых данных.
 	6. Если сообщение работодателя не предполагает ответа, то отвечай кратко, например: ок или хорошо.`, chatToReply.VacancyName, chatToReply.VacancyCompensation, chatToReply.CompanyName, chatToReply.ContactName)
-			chatHistory := JoinChatMessages(chatDataResponse)
-			userPrompt += "История переписки:\n\n" + chatHistory
 		}
+		userPrompt += "\n\nИстория переписки:\n\n" + chatHistory
 		if strings.TrimSpace(r.githubURL) != "" {
 			userPrompt += "\n\nЕсли уместно и тебя прямо просят ссылку на репозиторий, используй только эту настроенную ссылку: " + r.githubURL
 		}
@@ -1294,7 +1338,14 @@ func (r *HHAIResponder) AutoRespondChats() error {
 			continue
 		}
 
-		reviewReason := chatReplyReviewReason(r.effectiveChatMode(), r.dryRun, chatToReply.ReplyToMessage)
+		reviewReason := chatReplyReviewReasonForContext(
+			r.effectiveChatMode(),
+			r.dryRun,
+			chatToReply.ReplyToMessage,
+			chatHistory,
+			chatToReply.ReplyOptions,
+			reply,
+		)
 
 		logger.Debug("Reply prepared for chat #%d (review=%t)", chatToReply.ChatId, reviewReason != "")
 		if reviewReason != "" {
@@ -1429,9 +1480,13 @@ type HHAIResponder struct {
 	autoJobStatus           bool
 	chatMode                string
 	minSalary               int
+	minSalaryCurrency       string
 	includeKeywords         []string
 	excludeKeywords         []string
 	minMatchScore           int
+	runOnce                 bool
+	maxVacanciesPerRun      int
+	maxApplicationsPerRun   int
 	chatURL                 string
 	resumeProfileFrontURL   string
 	ignoredChats            []int64
@@ -1672,9 +1727,13 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 		autoJobStatus:           cfg.AutoJobStatus,
 		chatMode:                cfg.ChatMode,
 		minSalary:               cfg.MinSalary,
+		minSalaryCurrency:       cfg.MinSalaryCurrency,
 		includeKeywords:         append([]string(nil), cfg.IncludeKeywords...),
 		excludeKeywords:         append([]string(nil), cfg.ExcludeKeywords...),
 		minMatchScore:           cfg.MinMatchScore,
+		runOnce:                 cfg.RunOnce,
+		maxVacanciesPerRun:      cfg.MaxVacanciesPerRun,
+		maxApplicationsPerRun:   cfg.MaxApplicationsPerRun,
 	}
 
 	responder.requester = NewHHRequester(ctx, client, cfg.RequestInterval)
@@ -2034,26 +2093,67 @@ func (c *AIClient) SolveTests(tasks []Task, contacts, githubURL, extraPrompt str
 		logger.Warn("AI returned invalid test JSON: %s", strings.TrimSpace(response))
 		return nil, err
 	}
-	results := make(map[int]SolutionFields, len(parsed.Solutions))
+	return validateTestSolutions(tasks, parsed)
+}
 
-	for _, item := range parsed.Solutions {
-		if item.SolutionID != nil {
-			results[item.TaskID] = SolutionFields{
-				SolutionID: *item.SolutionID,
-				HasChoice:  true,
-			}
-		} else {
-			results[item.TaskID] = SolutionFields{
-				TextSolution: strings.TrimSpace(item.TextSolution),
-			}
+// validateTestSolutions converts AI output into the exact payload contract
+// expected by HH. It deliberately fails closed on any mismatch, including
+// duplicate or unknown task IDs and answers using the wrong answer field.
+func validateTestSolutions(tasks []Task, response TestSolutionsResponse) (map[int]SolutionFields, error) {
+	expected := make(map[int]Task, len(tasks))
+	for _, task := range tasks {
+		if _, exists := expected[task.ID]; exists {
+			return nil, fmt.Errorf("source test contains duplicate task_id %d", task.ID)
 		}
+		expected[task.ID] = task
+	}
+	if len(response.Solutions) != len(tasks) {
+		return nil, fmt.Errorf("ai returned %d answers, expected %d", len(response.Solutions), len(tasks))
 	}
 
-	if len(results) != len(tasks) {
-		return nil, fmt.Errorf("ai returned incomplete answers: got %d, expected %d", len(results), len(tasks))
+	results := make(map[int]SolutionFields, len(tasks))
+	for _, item := range response.Solutions {
+		task, exists := expected[item.TaskID]
+		if !exists {
+			return nil, fmt.Errorf("ai returned unknown task_id %d", item.TaskID)
+		}
+		if _, duplicate := results[item.TaskID]; duplicate {
+			return nil, fmt.Errorf("ai returned duplicate task_id %d", item.TaskID)
+		}
+		if item.SolutionIDPresent && item.TextSolutionPresent {
+			return nil, fmt.Errorf("task %d has conflicting solution_id and text_solution", item.TaskID)
+		}
+
+		if len(task.CandidateSolutions) > 0 {
+			if !item.SolutionIDPresent || item.SolutionID == nil {
+				return nil, fmt.Errorf("task %d requires solution_id", item.TaskID)
+			}
+			if !candidateSolutionExists(task, *item.SolutionID) {
+				return nil, fmt.Errorf("task %d has unknown solution_id %d", item.TaskID, *item.SolutionID)
+			}
+			results[item.TaskID] = SolutionFields{SolutionID: *item.SolutionID, HasChoice: true}
+			continue
+		}
+
+		if item.SolutionIDPresent {
+			return nil, fmt.Errorf("open task %d must not use solution_id", item.TaskID)
+		}
+		if !item.TextSolutionPresent || strings.TrimSpace(item.TextSolution) == "" {
+			return nil, fmt.Errorf("open task %d requires a non-empty text_solution", item.TaskID)
+		}
+		results[item.TaskID] = SolutionFields{TextSolution: strings.TrimSpace(item.TextSolution)}
 	}
 
 	return results, nil
+}
+
+func candidateSolutionExists(task Task, solutionID int) bool {
+	for _, solution := range task.CandidateSolutions {
+		if id, err := strconv.Atoi(strings.TrimSpace(solution.ID)); err == nil && id == solutionID {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *HHAIResponder) LoadProfileData() error {
@@ -2599,61 +2699,81 @@ func (r *HHAIResponder) ApplyVacancies() error {
 		logger.Info("Automatic applications disabled by configuration")
 		return nil
 	}
+
+	summary := RunSummaryResult{Type: "run_summary"}
+	defer func() { r.writeEvent(summary) }()
+
 	resume := r.GetCurrentResume()
 	if resume == nil {
 		return errors.New("resume not found")
 	}
 
+	applicationsInRun := 0
+	eligibleVacancies := 0
 	for page := 0; ; page++ {
-		if r.ctx.Err() != nil {
-			return r.ctx.Err()
+		if err := r.ctx.Err(); err != nil {
+			return err
 		}
 
 		vacancies, err := r.fetchVacancyPage(page)
 		if err != nil {
+			summary.Errors++
 			logger.Error("Failed to fetch vacancies: %v", err)
 			return err
 		}
-
+		summary.VacanciesSeen += len(vacancies)
 		if len(vacancies) == 0 {
 			break
 		}
 
 		for _, vacancy := range vacancies {
-			if r.ctx.Err() != nil {
-				return r.ctx.Err()
+			if err := r.ctx.Err(); err != nil {
+				return err
 			}
 			if len(vacancy.UserLabels) > 0 || vacancy.Archived || vacancy.ResponseURL != "" {
+				summary.DeterministicSkipped++
 				r.skipVacancy(vacancy, vacancy.Links["desktop"], "already labeled, archived, or already responded", nil)
 				continue
 			}
 			if r.maxResponses > 0 && vacancy.TotalResponsesCount > r.maxResponses {
+				summary.DeterministicSkipped++
 				r.skipVacancy(vacancy, vacancy.Links["desktop"], "response count exceeds configured maximum", nil)
 				continue
 			}
 
 			vacancyURL, ok := vacancy.Links["desktop"]
 			if !ok || vacancyURL == "" {
+				summary.DeterministicSkipped++
 				r.skipVacancy(vacancy, vacancyURL, "vacancy has no desktop link", nil)
 				continue
 			}
+			if r.maxVacanciesPerRun > 0 && eligibleVacancies >= r.maxVacanciesPerRun {
+				summary.VacancyLimitSkipped++
+				r.skipVacancy(vacancy, vacancyURL, "per-run vacancy limit reached", nil)
+				return nil
+			}
+			eligibleVacancies++
 
 			vacancyDescription, err := r.GetVacancyDescription(vacancy.ID)
 			if err != nil {
+				summary.Errors++
 				r.skipVacancy(vacancy, vacancyURL, "vacancy description could not be loaded", nil)
 				logger.Warn("Could not load description for vacancy %d: %v", vacancy.ID, err)
 				continue
 			}
 			if strings.TrimSpace(vacancyDescription) == "" {
+				summary.DeterministicSkipped++
 				r.skipVacancy(vacancy, vacancyURL, "vacancy description is empty", nil)
 				continue
 			}
 
-			if reason := deterministicVacancyRejectReason(vacancy, vacancyDescription, r.minSalary, r.excludeKeywords); reason != "" {
+			if reason := deterministicVacancyRejectReasonWithCurrency(vacancy, vacancyDescription, r.minSalary, r.minSalaryCurrency, r.excludeKeywords); reason != "" {
+				summary.DeterministicSkipped++
 				r.skipVacancy(vacancy, vacancyURL, reason, nil)
 				continue
 			}
 
+			summary.AIEvaluated++
 			evaluation, err := r.ai.EvaluateVacancy(vacancyEvaluationInput{
 				Candidate:       r.candidateContext(*resume),
 				Vacancy:         vacancy,
@@ -2664,6 +2784,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 				IncludeKeywords: r.includeKeywords,
 			})
 			if err != nil {
+				summary.Errors++
 				r.skipVacancy(vacancy, vacancyURL, "AI evaluation failed: "+err.Error(), nil)
 				continue
 			}
@@ -2677,6 +2798,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 				continue
 			}
 
+			summary.Matched++
 			r.writeEvent(VacancyMatchResult{
 				Type:      "vacancy_match",
 				VacancyID: vacancy.ID,
@@ -2688,6 +2810,12 @@ func (r *HHAIResponder) ApplyVacancies() error {
 			})
 			logger.Info("MATCH — vacancy %d: %d/100", vacancy.ID, evaluation.Score)
 
+			if r.maxApplicationsPerRun > 0 && applicationsInRun >= r.maxApplicationsPerRun {
+				summary.ApplicationLimitSkipped++
+				r.skipVacancy(vacancy, vacancyURL, "per-run application limit reached", &score)
+				return nil
+			}
+
 			var letter string
 			if vacancy.ResponseLetterRequired || r.forceLetter {
 				letter, err = r.ai.GenerateLetterWithEvaluation(
@@ -2698,6 +2826,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 					r.extraLetterPrompt,
 				)
 				if err != nil || strings.TrimSpace(letter) == "" {
+					summary.Errors++
 					logger.Error("AI failed to generate letter for %s: %v", vacancyURL, err)
 					continue
 				}
@@ -2714,6 +2843,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 
 			if r.dryRun {
 				if err != nil {
+					summary.Errors++
 					logger.Error("DRY-RUN: failed to prepare application %d: %v", vacancy.ID, err)
 					r.writeEvent(ErrorResult{
 						Type: "application_error",
@@ -2730,6 +2860,8 @@ func (r *HHAIResponder) ApplyVacancies() error {
 					})
 					continue
 				}
+				applicationsInRun++
+				summary.WouldApply++
 				logger.Info("WOULD APPLY — vacancy %d (%d/100): %s", vacancy.ID, evaluation.Score, vacancyURL)
 				r.writeEvent(ApplyResult{
 					Type:           "application_preview",
@@ -2748,6 +2880,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 
 			if errVal, hasErr := responseResult["error"].(string); hasErr {
 				if errVal == "negotiations-limit-exceeded" {
+					summary.Errors++
 					logger.Warn("Negotiations limit exceeded!")
 					return nil
 				}
@@ -2756,6 +2889,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 			}
 
 			if err != nil {
+				summary.Errors++
 				logger.Error("Failed to send application %d: %v", vacancy.ID, err)
 				r.writeEvent(ErrorResult{
 					Type: "application_error",
@@ -2777,6 +2911,8 @@ func (r *HHAIResponder) ApplyVacancies() error {
 			}
 
 			if successStr, ok := responseResult["success"].(string); ok && successStr == "true" {
+				applicationsInRun++
+				summary.Applied++
 				newCount := vacancy.TotalResponsesCount + 1
 				logger.Info("Application successfully sent (responses: %d): %s", newCount, vacancyURL)
 				r.writeEvent(ApplyResult{
@@ -2792,6 +2928,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 					TestSolutions:  solutions,
 				})
 			} else {
+				summary.Errors++
 				logger.Warn("Application sent but response wrong: %s", vacancyURL)
 			}
 		}
@@ -3130,13 +3267,14 @@ func parseConfig() (Config, error) {
 
 	cfg := Config{
 		// Safe by default: writes require an explicit HH_DRY_RUN=false.
-		DryRun:        true,
-		AutoApply:     true,
-		AutoChat:      true,
-		AutoTouch:     true,
-		AutoJobStatus: true,
-		ChatMode:      "review",
-		MinMatchScore: 65,
+		DryRun:            true,
+		AutoApply:         true,
+		AutoChat:          true,
+		AutoTouch:         true,
+		AutoJobStatus:     true,
+		ChatMode:          "review",
+		MinMatchScore:     65,
+		MinSalaryCurrency: "RUR",
 	}
 	var includeKeywordsRaw, excludeKeywordsRaw string
 
@@ -3166,10 +3304,14 @@ func parseConfig() (Config, error) {
 	flag.BoolVar(&cfg.AutoTouch, "auto-touch", true, "Разрешить поднятие резюме")
 	flag.BoolVar(&cfg.AutoJobStatus, "auto-job-status", true, "Разрешить обновление статуса поиска работы")
 	flag.StringVar(&cfg.ChatMode, "chat-mode", "review", "Режим чатов: off, review, auto")
-	flag.IntVar(&cfg.MinSalary, "min-salary", 0, "Минимальная зарплата вакансии в валюте HH")
+	flag.IntVar(&cfg.MinSalary, "min-salary", 0, "Минимальная зарплата вакансии")
+	flag.StringVar(&cfg.MinSalaryCurrency, "min-salary-currency", "RUR", "Валюта минимальной зарплаты (например, RUR)")
 	flag.StringVar(&includeKeywordsRaw, "include-keywords", "", "Дополнительные позитивные ключевые слова через запятую")
 	flag.StringVar(&excludeKeywordsRaw, "exclude-keywords", "", "Нежелательные ключевые слова через запятую")
 	flag.IntVar(&cfg.MinMatchScore, "min-match-score", 65, "Минимальный AI score для отклика: 0–100")
+	flag.BoolVar(&cfg.RunOnce, "run-once", false, "Выполнить разрешённые задачи один раз и завершиться")
+	flag.IntVar(&cfg.MaxVacanciesPerRun, "max-vacancies-per-run", 20, "Максимум вакансий для pipeline за один проход; 0 — без лимита")
+	flag.IntVar(&cfg.MaxApplicationsPerRun, "max-applications-per-run", 10, "Максимум успешных/предпросмотренных откликов за один проход; 0 — без лимита")
 	flag.Parse()
 
 	_ = loadDotEnv(".env")
@@ -3217,6 +3359,13 @@ func parseConfig() (Config, error) {
 		}
 		cfg.MinSalary = parsed
 	}
+	if !flags["min-salary-currency"] {
+		cfg.MinSalaryCurrency = getEnv("HH_MIN_SALARY_CURRENCY", cfg.MinSalaryCurrency)
+	}
+	cfg.MinSalaryCurrency, err = normalizeSalaryCurrency(cfg.MinSalaryCurrency)
+	if err != nil {
+		return Config{}, err
+	}
 	if !flags["include-keywords"] {
 		includeKeywordsRaw = getEnv("HH_INCLUDE_KEYWORDS", includeKeywordsRaw)
 	}
@@ -3256,6 +3405,24 @@ func parseConfig() (Config, error) {
 			return Config{}, boolErr
 		}
 	}
+	if !flags["run-once"] {
+		cfg.RunOnce, boolErr = getEnvBool("HH_RUN_ONCE", cfg.RunOnce)
+		if boolErr != nil {
+			return Config{}, boolErr
+		}
+	}
+	if !flags["max-vacancies-per-run"] {
+		cfg.MaxVacanciesPerRun, err = parseNonNegativeInt(os.Getenv("HH_MAX_VACANCIES_PER_RUN"), "HH_MAX_VACANCIES_PER_RUN", cfg.MaxVacanciesPerRun)
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if !flags["max-applications-per-run"] {
+		cfg.MaxApplicationsPerRun, err = parseNonNegativeInt(os.Getenv("HH_MAX_APPLICATIONS_PER_RUN"), "HH_MAX_APPLICATIONS_PER_RUN", cfg.MaxApplicationsPerRun)
+		if err != nil {
+			return Config{}, err
+		}
+	}
 
 	chatModeFromEnv, hasChatModeEnv := os.LookupEnv("HH_CHAT_MODE")
 	if !flags["chat-mode"] && hasChatModeEnv && strings.TrimSpace(chatModeFromEnv) != "" {
@@ -3290,6 +3457,12 @@ func parseConfig() (Config, error) {
 	}
 	if cfg.MinSalary < 0 {
 		return Config{}, errors.New("min-salary must not be negative")
+	}
+	if cfg.MaxVacanciesPerRun < 0 {
+		return Config{}, errors.New("max-vacancies-per-run must not be negative")
+	}
+	if cfg.MaxApplicationsPerRun < 0 {
+		return Config{}, errors.New("max-applications-per-run must not be negative")
 	}
 
 	if cfg.AIAttempts < 1 {
@@ -3410,10 +3583,63 @@ func parseLogLevel(level string) LogLevel {
 	}
 }
 
+func (r *HHAIResponder) runOnceTasks() {
+	if r.autoTouch {
+		updated, err := r.TouchResume()
+		if err != nil {
+			logger.Error("Touch resume error: %v", err)
+		} else if updated {
+			logger.Info("%s: resume touch completed", runModePrefix(r.dryRun))
+		}
+	} else {
+		logger.Info("Resume touching disabled by configuration")
+	}
+
+	if r.autoJobStatus {
+		success, err := r.SetActiveJobSearchStatus()
+		if err != nil {
+			logger.Error("Job-search status error: %v", err)
+		} else if success {
+			logger.Info("%s: job-search status update completed", runModePrefix(r.dryRun))
+		}
+	} else {
+		logger.Info("Job-search status updates disabled by configuration")
+	}
+
+	if r.autoApply {
+		if err := r.ApplyVacancies(); err != nil {
+			logger.Error("Apply error: %v", err)
+		}
+	} else {
+		logger.Info("Automatic applications disabled by configuration")
+	}
+
+	if r.effectiveChatMode() != "off" {
+		if err := r.AutoRespondChats(); err != nil {
+			logger.Error("Auto chat error: %v", err)
+		}
+	} else {
+		logger.Info("Chat processing disabled by configuration")
+	}
+}
+
+func runModePrefix(dryRun bool) string {
+	if dryRun {
+		return "DRY-RUN"
+	}
+	return "Live mode"
+}
+
 func (r *HHAIResponder) Run() {
 	logger.Info("Starting tasks...")
 	if r.dryRun {
 		logger.Info("DRY-RUN enabled: HH write requests are blocked; previews will be generated")
+	}
+	if r.runOnce {
+		logger.Info("HH_RUN_ONCE enabled: executing each allowed task once")
+		r.runOnceTasks()
+		logger.Info("Run-once tasks finished")
+		return
 	}
 
 	// Touch resume loop (every 4h after completion)

@@ -39,6 +39,19 @@ type VacancyMatchResult struct {
 	Missing   []string `json:"missing"`
 }
 
+type RunSummaryResult struct {
+	Type                    string `json:"type"`
+	VacanciesSeen           int    `json:"vacancies_seen"`
+	DeterministicSkipped    int    `json:"deterministic_skipped"`
+	AIEvaluated             int    `json:"ai_evaluated"`
+	Matched                 int    `json:"matched"`
+	WouldApply              int    `json:"would_apply"`
+	Applied                 int    `json:"applied"`
+	Errors                  int    `json:"errors"`
+	VacancyLimitSkipped     int    `json:"vacancy_limit_skipped,omitempty"`
+	ApplicationLimitSkipped int    `json:"application_limit_skipped,omitempty"`
+}
+
 func (r *HHAIResponder) skipVacancy(vacancy Vacancy, vacancyURL, reason string, score *int) {
 	logger.Info("SKIP — vacancy %d: %s", vacancy.ID, reason)
 	r.writeEvent(VacancySkippedResult{
@@ -89,17 +102,44 @@ func vacancySalaryCeiling(compensation Compensation) (int, bool) {
 }
 
 func deterministicVacancyRejectReason(vacancy Vacancy, description string, minSalary int, excludeKeywords []string) string {
+	return deterministicVacancyRejectReasonWithCurrency(vacancy, description, minSalary, "RUR", excludeKeywords)
+}
+
+func deterministicVacancyRejectReasonWithCurrency(vacancy Vacancy, description string, minSalary int, minSalaryCurrency string, excludeKeywords []string) string {
 	if matched := keywordMatches(vacancySearchText(vacancy, description), excludeKeywords); len(matched) > 0 {
 		return "exclude keyword: " + strings.Join(matched, ", ")
 	}
 
 	if minSalary > 0 {
-		if salary, knownCeiling := vacancySalaryCeiling(vacancy.Compensation); knownCeiling && salary < minSalary {
-			return fmt.Sprintf("salary ceiling %d is below minimum %d", salary, minSalary)
+		currency := strings.ToUpper(strings.TrimSpace(vacancy.Compensation.Currency))
+		configuredCurrency := strings.ToUpper(strings.TrimSpace(minSalaryCurrency))
+		if configuredCurrency == "" {
+			configuredCurrency = "RUR"
+		}
+		if currency != "" && currency == configuredCurrency {
+			if salary, knownCeiling := vacancySalaryCeiling(vacancy.Compensation); knownCeiling && salary < minSalary {
+				return fmt.Sprintf("salary ceiling %d %s is below minimum %d %s", salary, currency, minSalary, configuredCurrency)
+			}
 		}
 	}
 
 	return ""
+}
+
+func normalizeSalaryCurrency(value string) (string, error) {
+	currency := strings.ToUpper(strings.TrimSpace(value))
+	if currency == "" {
+		return "RUR", nil
+	}
+	if len(currency) != 3 {
+		return "", fmt.Errorf("HH_MIN_SALARY_CURRENCY must be a 3-letter currency code: %q", value)
+	}
+	for _, character := range currency {
+		if character < 'A' || character > 'Z' {
+			return "", fmt.Errorf("HH_MIN_SALARY_CURRENCY must contain only letters: %q", value)
+		}
+	}
+	return currency, nil
 }
 
 func buildVacancyEvaluationPrompt(input vacancyEvaluationInput) (string, string) {
@@ -236,6 +276,21 @@ func parseMinSalary(value string) (int, error) {
 			err = errors.New("must not be negative")
 		}
 		return 0, fmt.Errorf("HH_MIN_SALARY must be a non-negative integer: %w", err)
+	}
+	return parsed, nil
+}
+
+func parseNonNegativeInt(value, name string, fallback int) (int, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.Atoi(trimmed)
+	if err != nil || parsed < 0 {
+		if err == nil {
+			err = errors.New("must not be negative")
+		}
+		return 0, fmt.Errorf("%s must be a non-negative integer: %w", name, err)
 	}
 	return parsed, nil
 }
