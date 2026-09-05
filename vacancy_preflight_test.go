@@ -29,15 +29,26 @@ func TestVacancyPreflightDecisionFailsClosed(t *testing.T) {
 		want       VacancyDecision
 		wantReason string
 	}{
-		{name: "ready", want: VacancyMatch},
-		{name: "archived", mutate: func(p *VacancyPreflight) { p.Archived = true }, want: VacancyReject},
-		{name: "already responded", mutate: func(p *VacancyPreflight) { p.AlreadyResponded = true }, want: VacancyReject},
-		{name: "already responded unknown", mutate: func(p *VacancyPreflight) { p.AlreadyRespondedKnown = false }, want: VacancyReviewRequired},
-		{name: "test present", mutate: func(p *VacancyPreflight) { p.TestPresent = true }, want: VacancyReviewRequired},
-		{name: "test unknown", mutate: func(p *VacancyPreflight) { p.TestPresentKnown = false }, want: VacancyReviewRequired},
-		{name: "letter unknown", mutate: func(p *VacancyPreflight) { p.LetterRequiredKnown = false }, want: VacancyReviewRequired},
-		{name: "cannot apply", mutate: func(p *VacancyPreflight) { p.CanApply = false }, want: VacancyReject},
-		{name: "can apply unknown", mutate: func(p *VacancyPreflight) { p.CanApplyKnown = false }, want: VacancyReviewRequired},
+		{name: "all safe known values", want: VacancyMatch, wantReason: ""},
+		{name: "archived=true", mutate: func(p *VacancyPreflight) { p.Archived = true }, want: VacancyReject, wantReason: "vacancy is archived"},
+		{name: "already responded", mutate: func(p *VacancyPreflight) { p.AlreadyResponded = true }, want: VacancyReject, wantReason: "already responded according to vacancy detail"},
+		{name: "archived unknown + already responded", mutate: func(p *VacancyPreflight) {
+			p.ArchivedKnown = false
+			p.AlreadyResponded = true
+		}, want: VacancyReject, wantReason: "already responded according to vacancy detail"},
+		{name: "archived unknown + cannot apply", mutate: func(p *VacancyPreflight) {
+			p.ArchivedKnown = false
+			p.CanApply = false
+		}, want: VacancyReject, wantReason: "vacancy does not allow an application"},
+		{name: "archived unknown without known blocker", mutate: func(p *VacancyPreflight) {
+			p.ArchivedKnown = false
+		}, want: VacancyReviewRequired, wantReason: "archived state is unknown"},
+		{name: "already responded unknown", mutate: func(p *VacancyPreflight) { p.AlreadyRespondedKnown = false }, want: VacancyReviewRequired, wantReason: "already-responded state is unknown"},
+		{name: "test present", mutate: func(p *VacancyPreflight) { p.TestPresent = true }, want: VacancyReviewRequired, wantReason: "vacancy has a test; safe live test flow is not enabled"},
+		{name: "test unknown", mutate: func(p *VacancyPreflight) { p.TestPresentKnown = false }, want: VacancyReviewRequired, wantReason: "test state is unknown"},
+		{name: "letter unknown", mutate: func(p *VacancyPreflight) { p.LetterRequiredKnown = false }, want: VacancyReviewRequired, wantReason: "cover-letter requirement is unknown"},
+		{name: "cannot apply", mutate: func(p *VacancyPreflight) { p.CanApply = false }, want: VacancyReject, wantReason: "vacancy does not allow an application"},
+		{name: "can apply unknown", mutate: func(p *VacancyPreflight) { p.CanApplyKnown = false }, want: VacancyReviewRequired, wantReason: "application availability is unknown"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -48,6 +59,9 @@ func TestVacancyPreflightDecisionFailsClosed(t *testing.T) {
 			got, reason := vacancyPreflightDecision(preflight)
 			if got != test.want {
 				t.Fatalf("decision: got %s, want %s (reason=%q)", got, test.want, reason)
+			}
+			if reason != test.wantReason {
+				t.Fatalf("reason: got %q, want %q", reason, test.wantReason)
 			}
 		})
 	}

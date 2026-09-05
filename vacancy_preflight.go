@@ -488,11 +488,14 @@ func vacancyPreflightDecision(preflight VacancyPreflight) (VacancyDecision, stri
 	if preflight.ArchivedKnown && preflight.Archived {
 		return VacancyReject, "vacancy is archived"
 	}
-	if !preflight.ArchivedKnown {
-		return VacancyReviewRequired, "archived state is unknown"
-	}
 	if preflight.AlreadyRespondedKnown && preflight.AlreadyResponded {
 		return VacancyReject, "already responded according to vacancy detail"
+	}
+	if preflight.CanApplyKnown && !preflight.CanApply {
+		return VacancyReject, "vacancy does not allow an application"
+	}
+	if !preflight.ArchivedKnown {
+		return VacancyReviewRequired, "archived state is unknown"
 	}
 	if !preflight.AlreadyRespondedKnown {
 		return VacancyReviewRequired, "already-responded state is unknown"
@@ -508,9 +511,6 @@ func vacancyPreflightDecision(preflight VacancyPreflight) (VacancyDecision, stri
 	}
 	if !preflight.CanApplyKnown {
 		return VacancyReviewRequired, "application availability is unknown"
-	}
-	if !preflight.CanApply {
-		return VacancyReject, "vacancy does not allow an application"
 	}
 	return VacancyMatch, ""
 }
