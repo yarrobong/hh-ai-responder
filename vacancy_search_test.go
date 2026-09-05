@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	xhtml "golang.org/x/net/html"
 )
 
 func TestParseVacanciesFromSearchResponsePrefersEmbeddedJSON(t *testing.T) {
@@ -74,8 +76,123 @@ func TestParseVacanciesFromSearchHTML(t *testing.T) {
 	if second.ID != 136954048 {
 		t.Fatalf("query fallback vacancy ID: got %d", second.ID)
 	}
+	if second.Links["desktop"] != "https://ekaterinburg.hh.ru/vacancy/136954048" {
+		t.Fatalf("query fallback desktop URL: got %q", second.Links["desktop"])
+	}
 	if second.Compensation.To == nil || *second.Compensation.To != 150000 || second.Compensation.From != nil {
 		t.Fatalf("upper-bound salary parsed incorrectly: %+v", second.Compensation)
+	}
+}
+
+func TestParseVacanciesFromSearchHTMLEmptyResults(t *testing.T) {
+	baseURL := mustURL(t, "https://ekaterinburg.hh.ru/search/vacancy?text=python")
+	html := `<!doctype html>
+<main data-qa="vacancy-serp__results">
+  <div data-qa="empty-vacancy-search-block">
+    <h2 data-qa="title">Ничего не нашлось</h2>
+  </div>
+</main>`
+
+	vacancies, err := parseVacanciesFromSearchHTML([]byte(html), baseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vacancies == nil {
+		t.Fatal("empty search result returned a nil slice")
+	}
+	if len(vacancies) != 0 {
+		t.Fatalf("got %d vacancies, want 0", len(vacancies))
+	}
+}
+
+func TestParseVacanciesFromSearchHTMLRejectsUnrelatedHTML(t *testing.T) {
+	baseURL := mustURL(t, "https://hh.example/search/vacancy?text=python")
+	_, err := parseVacanciesFromSearchHTML([]byte(`<html><body><h1>Login required</h1></body></html>`), baseURL)
+	if err == nil {
+		t.Fatal("unrelated HTML was accepted as an empty search result")
+	}
+}
+
+func TestVacancyURLFromCardHTMLCanonicalTitleURL(t *testing.T) {
+	baseURL := mustURL(t, "https://hh.example/search/vacancy?text=python")
+	document := parseTestHTML(t, `<article data-qa="vacancy-serp__vacancy">
+  <a data-qa="serp-item__title" href="/vacancy/123?from=search">Canonical vacancy</a>
+  <a data-qa="vacancy-serp__vacancy_response" href="/applicant/vacancy_response?vacancyId=123">Откликнуться</a>
+</article>`)
+	card := findHTMLNode(document, func(node *xhtml.Node) bool {
+		return htmlAttr(node, "data-qa") == "vacancy-serp__vacancy"
+	})
+	titleNode := findHTMLNode(card, func(node *xhtml.Node) bool {
+		return htmlAttr(node, "data-qa") == "serp-item__title"
+	})
+
+	vacancyURL, err := vacancyURLFromCardHTML(card, titleNode, baseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vacancyURL.String() != "https://hh.example/vacancy/123?from=search" {
+		t.Fatalf("canonical title URL: got %q", vacancyURL.String())
+	}
+}
+
+func TestVacancyURLFromCardHTMLFallbackVacancyIDCreatesCanonicalURL(t *testing.T) {
+	baseURL := mustURL(t, "https://hh.example/search/vacancy?text=python")
+	document := parseTestHTML(t, `<article data-qa="vacancy-serp__vacancy">
+  <a data-qa="serp-item__title" href="/search/vacancy?text=python">Fallback vacancy</a>
+  <a data-qa="vacancy-serp__vacancy_response" href="/applicant/vacancy_response?vacancyId=456">Откликнуться</a>
+</article>`)
+	card := findHTMLNode(document, func(node *xhtml.Node) bool {
+		return htmlAttr(node, "data-qa") == "vacancy-serp__vacancy"
+	})
+	titleNode := findHTMLNode(card, func(node *xhtml.Node) bool {
+		return htmlAttr(node, "data-qa") == "serp-item__title"
+	})
+
+	vacancyURL, err := vacancyURLFromCardHTML(card, titleNode, baseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vacancyURL.String() != "https://hh.example/vacancy/456" {
+		t.Fatalf("fallback canonical URL: got %q", vacancyURL.String())
+	}
+}
+
+func TestVacancyURLFromCardHTMLRejectsMismatchedIDs(t *testing.T) {
+	baseURL := mustURL(t, "https://hh.example/search/vacancy?text=python")
+	document := parseTestHTML(t, `<article data-qa="vacancy-serp__vacancy">
+  <a data-qa="serp-item__title" href="/vacancy/123">Mismatched vacancy</a>
+  <a data-qa="vacancy-serp__vacancy_response" href="/applicant/vacancy_response?vacancyId=456">Откликнуться</a>
+</article>`)
+	card := findHTMLNode(document, func(node *xhtml.Node) bool {
+		return htmlAttr(node, "data-qa") == "vacancy-serp__vacancy"
+	})
+	titleNode := findHTMLNode(card, func(node *xhtml.Node) bool {
+		return htmlAttr(node, "data-qa") == "serp-item__title"
+	})
+
+	if _, err := vacancyURLFromCardHTML(card, titleNode, baseURL); err == nil {
+		t.Fatal("mismatched canonical and query IDs were accepted")
+	}
+}
+
+func TestVacancyURLFromCardHTMLDoesNotUseResponseURLAsDesktopURL(t *testing.T) {
+	baseURL := mustURL(t, "https://hh.example/search/vacancy?text=python")
+	document := parseTestHTML(t, `<article data-qa="vacancy-serp__vacancy">
+  <a data-qa="serp-item__title" href="/applicant/vacancy_response?vacancyId=789&employerId=42">Apply</a>
+</article>`)
+	card := findHTMLNode(document, func(node *xhtml.Node) bool {
+		return htmlAttr(node, "data-qa") == "vacancy-serp__vacancy"
+	})
+	titleNode := findHTMLNode(card, func(node *xhtml.Node) bool {
+		return htmlAttr(node, "data-qa") == "serp-item__title"
+	})
+
+	vacancyURL, err := vacancyURLFromCardHTML(card, titleNode, baseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vacancyURL.String() != "https://hh.example/vacancy/789" {
+		t.Fatalf("response URL was used as desktop URL: got %q", vacancyURL.String())
 	}
 }
 
@@ -158,4 +275,13 @@ func valueOrZero(value *int) int {
 		return 0
 	}
 	return *value
+}
+
+func parseTestHTML(t *testing.T, source string) *xhtml.Node {
+	t.Helper()
+	document, err := xhtml.Parse(strings.NewReader(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return document
 }

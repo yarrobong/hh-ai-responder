@@ -45,6 +45,9 @@ func parseVacanciesFromSearchHTML(data []byte, baseURL *url.URL) ([]Vacancy, err
 		return htmlAttr(node, "data-qa") == "vacancy-serp__vacancy"
 	})
 	if len(cards) == 0 {
+		if isRecognizedEmptySearchHTML(document) {
+			return []Vacancy{}, nil
+		}
 		return nil, fmt.Errorf("vacancy card container %q not found", "vacancy-serp__vacancy")
 	}
 
@@ -71,6 +74,16 @@ func parseVacanciesFromSearchHTML(data []byte, baseURL *url.URL) ([]Vacancy, err
 	return vacancies, nil
 }
 
+func isRecognizedEmptySearchHTML(document *xhtml.Node) bool {
+	// These are HH's search-result and explicit empty-result markers. A
+	// document without one of them may be a login, protection, or error page,
+	// and must not be interpreted as an empty search result.
+	return findHTMLNode(document, func(node *xhtml.Node) bool {
+		dataQA := htmlAttr(node, "data-qa")
+		return dataQA == "vacancy-serp__results" || dataQA == "empty-vacancy-search-block"
+	}) != nil
+}
+
 func parseVacancyCardHTML(card *xhtml.Node, baseURL *url.URL) (Vacancy, error) {
 	titleNode := findHTMLNode(card, func(node *xhtml.Node) bool {
 		return node.Type == xhtml.ElementNode && htmlAttr(node, "data-qa") == "serp-item__title"
@@ -90,11 +103,8 @@ func parseVacancyCardHTML(card *xhtml.Node, baseURL *url.URL) (Vacancy, error) {
 	}
 
 	vacancyID := vacancyIDFromCanonicalPath(vacancyURL.Path)
-	if vacancyID == 0 {
-		vacancyID = vacancyIDFromCardQuery(card)
-	}
 	if vacancyID <= 0 {
-		return Vacancy{}, errors.New("vacancy ID not found in canonical URL or card links")
+		return Vacancy{}, errors.New("vacancy ID not found in canonical URL")
 	}
 
 	vacancy := Vacancy{
@@ -136,25 +146,105 @@ func parseVacancyCardHTML(card *xhtml.Node, baseURL *url.URL) (Vacancy, error) {
 }
 
 func vacancyURLFromCardHTML(card, titleNode *xhtml.Node, baseURL *url.URL) (*url.URL, error) {
-	if titleURL, err := resolveVacancyURL(htmlAttr(titleNode, "href"), baseURL); err == nil && titleURL.Path != "" {
-		return titleURL, nil
+	if card == nil || titleNode == nil {
+		return nil, errors.New("vacancy card or title link is missing")
+	}
+	if baseURL == nil || baseURL.Scheme == "" || baseURL.Host == "" {
+		return nil, errors.New("base URL is required for vacancy URL parsing")
 	}
 
-	// The title link is the preferred vacancy URL. Other links are considered
-	// only when they are themselves canonical /vacancy/<id> links, so an
-	// employer or response link cannot accidentally become the vacancy URL.
+	var canonicalLinks []*url.URL
+	var queryIDs []int
 	for _, node := range findHTMLNodes(card, func(node *xhtml.Node) bool {
 		return node.Type == xhtml.ElementNode && node.Data == "a" && htmlAttr(node, "href") != ""
 	}) {
-		if node != titleNode {
-			parsed, err := resolveVacancyURL(htmlAttr(node, "href"), baseURL)
-			if err == nil && vacancyIDFromCanonicalPath(parsed.Path) > 0 {
-				return parsed, nil
-			}
+		parsed, err := resolveVacancyURL(htmlAttr(node, "href"), baseURL)
+		if err != nil {
+			continue
+		}
+		if vacancyID := vacancyIDFromCanonicalPath(parsed.Path); vacancyID > 0 {
+			canonicalLinks = append(canonicalLinks, parsed)
+		}
+		if vacancyID := vacancyIDFromURLQuery(parsed); vacancyID > 0 {
+			queryIDs = append(queryIDs, vacancyID)
 		}
 	}
 
-	return nil, errors.New("vacancy URL is missing or invalid")
+	canonicalID, err := consistentVacancyID(canonicalLinkIDs(canonicalLinks))
+	if err != nil {
+		return nil, fmt.Errorf("canonical vacancy links disagree: %w", err)
+	}
+	queryID, err := consistentVacancyID(queryIDs)
+	if err != nil {
+		return nil, fmt.Errorf("vacancyId query values disagree: %w", err)
+	}
+	if canonicalID > 0 && queryID > 0 && canonicalID != queryID {
+		return nil, fmt.Errorf("canonical vacancy ID %d disagrees with vacancyId query %d", canonicalID, queryID)
+	}
+
+	if canonicalID > 0 {
+		var sourceURL *url.URL
+		if titleURL, resolveErr := resolveVacancyURL(htmlAttr(titleNode, "href"), baseURL); resolveErr == nil &&
+			vacancyIDFromCanonicalPath(titleURL.Path) == canonicalID {
+			sourceURL = titleURL
+		} else {
+			sourceURL = canonicalLinks[0]
+		}
+		return canonicalVacancyURL(baseURL, canonicalID, sourceURL), nil
+	}
+	if queryID > 0 {
+		return canonicalVacancyURL(baseURL, queryID, nil), nil
+	}
+
+	return nil, errors.New("canonical vacancy URL or vacancyId query is missing")
+}
+
+func canonicalLinkIDs(links []*url.URL) []int {
+	ids := make([]int, 0, len(links))
+	for _, link := range links {
+		ids = append(ids, vacancyIDFromCanonicalPath(link.Path))
+	}
+	return ids
+}
+
+func consistentVacancyID(ids []int) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	first := ids[0]
+	for _, id := range ids[1:] {
+		if id != first {
+			return 0, fmt.Errorf("found %d and %d", first, id)
+		}
+	}
+	return first, nil
+}
+
+func vacancyIDFromURLQuery(parsed *url.URL) int {
+	if parsed == nil {
+		return 0
+	}
+	id, err := strconv.Atoi(parsed.Query().Get("vacancyId"))
+	if err == nil && id > 0 {
+		return id
+	}
+	return 0
+}
+
+func canonicalVacancyURL(baseURL *url.URL, vacancyID int, sourceURL *url.URL) *url.URL {
+	canonical := *baseURL
+	canonical.Path = fmt.Sprintf("/vacancy/%d", vacancyID)
+	canonical.RawPath = ""
+	canonical.RawQuery = ""
+	canonical.Fragment = ""
+	if sourceURL != nil && sameURLOrigin(sourceURL, baseURL) {
+		canonical.RawQuery = sourceURL.RawQuery
+	}
+	return &canonical
+}
+
+func sameURLOrigin(left, right *url.URL) bool {
+	return strings.EqualFold(left.Scheme, right.Scheme) && strings.EqualFold(left.Host, right.Host)
 }
 
 func resolveVacancyURL(rawURL string, baseURL *url.URL) (*url.URL, error) {
@@ -176,28 +266,12 @@ func resolveVacancyURL(rawURL string, baseURL *url.URL) (*url.URL, error) {
 
 func vacancyIDFromCanonicalPath(path string) int {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) < 2 || parts[0] != "vacancy" {
+	if len(parts) != 2 || parts[0] != "vacancy" {
 		return 0
 	}
 	id, err := strconv.Atoi(parts[1])
 	if err == nil && id > 0 {
 		return id
-	}
-	return 0
-}
-
-func vacancyIDFromCardQuery(card *xhtml.Node) int {
-	for _, node := range findHTMLNodes(card, func(node *xhtml.Node) bool {
-		return node.Type == xhtml.ElementNode && node.Data == "a" && htmlAttr(node, "href") != ""
-	}) {
-		parsed, err := url.Parse(htmlAttr(node, "href"))
-		if err != nil {
-			continue
-		}
-		id, err := strconv.Atoi(parsed.Query().Get("vacancyId"))
-		if err == nil && id > 0 {
-			return id
-		}
 	}
 	return 0
 }
