@@ -275,6 +275,7 @@ func buildVacancyEvaluationPrompt(input vacancyEvaluationInput) (string, string)
 		"Не помещай объекты внутрь reasons, missing или strong_match.",
 		"Не используй Markdown ** внутри строк.",
 		"Название должности НЕ подтверждает образование.",
+		"Общий структурированный стаж не доказывает стаж в конкретной роли или технологии (например, SRE, DevOps, Java или Kubernetes).",
 		"Опыт с Cloudflare Turnstile НЕ подтверждает знание SSL.",
 		"Знание REST API НЕ подтверждает XML, DNS, Kafka, Celery и другие технологии.",
 		"Смежный навык нельзя превращать в подтвержденный; не делай вывод «вероятно знает».",
@@ -303,8 +304,8 @@ func buildVacancyEvaluationPrompt(input vacancyEvaluationInput) (string, string)
 Зарплатные ожидания: %s
 Навыки: %s
 Локация кандидата: %s
-Образование кандидата: не передано в CandidateContext
-Структурированная длительность опыта кандидата: не передана; не вычисляй её по датам
+Образование кандидата: %s
+Структурированная длительность опыта кандидата: %s
 Опыт:
 %s
 
@@ -322,7 +323,7 @@ func buildVacancyEvaluationPrompt(input vacancyEvaluationInput) (string, string)
 Совпавшие позитивные ключевые слова: %s
 Если они не встречаются, не отклоняй вакансию только по этой причине; используй их как дополнительный сигнал.
 	`, input.Candidate.FullName, input.Candidate.ResumeTitle, input.Candidate.Salary,
-		input.Candidate.Skills, candidateLocation(input.Candidate.Location), input.Candidate.Experience, input.Vacancy.Name,
+		input.Candidate.Skills, candidateLocation(input.Candidate.Location), candidateEducationSummary(input.Candidate), candidateExperienceSummary(input.Candidate), input.Candidate.Experience, input.Vacancy.Name,
 		input.Vacancy.Company.Name, workExperience, input.Description, input.Salary, input.Location,
 		input.WorkSchedule, includeKeywords, matchedIncludeKeywords)
 
@@ -524,16 +525,31 @@ func validateHardRequirementShape(requirement HardRequirementEvaluation) error {
 	return nil
 }
 
-// deriveHardRequirementStatus is intentionally conservative. Candidate data
-// does not currently contain structured education, experience duration,
-// relocation, language, license, or citizenship facts, so absence of a fact
-// is never turned into a fabricated mismatch.
-func deriveHardRequirementStatus(candidate CandidateContext, _ Vacancy, requirement HardRequirementCandidate) (string, string) {
+// deriveHardRequirementStatus is intentionally conservative. Generic HH
+// experience requirements are derived by localStructuredHardRequirements;
+// description-specific experience is never satisfied by total experience.
+func deriveHardRequirementStatus(candidate CandidateContext, vacancy Vacancy, requirement HardRequirementCandidate) (string, string) {
 	unknown := "not provided"
 	switch requirement.Category {
 	case hardRequirementCategoryEducation:
-		return hardRequirementStatusUnknown, unknown
+		if !candidate.EducationKnown {
+			return hardRequirementStatusUnknown, unknown
+		}
+		matches, supported := educationRequirementMatches(candidate.EducationLevel, requirement.Requirement)
+		if !supported {
+			return hardRequirementStatusUnknown, unknown
+		}
+		if matches {
+			return hardRequirementStatusMet, candidateEducationEvidence(candidate)
+		}
+		return hardRequirementStatusMissing, candidateEducationEvidence(candidate)
 	case hardRequirementCategoryExperienceYears:
+		// A requirement extracted from free-form description can be role- or
+		// technology-specific. Total duration is only used for the trusted HH
+		// WorkExperience field, when the extracted evidence matches that field.
+		if genericExperienceRequirementEvidenceMatches(vacancy.WorkExperience, requirement) {
+			return genericExperienceStatus(candidate, vacancy.WorkExperience)
+		}
 		return hardRequirementStatusUnknown, unknown
 	case hardRequirementCategoryLocation:
 		if locationRequirementMatchesCandidate(candidate.Location, requirement.Requirement, requirement.VacancyEvidence) {
@@ -553,6 +569,13 @@ func deriveHardRequirementStatus(candidate CandidateContext, _ Vacancy, requirem
 	default:
 		return hardRequirementStatusUnknown, unknown
 	}
+}
+
+func genericExperienceRequirementEvidenceMatches(workExperience string, requirement HardRequirementCandidate) bool {
+	if _, supported, noExperience := genericWorkExperienceMinimumMonths(workExperience); !supported || noExperience {
+		return false
+	}
+	return containsNormalizedText(workExperience, requirement.VacancyEvidence)
 }
 
 func deriveHardRequirements(candidate CandidateContext, vacancy Vacancy, description string, candidates []HardRequirementCandidate) []HardRequirementEvaluation {
@@ -658,6 +681,8 @@ func containsOptionalMarker(text string) bool {
 }
 
 func normalizeEvidenceText(value string) string {
+	value = strings.ReplaceAll(value, "–", "-")
+	value = strings.ReplaceAll(value, "—", "-")
 	return strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(value)), " "))
 }
 
@@ -668,6 +693,78 @@ func containsNormalizedText(haystack, needle string) bool {
 
 func candidateRequirementMentioned(candidate CandidateContext, requirement string) bool {
 	return containsNormalizedText(candidate.Skills, requirement) || containsNormalizedText(candidate.Experience, requirement)
+}
+
+func genericWorkExperienceMinimumMonths(value string) (int, bool, bool) {
+	text := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(value)), " "))
+	text = strings.ReplaceAll(text, "–", "-")
+	text = strings.ReplaceAll(text, "—", "-")
+	compact := strings.ReplaceAll(text, " ", "")
+	if compact == "noexperience" || vacancyDoesNotRequireExperience(text) {
+		return 0, true, true
+	}
+	switch {
+	case strings.Contains(compact, "between1and3") || strings.Contains(compact, "1-3"):
+		return 12, true, false
+	case strings.Contains(compact, "between3and6") || strings.Contains(compact, "3-6"):
+		return 36, true, false
+	case strings.Contains(compact, "morethan6") || strings.Contains(compact, "более6") || strings.Contains(compact, "6+") || strings.Contains(compact, "от6"):
+		return 72, true, false
+	default:
+		return 0, false, false
+	}
+}
+
+func genericExperienceStatus(candidate CandidateContext, workExperience string) (string, string) {
+	minimumMonths, supported, noExperience := genericWorkExperienceMinimumMonths(workExperience)
+	if !supported || noExperience || !candidate.TotalExperienceMonthsKnown {
+		return hardRequirementStatusUnknown, "not provided"
+	}
+	evidence := fmt.Sprintf("Candidate total experience: %d months", candidate.TotalExperienceMonths)
+	if candidate.TotalExperienceMonths >= minimumMonths {
+		return hardRequirementStatusMet, evidence
+	}
+	return hardRequirementStatusMissing, evidence
+}
+
+func educationRequirementMatches(candidateLevel, requirement string) (bool, bool) {
+	text := strings.ToLower(strings.ReplaceAll(strings.Join(strings.Fields(strings.TrimSpace(requirement)), " "), "ё", "е"))
+	if text == "" || containsEducationSpecialization(text) {
+		return false, false
+	}
+
+	acceptsHigher := strings.Contains(text, "высш")
+	acceptsIncompleteHigher := acceptsHigher && (strings.Contains(text, "незакончен") || strings.Contains(text, "неполное"))
+	acceptsSecondaryProfessional := strings.Contains(text, "средн") && (strings.Contains(text, "профессион") || strings.Contains(text, "специальн"))
+	acceptsSecondary := strings.Contains(text, "среднее") && !acceptsSecondaryProfessional
+	if !acceptsHigher && !acceptsSecondaryProfessional && !acceptsSecondary {
+		return false, false
+	}
+	if candidateLevel == educationLevelHigher && acceptsHigher {
+		return true, true
+	}
+	if candidateLevel == educationLevelIncompleteHigher && acceptsIncompleteHigher {
+		return true, true
+	}
+	if candidateLevel == educationLevelSecondaryProfessional && acceptsSecondaryProfessional {
+		return true, true
+	}
+	if candidateLevel == educationLevelSecondary && acceptsSecondary {
+		return true, true
+	}
+	return false, true
+}
+
+func containsEducationSpecialization(text string) bool {
+	return strings.Contains(text, "по иб") || strings.Contains(text, "по информационной безопасности") ||
+		strings.Contains(text, "техническ") || strings.Contains(text, "специальност") || strings.Contains(text, "направлен")
+}
+
+func candidateEducationEvidence(candidate CandidateContext) string {
+	if details := strings.TrimSpace(candidate.EducationDetails); details != "" {
+		return fmt.Sprintf("Candidate education: %s (%s)", candidate.EducationLevel, details)
+	}
+	return "Candidate education: " + candidate.EducationLevel
 }
 
 // validateHardRequirements is retained for validating already-derived result
@@ -684,15 +781,43 @@ func validateHardRequirements(candidate CandidateContext, vacancy Vacancy, evalu
 
 		switch requirement.Category {
 		case hardRequirementCategoryEducation:
-			if requirement.Status != hardRequirementStatusUnknown {
-				return fmt.Errorf("education requirement %q cannot be %s without structured candidate education", requirement.Requirement, requirement.Status)
+			if !candidate.EducationKnown {
+				if requirement.Status != hardRequirementStatusUnknown {
+					return fmt.Errorf("education requirement %q cannot be %s without structured candidate education", requirement.Requirement, requirement.Status)
+				}
+				break
+			}
+			matches, supported := educationRequirementMatches(candidate.EducationLevel, requirement.Requirement)
+			if !supported {
+				if requirement.Status != hardRequirementStatusUnknown {
+					return fmt.Errorf("education requirement %q cannot be resolved from supported facts", requirement.Requirement)
+				}
+				break
+			}
+			expected := hardRequirementStatusMissing
+			if matches {
+				expected = hardRequirementStatusMet
+			}
+			if requirement.Status != expected || !strings.HasPrefix(requirement.CandidateEvidence, "Candidate education:") {
+				return fmt.Errorf("education requirement %q has status %s, want trusted status %s", requirement.Requirement, requirement.Status, expected)
 			}
 		case hardRequirementCategoryExperienceYears:
 			if vacancyDoesNotRequireExperience(vacancy.WorkExperience) {
 				return fmt.Errorf("vacancy does not require experience, so experience requirement %q must not be emitted", requirement.Requirement)
 			}
-			if requirement.Status != hardRequirementStatusUnknown {
-				return fmt.Errorf("experience requirement %q must be unknown without structured candidate duration", requirement.Requirement)
+			minimumMonths, supported, noExperience := genericWorkExperienceMinimumMonths(vacancy.WorkExperience)
+			if !supported || noExperience || !candidate.TotalExperienceMonthsKnown || !strings.HasPrefix(requirement.CandidateEvidence, "Candidate total experience:") {
+				if requirement.Status != hardRequirementStatusUnknown {
+					return fmt.Errorf("experience requirement %q must be unknown without trusted generic HH duration", requirement.Requirement)
+				}
+				break
+			}
+			expected := hardRequirementStatusMissing
+			if candidate.TotalExperienceMonths >= minimumMonths {
+				expected = hardRequirementStatusMet
+			}
+			if requirement.Status != expected {
+				return fmt.Errorf("experience requirement %q has status %s, want trusted status %s", requirement.Requirement, requirement.Status, expected)
 			}
 		case hardRequirementCategoryLocation:
 			if err := validateLocationRequirement(candidate.Location, requirement); err != nil {
@@ -732,7 +857,8 @@ func isOptionalRequirement(requirement HardRequirementEvaluation) bool {
 
 func vacancyDoesNotRequireExperience(value string) bool {
 	text := strings.ToLower(strings.Join(strings.Fields(value), " "))
-	return strings.Contains(text, "без опыта") || strings.Contains(text, "опыт не требуется")
+	compact := strings.ReplaceAll(text, " ", "")
+	return compact == "noexperience" || strings.Contains(text, "без опыта") || strings.Contains(text, "опыт не требуется")
 }
 
 func validateLocationRequirement(candidateLocationValue string, requirement HardRequirementEvaluation) error {
@@ -961,12 +1087,18 @@ func (c *AIClient) EvaluateVacancy(input vacancyEvaluationInput) (VacancyEvaluat
 		return VacancyEvaluation{}, err
 	}
 	return VacancyEvaluation{
-		Score:            response.Score,
-		Apply:            response.Apply,
-		Reasons:          response.Reasons,
-		Missing:          response.Missing,
-		HardRequirements: deriveHardRequirements(input.Candidate, input.Vacancy, input.Description, response.HardRequirements),
-		StrongMatch:      response.StrongMatch,
+		Score:   response.Score,
+		Apply:   response.Apply,
+		Reasons: response.Reasons,
+		Missing: response.Missing,
+		HardRequirements: mergeHardRequirements(
+			localStructuredHardRequirements(VacancyPreflight{
+				WorkExperience:      input.Vacancy.WorkExperience,
+				WorkExperienceKnown: strings.TrimSpace(input.Vacancy.WorkExperience) != "",
+			}, input.Candidate),
+			deriveHardRequirements(input.Candidate, input.Vacancy, input.Description, response.HardRequirements),
+		),
+		StrongMatch: response.StrongMatch,
 	}, nil
 }
 

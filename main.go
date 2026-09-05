@@ -100,13 +100,18 @@ type Config struct {
 }
 
 type CandidateContext struct {
-	FullName    string
-	ResumeTitle string
-	Salary      string
-	Experience  string
-	Skills      string
-	Location    string
-	Contacts    string
+	FullName                   string
+	ResumeTitle                string
+	Salary                     string
+	Experience                 string
+	Skills                     string
+	Location                   string
+	Contacts                   string
+	EducationKnown             bool
+	EducationLevel             string
+	EducationDetails           string
+	TotalExperienceMonthsKnown bool
+	TotalExperienceMonths      int
 }
 
 // HardRequirementCandidate is the only hard-requirement shape accepted from
@@ -1513,6 +1518,7 @@ type HHAIResponder struct {
 	requester               *HHRequester
 	resumeHash              string
 	resumeExperience        string
+	resumeFacts             ResumeFacts
 	latestResumeHash        string
 	resumes                 []ResumeItem
 	userId                  int64
@@ -1855,11 +1861,12 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 
 	logger.Debug("Current resume loaded (title_characters=%d)", len(resume.Title))
 
-	resumeExperience, err := responder.GetResumeExperience()
+	resumeFacts, err := responder.GetResumeFacts()
 	if err != nil {
 		return nil, errors.New("can't load resume experience")
 	}
-	responder.resumeExperience = resumeExperience
+	responder.resumeFacts = resumeFacts
+	responder.resumeExperience = resumeFacts.ExperienceText
 
 	// If no search params provided, add resume parameter
 	if len(responder.searchParams) == 0 {
@@ -2138,15 +2145,18 @@ func buildLetterSystemPrompt(candidate CandidateContext, extraPrompt string) str
 	systemPrompt := fmt.Sprintf(`Ты должен сгенерировать сопроводительное письмо для отклика на вакансию от имени соискателя.
 Пиши только о том, что подтверждается данными кандидата. Не приписывай кандидату отсутствующие навыки, опыт, образование, проекты, сертификаты или договорённости.
 Если в вакансии требуется незнакомая технология, можно честно отметить близкий опыт и готовность разобраться.
+Общий структурированный стаж не доказывает стаж в конкретной роли или технологии.
 Письмо должно быть на русском языке, если вакансия явно не требует другого языка; 3–6 предложений, без markdown, списков и пояснений.
 Тебя зовут: %s
 Ты ищешь работу в качестве: %s
 Зарплата: %s
 Твои навыки: %s
 Локация кандидата: %s
+Образование кандидата: %s
+Общий структурированный стаж кандидата: %s
 Твой опыт:
 
-%s`, candidate.FullName, candidate.ResumeTitle, candidate.Salary, candidate.Skills, candidateLocation(candidate.Location), candidate.Experience)
+%s`, candidate.FullName, candidate.ResumeTitle, candidate.Salary, candidate.Skills, candidateLocation(candidate.Location), candidateEducationSummary(candidate), candidateExperienceSummary(candidate), candidate.Experience)
 
 	if strings.TrimSpace(candidate.Contacts) != "" {
 		systemPrompt += "\nКонтакты для указания в письме: " + candidate.Contacts
@@ -2161,13 +2171,18 @@ func buildLetterSystemPrompt(candidate CandidateContext, extraPrompt string) str
 
 func (r *HHAIResponder) candidateContext(resume ResumeItem) CandidateContext {
 	return CandidateContext{
-		FullName:    r.GetFullName(),
-		ResumeTitle: resume.Title,
-		Salary:      resume.Salary,
-		Experience:  r.resumeExperience,
-		Skills:      resume.Skills,
-		Location:    resume.Area,
-		Contacts:    r.contacts,
+		FullName:                   r.GetFullName(),
+		ResumeTitle:                resume.Title,
+		Salary:                     resume.Salary,
+		Experience:                 r.resumeExperience,
+		Skills:                     resume.Skills,
+		Location:                   resume.Area,
+		Contacts:                   r.contacts,
+		EducationKnown:             r.resumeFacts.EducationKnown,
+		EducationLevel:             r.resumeFacts.EducationLevel,
+		EducationDetails:           r.resumeFacts.EducationDetails,
+		TotalExperienceMonthsKnown: r.resumeFacts.TotalExperienceMonthsKnown,
+		TotalExperienceMonths:      r.resumeFacts.TotalExperienceMonths,
 	}
 }
 
@@ -2664,82 +2679,32 @@ func (r *HHAIResponder) ApplyVacancy(vacancyID int, refererURL, letter string) (
 }
 
 func (r *HHAIResponder) GetResumeExperience() (string, error) {
-	if err := r.ctx.Err(); err != nil {
+	facts, err := r.GetResumeFacts()
+	if err != nil {
 		return "", err
+	}
+	return facts.ExperienceText, nil
+}
+
+func (r *HHAIResponder) GetResumeFacts() (ResumeFacts, error) {
+	if err := r.ctx.Err(); err != nil {
+		return ResumeFacts{}, err
 	}
 
 	req, err := r.buildRequest(http.MethodGet, fmt.Sprintf("/resume/%s", r.resumeHash), nil, nil)
 	if err != nil {
-		return "", err
+		return ResumeFacts{}, err
 	}
 
 	resp, err := r.requester.Do(req)
 	if err != nil {
-		return "", err
+		return ResumeFacts{}, err
 	}
 
 	if resp.Status != http.StatusOK {
-		return "", unexpectedHTTPStatus(resp.Status)
+		return ResumeFacts{}, unexpectedHTTPStatus(resp.Status)
 	}
-
-	bodyText := string(resp.Body)
-
-	if strings.Contains(bodyText, "{&#34;") {
-		bodyText = html.UnescapeString(bodyText)
-	}
-
-	target := `{"redirectConfig":`
-	idx := strings.Index(bodyText, target)
-	if idx == -1 {
-		return "", errors.New("redirect config not found on page")
-	}
-
-	jsonStart := bodyText[idx:]
-
-	var cfg struct {
-		ApplicantResume struct {
-			Experience []struct {
-				StartDate   string  `json:"startDate"`
-				EndDate     *string `json:"endDate"`
-				CompanyName string  `json:"companyName"`
-				Position    string  `json:"position"`
-				Description string  `json:"description"`
-			} `json:"experience"`
-		} `json:"applicantResume"`
-	}
-
-	decoder := json.NewDecoder(strings.NewReader(jsonStart))
-	if err := decoder.Decode(&cfg); err != nil {
-		return "", fmt.Errorf("failed to parse resume: %w", err)
-	}
-
-	var sb strings.Builder
-	for i, exp := range cfg.ApplicantResume.Experience {
-		// Ограничиваем описание опыта тремя последними местами работы
-		if i >= 3 {
-			break
-		}
-		if i > 0 {
-			sb.WriteString("\n\n")
-		}
-
-		end := "по настоящее время"
-		if exp.EndDate != nil {
-			end = *exp.EndDate
-		}
-
-		sb.WriteString(html.UnescapeString(exp.Position))
-		sb.WriteString("\n")
-		sb.WriteString(html.UnescapeString(exp.CompanyName))
-		sb.WriteString("\n")
-		sb.WriteString(exp.StartDate)
-		sb.WriteString(" - ")
-		sb.WriteString(end)
-		sb.WriteString("\n\n")
-		sb.WriteString(html.UnescapeString(exp.Description))
-	}
-
-	return sb.String(), nil
+	return parseResumeFacts(resp.Body, time.Now())
 }
 
 func (r *HHAIResponder) GetVacancyDescription(vacancyId int) (string, error) {

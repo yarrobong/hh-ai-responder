@@ -403,11 +403,13 @@ func localStructuredHardRequirements(preflight VacancyPreflight, candidate Candi
 	var result []HardRequirementEvaluation
 	workExperienceKnown := preflight.WorkExperienceKnown || strings.TrimSpace(preflight.WorkExperience) != ""
 	if workExperienceKnown && strings.TrimSpace(preflight.WorkExperience) != "" && !vacancyDoesNotRequireExperience(preflight.WorkExperience) {
+		status, candidateEvidence := genericExperienceStatus(candidate, preflight.WorkExperience)
 		result = append(result, HardRequirementEvaluation{
-			Requirement:     preflight.WorkExperience,
-			Category:        hardRequirementCategoryExperienceYears,
-			Status:          hardRequirementStatusUnknown,
-			VacancyEvidence: preflight.WorkExperience,
+			Requirement:       preflight.WorkExperience,
+			Category:          hardRequirementCategoryExperienceYears,
+			Status:            status,
+			VacancyEvidence:   preflight.WorkExperience,
+			CandidateEvidence: candidateEvidence,
 		})
 	}
 
