@@ -66,9 +66,14 @@ func TestVacancyDecisionUsesTriStateHardRequirements(t *testing.T) {
 			want:       VacancyReviewRequired,
 		},
 		{
-			name:       "unknown takes precedence over apply false",
+			name:       "apply false rejects before unknown review",
 			evaluation: VacancyEvaluation{Score: 99, Apply: false, HardRequirements: []HardRequirementEvaluation{{Requirement: "location", Category: hardRequirementCategoryLocation, Status: hardRequirementStatusUnknown, VacancyEvidence: "Office location required", CandidateEvidence: "not provided"}}},
-			want:       VacancyReviewRequired,
+			want:       VacancyReject,
+		},
+		{
+			name:       "score below threshold rejects before unknown review",
+			evaluation: VacancyEvaluation{Score: 64, Apply: true, HardRequirements: []HardRequirementEvaluation{{Requirement: "education", Category: hardRequirementCategoryEducation, Status: hardRequirementStatusUnknown, VacancyEvidence: "Higher education required", CandidateEvidence: "not provided"}}},
+			want:       VacancyReject,
 		},
 		{
 			name:       "apply false rejects",
@@ -79,6 +84,11 @@ func TestVacancyDecisionUsesTriStateHardRequirements(t *testing.T) {
 			name:       "score threshold rejects",
 			evaluation: VacancyEvaluation{Score: 64, Apply: true},
 			want:       VacancyReject,
+		},
+		{
+			name:       "unknown requires review only for otherwise eligible vacancy",
+			evaluation: VacancyEvaluation{Score: 65, Apply: true, HardRequirements: []HardRequirementEvaluation{{Requirement: "education", Category: hardRequirementCategoryEducation, Status: hardRequirementStatusUnknown, VacancyEvidence: "Higher education required", CandidateEvidence: "not provided"}}},
+			want:       VacancyReviewRequired,
 		},
 		{
 			name:       "confirmed match applies",
@@ -264,6 +274,16 @@ func TestFinalApplyDecisionUsesAIFlagAndThreshold(t *testing.T) {
 	}
 	if got := vacancyEvaluationRejectReason(VacancyEvaluation{Score: 60, Apply: true}, 65); got != "AI score below threshold (60/100, minimum 65)" {
 		t.Fatalf("unexpected threshold diagnostic: %q", got)
+	}
+	unknown := []HardRequirementEvaluation{{Requirement: "higher education", Category: hardRequirementCategoryEducation, Status: hardRequirementStatusUnknown, VacancyEvidence: "Higher education required", CandidateEvidence: "not provided"}}
+	if got := vacancyEvaluationRejectReason(VacancyEvaluation{Score: 60, Apply: true, HardRequirements: unknown}, 65); got != "AI score below threshold (60/100, minimum 65)" {
+		t.Fatalf("threshold diagnostic did not take precedence over unknown: %q", got)
+	}
+	if got := vacancyEvaluationRejectReason(VacancyEvaluation{Score: 65, Apply: false, HardRequirements: unknown}, 65); got != "AI recommended not applying (65/100)" {
+		t.Fatalf("apply diagnostic did not take precedence over unknown: %q", got)
+	}
+	if got := vacancyEvaluationRejectReason(VacancyEvaluation{Score: 65, Apply: true, HardRequirements: unknown}, 65); got != "hard requirements could not be verified: higher education" {
+		t.Fatalf("unexpected unknown diagnostic: %q", got)
 	}
 	if got := vacancyEvaluationRejectReason(VacancyEvaluation{Score: 72, Apply: true, HardRequirements: []HardRequirementEvaluation{{Requirement: "minimum 3 years commercial Python experience", Category: hardRequirementCategoryOther, Status: hardRequirementStatusMissing, VacancyEvidence: "3 years required", CandidateEvidence: "Explicitly no such experience"}}}, 65); got != "hard requirements not met: minimum 3 years commercial Python experience" {
 		t.Fatalf("unexpected hard requirement diagnostic: %q", got)

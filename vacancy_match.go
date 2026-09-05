@@ -118,11 +118,14 @@ func vacancyDecision(evaluation VacancyEvaluation, minScore int) VacancyDecision
 	if len(hardRequirementsMissing(evaluation)) > 0 {
 		return VacancyReject
 	}
+	if !evaluation.Apply {
+		return VacancyReject
+	}
+	if evaluation.Score < minScore {
+		return VacancyReject
+	}
 	if len(hardRequirementsUnknown(evaluation)) > 0 {
 		return VacancyReviewRequired
-	}
-	if !evaluation.Apply || evaluation.Score < minScore {
-		return VacancyReject
 	}
 	return VacancyMatch
 }
@@ -1115,14 +1118,17 @@ func vacancyEvaluationRejectReason(evaluation VacancyEvaluation, minScore int) s
 	if len(missing) > 0 {
 		return "hard requirements not met: " + strings.Join(missing, ", ")
 	}
+	if !evaluation.Apply {
+		return fmt.Sprintf("AI recommended not applying (%d/100)", evaluation.Score)
+	}
+	if evaluation.Score < minScore {
+		return fmt.Sprintf("AI score below threshold (%d/100, minimum %d)", evaluation.Score, minScore)
+	}
 	unknown := hardRequirementsUnknown(evaluation)
 	if len(unknown) > 0 {
 		return "hard requirements could not be verified: " + strings.Join(unknown, ", ")
 	}
-	if !evaluation.Apply {
-		return fmt.Sprintf("AI recommended not applying (%d/100)", evaluation.Score)
-	}
-	return fmt.Sprintf("AI score below threshold (%d/100, minimum %d)", evaluation.Score, minScore)
+	return "vacancy does not meet application criteria"
 }
 
 func (c *AIClient) EvaluateVacancy(input vacancyEvaluationInput) (VacancyEvaluation, error) {
