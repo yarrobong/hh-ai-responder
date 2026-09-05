@@ -12,3 +12,4 @@ work_experience.md
 /*.html
 /candidate.local.md
 /hh-ai-responder.exe
+.hh-already-responded.json

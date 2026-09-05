@@ -65,40 +65,41 @@ var (
 )
 
 type Config struct {
-	SearchURL               string
-	CookiesPath             string
-	LogLevel                string
-	Resume                  string
-	MaxResponses            int
-	AIBaseURL               string
-	AIModel                 string
-	AIAPIKey                string
-	AITimeout               time.Duration
-	AIConnectTimeout        time.Duration
-	AIAttempts              int
-	ExtraLetterPrompt       string
-	ExtraTestSolutionPrompt string
-	RequestInterval         time.Duration
-	OutputPath              string
-	Contacts                string
-	ListResumes             bool
-	ForceLetter             bool
-	ExtraChatReplyPrompt    string
-	GithubURL               string
-	DryRun                  bool
-	AutoApply               bool
-	AutoChat                bool
-	AutoTouch               bool
-	AutoJobStatus           bool
-	ChatMode                string
-	MinSalary               int
-	MinSalaryCurrency       string
-	IncludeKeywords         []string
-	ExcludeKeywords         []string
-	MinMatchScore           int
-	RunOnce                 bool
-	MaxVacanciesPerRun      int
-	MaxApplicationsPerRun   int
+	SearchURL                 string
+	CookiesPath               string
+	LogLevel                  string
+	Resume                    string
+	MaxResponses              int
+	AIBaseURL                 string
+	AIModel                   string
+	AIAPIKey                  string
+	AITimeout                 time.Duration
+	AIConnectTimeout          time.Duration
+	AIAttempts                int
+	ExtraLetterPrompt         string
+	ExtraTestSolutionPrompt   string
+	RequestInterval           time.Duration
+	OutputPath                string
+	Contacts                  string
+	ListResumes               bool
+	ForceLetter               bool
+	ExtraChatReplyPrompt      string
+	GithubURL                 string
+	DryRun                    bool
+	AutoApply                 bool
+	AutoChat                  bool
+	AutoTouch                 bool
+	AutoJobStatus             bool
+	ChatMode                  string
+	MinSalary                 int
+	MinSalaryCurrency         string
+	IncludeKeywords           []string
+	ExcludeKeywords           []string
+	MinMatchScore             int
+	RunOnce                   bool
+	MaxVacanciesPerRun        int
+	MaxApplicationsPerRun     int
+	AlreadyRespondedStatePath string
 }
 
 type CandidateContext struct {
@@ -1511,54 +1512,57 @@ type HHResponse struct {
 }
 
 type HHAIResponder struct {
-	ctx                     context.Context
-	baseURL                 *url.URL
-	searchParams            url.Values
-	cookiesPath             string
-	maxResponses            int
-	client                  *http.Client
-	jar                     *MemoryPersistentJar
-	requester               *HHRequester
-	resumeHash              string
-	resumeExperience        string
-	resumeFacts             ResumeFacts
-	latestResumeHash        string
-	resumes                 []ResumeItem
-	userId                  int64
-	firstName               string
-	middleName              string
-	lastName                string
-	email                   string
-	ai                      *AIClient
-	extraLetterPrompt       string
-	extraTestSolutionPrompt string
-	contacts                string
-	outputPath              string
-	forceLetter             bool
-	extraChatReplyPrompt    string
-	githubURL               string
-	dryRun                  bool
-	autoApply               bool
-	autoChat                bool
-	autoTouch               bool
-	autoJobStatus           bool
-	chatMode                string
-	minSalary               int
-	minSalaryCurrency       string
-	includeKeywords         []string
-	excludeKeywords         []string
-	minMatchScore           int
-	runOnce                 bool
-	maxVacanciesPerRun      int
-	maxApplicationsPerRun   int
-	chatURL                 string
-	resumeProfileFrontURL   string
-	ignoredChats            []int64
-	preflightCache          map[int]VacancyPreflight
+	ctx                       context.Context
+	baseURL                   *url.URL
+	searchParams              url.Values
+	cookiesPath               string
+	maxResponses              int
+	client                    *http.Client
+	jar                       *MemoryPersistentJar
+	requester                 *HHRequester
+	resumeHash                string
+	resumeExperience          string
+	resumeFacts               ResumeFacts
+	latestResumeHash          string
+	resumes                   []ResumeItem
+	userId                    int64
+	firstName                 string
+	middleName                string
+	lastName                  string
+	email                     string
+	ai                        *AIClient
+	extraLetterPrompt         string
+	extraTestSolutionPrompt   string
+	contacts                  string
+	outputPath                string
+	forceLetter               bool
+	extraChatReplyPrompt      string
+	githubURL                 string
+	dryRun                    bool
+	autoApply                 bool
+	autoChat                  bool
+	autoTouch                 bool
+	autoJobStatus             bool
+	chatMode                  string
+	minSalary                 int
+	minSalaryCurrency         string
+	includeKeywords           []string
+	excludeKeywords           []string
+	minMatchScore             int
+	runOnce                   bool
+	maxVacanciesPerRun        int
+	maxApplicationsPerRun     int
+	alreadyRespondedStatePath string
+	alreadyResponded          map[int]struct{}
+	chatURL                   string
+	resumeProfileFrontURL     string
+	ignoredChats              []int64
+	preflightCache            map[int]VacancyPreflight
 
-	eventWriter io.Writer
-	eventMu     sync.Mutex
-	preflightMu sync.Mutex
+	eventWriter        io.Writer
+	eventMu            sync.Mutex
+	preflightMu        sync.Mutex
+	alreadyRespondedMu sync.Mutex
 }
 
 type HHRequester struct {
@@ -1793,35 +1797,36 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 	}
 
 	responder := &HHAIResponder{
-		ctx:                     ctx,
-		baseURL:                 baseURL,
-		cookiesPath:             cfg.CookiesPath,
-		maxResponses:            cfg.MaxResponses,
-		client:                  client,
-		jar:                     jar,
-		resumeHash:              cfg.Resume,
-		ai:                      NewAIClient(ctx, cfg.AIBaseURL, cfg.AIModel, cfg.AIAPIKey, cfg.AITimeout, cfg.AIConnectTimeout, cfg.AIAttempts),
-		extraLetterPrompt:       cfg.ExtraLetterPrompt,
-		extraTestSolutionPrompt: cfg.ExtraTestSolutionPrompt,
-		contacts:                cfg.Contacts,
-		outputPath:              cfg.OutputPath,
-		forceLetter:             cfg.ForceLetter,
-		extraChatReplyPrompt:    cfg.ExtraChatReplyPrompt,
-		githubURL:               cfg.GithubURL,
-		dryRun:                  cfg.DryRun,
-		autoApply:               cfg.AutoApply,
-		autoChat:                cfg.AutoChat,
-		autoTouch:               cfg.AutoTouch,
-		autoJobStatus:           cfg.AutoJobStatus,
-		chatMode:                cfg.ChatMode,
-		minSalary:               cfg.MinSalary,
-		minSalaryCurrency:       cfg.MinSalaryCurrency,
-		includeKeywords:         append([]string(nil), cfg.IncludeKeywords...),
-		excludeKeywords:         append([]string(nil), cfg.ExcludeKeywords...),
-		minMatchScore:           cfg.MinMatchScore,
-		runOnce:                 cfg.RunOnce,
-		maxVacanciesPerRun:      cfg.MaxVacanciesPerRun,
-		maxApplicationsPerRun:   cfg.MaxApplicationsPerRun,
+		ctx:                       ctx,
+		baseURL:                   baseURL,
+		cookiesPath:               cfg.CookiesPath,
+		maxResponses:              cfg.MaxResponses,
+		client:                    client,
+		jar:                       jar,
+		resumeHash:                cfg.Resume,
+		ai:                        NewAIClient(ctx, cfg.AIBaseURL, cfg.AIModel, cfg.AIAPIKey, cfg.AITimeout, cfg.AIConnectTimeout, cfg.AIAttempts),
+		extraLetterPrompt:         cfg.ExtraLetterPrompt,
+		extraTestSolutionPrompt:   cfg.ExtraTestSolutionPrompt,
+		contacts:                  cfg.Contacts,
+		outputPath:                cfg.OutputPath,
+		forceLetter:               cfg.ForceLetter,
+		extraChatReplyPrompt:      cfg.ExtraChatReplyPrompt,
+		githubURL:                 cfg.GithubURL,
+		dryRun:                    cfg.DryRun,
+		autoApply:                 cfg.AutoApply,
+		autoChat:                  cfg.AutoChat,
+		autoTouch:                 cfg.AutoTouch,
+		autoJobStatus:             cfg.AutoJobStatus,
+		chatMode:                  cfg.ChatMode,
+		minSalary:                 cfg.MinSalary,
+		minSalaryCurrency:         cfg.MinSalaryCurrency,
+		includeKeywords:           append([]string(nil), cfg.IncludeKeywords...),
+		excludeKeywords:           append([]string(nil), cfg.ExcludeKeywords...),
+		minMatchScore:             cfg.MinMatchScore,
+		runOnce:                   cfg.RunOnce,
+		maxVacanciesPerRun:        cfg.MaxVacanciesPerRun,
+		maxApplicationsPerRun:     cfg.MaxApplicationsPerRun,
+		alreadyRespondedStatePath: cfg.AlreadyRespondedStatePath,
 	}
 
 	responder.requester = NewHHRequester(ctx, client, cfg.RequestInterval)
@@ -2901,6 +2906,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 		logger.Info("Automatic applications disabled by configuration")
 		return nil
 	}
+	r.loadAlreadyRespondedState()
 	r.clearVacancyPreflightCache()
 
 	summary := RunSummaryResult{Type: "run_summary"}
@@ -2937,6 +2943,11 @@ func (r *HHAIResponder) ApplyVacancies() error {
 				return err
 			}
 			summary.VacanciesProcessed++
+			if r.isAlreadyResponded(vacancy.ID) {
+				summary.PreviouslyRespondedSkipped++
+				r.skipVacancy(vacancy, vacancy.Links["desktop"], "previously confirmed already responded", nil)
+				continue
+			}
 			if len(vacancy.UserLabels) > 0 || vacancy.Archived || vacancy.ResponseURL != "" {
 				summary.DeterministicSkipped++
 				r.skipVacancy(vacancy, vacancy.Links["desktop"], "already labeled, archived, or already responded", nil)
@@ -3047,6 +3058,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 				continue
 			}
 			r.writeEvent(preflight.event())
+			r.rememberConfirmedPreflight(preflight)
 
 			preflightDecision, preflightReason := vacancyPreflightDecision(preflight)
 			if preflightDecision == VacancyReviewRequired {
@@ -3657,6 +3669,7 @@ func parseConfig() (Config, error) {
 	flag.BoolVar(&cfg.RunOnce, "run-once", false, "Выполнить разрешённые задачи один раз и завершиться")
 	flag.IntVar(&cfg.MaxVacanciesPerRun, "max-vacancies-per-run", 20, "Максимум вакансий для pipeline за один проход; 0 — без лимита")
 	flag.IntVar(&cfg.MaxApplicationsPerRun, "max-applications-per-run", 10, "Максимум успешных/предпросмотренных откликов за один проход; 0 — без лимита")
+	flag.StringVar(&cfg.AlreadyRespondedStatePath, "already-responded-state", filepath.Join(wd, ".hh-already-responded.json"), "Локальный JSON-файл подтверждённых предыдущих откликов")
 	flag.Parse()
 
 	_ = loadDotEnv(".env")
@@ -3671,6 +3684,9 @@ func parseConfig() (Config, error) {
 	}
 	if !flags["r"] {
 		cfg.Resume = getEnv("HH_RESUME", cfg.Resume)
+	}
+	if !flags["already-responded-state"] {
+		cfg.AlreadyRespondedStatePath = getEnv("HH_ALREADY_RESPONDED_STATE", cfg.AlreadyRespondedStatePath)
 	}
 	if !flags["ai-base-url"] {
 		cfg.AIBaseURL = getEnv("HH_AI_BASE_URL", cfg.AIBaseURL)

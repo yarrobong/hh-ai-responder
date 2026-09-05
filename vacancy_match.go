@@ -59,19 +59,20 @@ type VacancyMatchResult struct {
 }
 
 type RunSummaryResult struct {
-	Type                    string `json:"type"`
-	VacanciesSeen           int    `json:"vacancies_seen"`
-	VacanciesFetched        int    `json:"vacancies_fetched"`
-	VacanciesProcessed      int    `json:"vacancies_processed"`
-	DeterministicSkipped    int    `json:"deterministic_skipped"`
-	AIEvaluated             int    `json:"ai_evaluated"`
-	Matched                 int    `json:"matched"`
-	ReviewRequired          int    `json:"review_required"`
-	WouldApply              int    `json:"would_apply"`
-	Applied                 int    `json:"applied"`
-	Errors                  int    `json:"errors"`
-	VacancyLimitSkipped     int    `json:"vacancy_limit_skipped,omitempty"`
-	ApplicationLimitSkipped int    `json:"application_limit_skipped,omitempty"`
+	Type                       string `json:"type"`
+	VacanciesSeen              int    `json:"vacancies_seen"`
+	VacanciesFetched           int    `json:"vacancies_fetched"`
+	VacanciesProcessed         int    `json:"vacancies_processed"`
+	PreviouslyRespondedSkipped int    `json:"previously_responded_skipped"`
+	DeterministicSkipped       int    `json:"deterministic_skipped"`
+	AIEvaluated                int    `json:"ai_evaluated"`
+	Matched                    int    `json:"matched"`
+	ReviewRequired             int    `json:"review_required"`
+	WouldApply                 int    `json:"would_apply"`
+	Applied                    int    `json:"applied"`
+	Errors                     int    `json:"errors"`
+	VacancyLimitSkipped        int    `json:"vacancy_limit_skipped,omitempty"`
+	ApplicationLimitSkipped    int    `json:"application_limit_skipped,omitempty"`
 }
 
 type VacancyDecision string
