@@ -109,6 +109,15 @@ type CandidateContext struct {
 	Contacts    string
 }
 
+// HardRequirementCandidate is the only hard-requirement shape accepted from
+// the AI. Status and candidate evidence are derived locally from trusted
+// candidate/vacancy data.
+type HardRequirementCandidate struct {
+	Requirement     string `json:"requirement"`
+	Category        string `json:"category"`
+	VacancyEvidence string `json:"vacancy_evidence"`
+}
+
 // HardRequirementEvaluation is an evidence-backed assessment of one
 // mandatory vacancy requirement. The evaluator is deliberately conservative:
 // unknown means that the available candidate data is insufficient to decide.
@@ -118,6 +127,18 @@ type HardRequirementEvaluation struct {
 	Status            string `json:"status"`
 	VacancyEvidence   string `json:"vacancy_evidence"`
 	CandidateEvidence string `json:"candidate_evidence"`
+}
+
+// VacancyEvaluationAIResponse is the structured response contract used by
+// the model. Hard requirements are extraction candidates only; the final
+// HardRequirementEvaluation is constructed locally.
+type VacancyEvaluationAIResponse struct {
+	Score            int                        `json:"score"`
+	Apply            bool                       `json:"apply"`
+	Reasons          []string                   `json:"reasons"`
+	Missing          []string                   `json:"missing"`
+	HardRequirements []HardRequirementCandidate `json:"hard_requirements"`
+	StrongMatch      []string                   `json:"strong_match,omitempty"`
 }
 
 type Vacancy struct {

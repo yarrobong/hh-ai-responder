@@ -274,7 +274,7 @@ func TestVacancyEvaluationPromptContainsCandidateAndVacancyFacts(t *testing.T) {
 			t.Errorf("evaluation prompt does not contain %q: %s", expected, userPrompt)
 		}
 	}
-	for _, expected := range []string{"только валидный JSON", "Не выдумывай", "основной стек подходит", "Название должности НЕ подтверждает образование", "hard_requirements", "candidate_evidence", "vacancy_evidence"} {
+	for _, expected := range []string{"только валидный JSON", "Не выдумывай", "основной стек подходит", "Название должности НЕ подтверждает образование", "hard_requirements", "Не добавляй status или candidate_evidence", "vacancy_evidence"} {
 		if !strings.Contains(systemPrompt, expected) {
 			t.Errorf("evaluation system prompt does not contain %q: %s", expected, systemPrompt)
 		}
@@ -663,6 +663,16 @@ func TestMistralStructuredVacancyUsesStrictJSONSchema(t *testing.T) {
 			if !ok || items["type"] != "object" || items["additionalProperties"] != false {
 				t.Fatalf("hard_requirements items must be strict objects: %v", arraySchema["items"])
 			}
+			itemProperties, ok := items["properties"].(map[string]any)
+			if !ok {
+				t.Fatalf("hard_requirements item properties have unexpected type: %T", items["properties"])
+			}
+			if _, present := itemProperties["status"]; present {
+				t.Fatal("AI hard-requirement schema must not contain status")
+			}
+			if _, present := itemProperties["candidate_evidence"]; present {
+				t.Fatal("AI hard-requirement schema must not contain candidate_evidence")
+			}
 		} else if !ok || items["type"] != "string" {
 			t.Fatalf("%s items must be strings: %v", field, arraySchema["items"])
 		}
@@ -917,7 +927,7 @@ func TestDryRunUnknownHardRequirementRequiresReview(t *testing.T) {
 	defer hhServer.Close()
 
 	aiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, aiCompletionResponse(`{"score":92,"apply":true,"reasons":["Python matches"],"missing":[],"hard_requirements":[{"requirement":"высшее образование","category":"education","status":"unknown","vacancy_evidence":"Требуется высшее образование","candidate_evidence":"not provided"},{"requirement":"офис в Ташкенте","category":"location","status":"unknown","vacancy_evidence":"Работа в офисе Ташкента","candidate_evidence":"not provided"}]}`))
+		_, _ = io.WriteString(w, aiCompletionResponse(`{"score":92,"apply":true,"reasons":["Python matches"],"missing":[],"hard_requirements":[{"requirement":"высшее образование","category":"education","vacancy_evidence":"Требуется высшее образование"},{"requirement":"офис в Ташкенте","category":"location","vacancy_evidence":"офисе Ташкенте"}]}`))
 	}))
 	defer aiServer.Close()
 

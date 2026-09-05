@@ -256,17 +256,14 @@ func buildVacancyEvaluationPrompt(input vacancyEvaluationInput) (string, string)
 		"Не выдумывай опыт, навыки, образование, проекты, зарплату, локацию или доступность кандидата.",
 		"Hard requirement — обязательное требование вакансии: минимальный коммерческий опыт N лет; конкретная технология, если явно написано «обязательно»; обязательное образование; обязательный язык с конкретным уровнем; обязательная локация или офисный формат, если кандидат явно ему не соответствует; обязательная лицензия, допуск или гражданство, только если это явно написано.",
 		"В hard_requirements включай только обязательные требования. Желательные требования («будет плюсом», «желательно», «будет преимуществом») не включай туда: они могут быть только в missing или reasons и сами по себе не могут привести к отказу.",
-		"Каждый hard requirement опиши объектом с полями requirement, category, status, vacancy_evidence и candidate_evidence.",
-		"category может быть только education, location, experience_years, skill, language, license, citizenship или other; status может быть только met, missing или unknown.",
-		"vacancy_evidence — короткий конкретный фрагмент или перефразирование требования из вакансии, не пустая строка. Не объявляй требование hard без такого подтверждения.",
-		"Для status=met или status=missing candidate_evidence обязателен и должен ссылаться на конкретный факт из CandidateContext. Для status=unknown укажи candidate_evidence как \"not provided\"; это не является доказательством.",
-		"hard_requirements со status=missing означают явное противоречие обязательному требованию с конкретным фактом кандидата; отсутствие упоминания факта не является missing.",
-		"hard_requirements со status=unknown означают, что требование нельзя подтвердить или опровергнуть по переданным данным кандидата.",
-		"Отсутствие навыка, образования, локации или другого факта в CandidateContext — это UNKNOWN, а не доказанное отсутствие.",
-		"Если вакансия говорит «без опыта» или «опыт не требуется», это отсутствие минимального требования, а не максимальный допустимый опыт; наличие опыта кандидата не является hard mismatch.",
-		"Если указан офис в городе, а локация кандидата неизвестна, используй hard_requirements с status=unknown. Известную другую локацию не считай mismatch без явного требования жить именно там или без явного отказа от релокации; при неизвестной доступности релокации используй unknown.",
-		"Образование не передано в CandidateContext: обязательное образование всегда unknown. Не создавай для него met или missing.",
-		"Надежная структурированная длительность общего или релевантного опыта не передана. Не вычисляй и не округляй стаж по датам, описанию или названию должности; требование N лет при отсутствии явной длительности в CandidateContext — unknown.",
+		"Каждый hard requirement опиши объектом только с полями requirement, category и vacancy_evidence. Не добавляй status или candidate_evidence.",
+		"category может быть только education, location, experience_years, skill, language, license, citizenship или other.",
+		"vacancy_evidence — короткий точный фрагмент из описания вакансии или структурированного поля HH, без перефразирования. Не объявляй требование hard без такого подтверждения.",
+		"Для location используй точный фрагмент из Area.Name или WorkSchedule; для experience_years — из WorkExperience. Для остальных категорий используй точный фрагмент из описания.",
+		"Не создавай требования, которых нет в вакансии. Не превращай отсутствие информации в вакансии в образование, лицензию, гражданство или другой hard requirement.",
+		"Если вакансия говорит «без опыта» или «опыт не требуется», не создавай hard requirement experience_years.",
+		"Если вакансия говорит «без опыта» или «опыт не требуется», наличие опыта кандидата не является hard mismatch.",
+		"Не пытайся определить status или candidate_evidence: это сделает программа локально по фактам кандидата.",
 		"Различай подтвержденные навыки, смежные навыки, неизвестные технологии и критические обязательные требования.",
 		"Отсутствие второстепенного инструмента само по себе не должно давать отказ, если основной стек подходит.",
 		"Обязательный senior-level опыт, которого нет в данных кандидата, существенно снижает оценку.",
@@ -284,7 +281,7 @@ func buildVacancyEvaluationPrompt(input vacancyEvaluationInput) (string, string)
 		"reasons и strong_match должны содержать только подтвержденные факты.",
 		"Не округляй и не подменяй числовую длительность опыта: не пиши «1 год», «2 года» или «3 года» как факт, если такая длительность явно не указана в CandidateContext.",
 		"Верни только валидный JSON без Markdown и любого текста вне JSON.",
-		`Формат: {"score":82,"apply":true,"reasons":["..."],"missing":["..."],"hard_requirements":[{"requirement":"...","category":"skill","status":"unknown","vacancy_evidence":"...","candidate_evidence":"not provided"}],"strong_match":["..."]}`,
+		`Формат: {"score":82,"apply":true,"reasons":["..."],"missing":["..."],"hard_requirements":[{"requirement":"FastAPI","category":"skill","vacancy_evidence":"FastAPI обязателен"}],"strong_match":["..."]}`,
 	}, "\n")
 
 	includeKeywords := strings.Join(input.IncludeKeywords, ", ")
@@ -365,7 +362,7 @@ func vacancyEvaluationJSONSchema() *ChatJSONSchema {
 					"items": map[string]any{
 						"type":                 "object",
 						"additionalProperties": false,
-						"required":             []string{"requirement", "category", "status", "vacancy_evidence", "candidate_evidence"},
+						"required":             []string{"requirement", "category", "vacancy_evidence"},
 						"properties": map[string]any{
 							"requirement": map[string]any{"type": "string"},
 							"category": map[string]any{
@@ -381,12 +378,7 @@ func vacancyEvaluationJSONSchema() *ChatJSONSchema {
 									hardRequirementCategoryOther,
 								},
 							},
-							"status": map[string]any{
-								"type": "string",
-								"enum": []string{hardRequirementStatusMet, hardRequirementStatusMissing, hardRequirementStatusUnknown},
-							},
-							"vacancy_evidence":   map[string]any{"type": "string"},
-							"candidate_evidence": map[string]any{"type": "string"},
+							"vacancy_evidence": map[string]any{"type": "string"},
 						},
 					},
 				},
@@ -401,39 +393,54 @@ func vacancyEvaluationJSONSchema() *ChatJSONSchema {
 	}
 }
 
-func parseVacancyEvaluationJSON(answer string) (VacancyEvaluation, error) {
+func parseVacancyEvaluationJSON(answer string) (VacancyEvaluationAIResponse, error) {
 	var raw map[string]json.RawMessage
 	strictInput := json.NewDecoder(strings.NewReader(answer))
 	if err := strictInput.Decode(&raw); err != nil {
-		return VacancyEvaluation{}, fmt.Errorf("invalid vacancy evaluation JSON: %w", err)
+		return VacancyEvaluationAIResponse{}, fmt.Errorf("invalid vacancy evaluation JSON: %w", err)
 	}
 	var trailing any
 	if err := strictInput.Decode(&trailing); err != io.EOF {
-		return VacancyEvaluation{}, errors.New("invalid vacancy evaluation JSON: trailing data")
+		return VacancyEvaluationAIResponse{}, errors.New("invalid vacancy evaluation JSON: trailing data")
 	}
 	for _, field := range []string{"score", "apply", "reasons", "missing", "hard_requirements"} {
 		if value, ok := raw[field]; !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
-			return VacancyEvaluation{}, fmt.Errorf("vacancy evaluation is incomplete: missing %s", field)
+			return VacancyEvaluationAIResponse{}, fmt.Errorf("vacancy evaluation is incomplete: missing %s", field)
 		}
 	}
 	if err := validateHardRequirementJSONShape(raw["hard_requirements"]); err != nil {
-		return VacancyEvaluation{}, err
+		return VacancyEvaluationAIResponse{}, err
 	}
 
 	encoded, err := json.Marshal(raw)
 	if err != nil {
-		return VacancyEvaluation{}, fmt.Errorf("invalid vacancy evaluation JSON: %w", err)
+		return VacancyEvaluationAIResponse{}, fmt.Errorf("invalid vacancy evaluation JSON: %w", err)
 	}
-	var evaluation VacancyEvaluation
+	var evaluation VacancyEvaluationAIResponse
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&evaluation); err != nil {
-		return VacancyEvaluation{}, fmt.Errorf("invalid vacancy evaluation JSON: %w", err)
+		return VacancyEvaluationAIResponse{}, fmt.Errorf("invalid vacancy evaluation JSON: %w", err)
 	}
-	if err := validateVacancyEvaluation(evaluation); err != nil {
-		return VacancyEvaluation{}, err
+	if err := validateVacancyEvaluationAI(evaluation); err != nil {
+		return VacancyEvaluationAIResponse{}, err
 	}
 	return evaluation, nil
+}
+
+func validateVacancyEvaluationAI(evaluation VacancyEvaluationAIResponse) error {
+	if evaluation.Score < 0 || evaluation.Score > 100 {
+		return fmt.Errorf("vacancy evaluation score must be between 0 and 100, got %d", evaluation.Score)
+	}
+	if evaluation.Reasons == nil || evaluation.Missing == nil || evaluation.HardRequirements == nil {
+		return errors.New("vacancy evaluation is incomplete: reasons, missing, and hard_requirements are required arrays")
+	}
+	for _, requirement := range evaluation.HardRequirements {
+		if err := validateHardRequirementCandidateShape(requirement); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validateVacancyEvaluation(evaluation VacancyEvaluation) error {
@@ -464,7 +471,7 @@ func validateHardRequirementJSONShape(raw json.RawMessage) error {
 		if err := json.Unmarshal(rawRequirement, &fields); err != nil {
 			return fmt.Errorf("invalid hard_requirements[%d]: %w", index, err)
 		}
-		for _, field := range []string{"requirement", "category", "status", "vacancy_evidence", "candidate_evidence"} {
+		for _, field := range []string{"requirement", "category", "vacancy_evidence"} {
 			value, ok := fields[field]
 			if !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
 				return fmt.Errorf("hard_requirements[%d] is missing %s", index, field)
@@ -474,12 +481,25 @@ func validateHardRequirementJSONShape(raw json.RawMessage) error {
 		if err != nil {
 			return fmt.Errorf("invalid hard_requirements[%d]: %w", index, err)
 		}
-		var requirement HardRequirementEvaluation
+		var requirement HardRequirementCandidate
 		decoder := json.NewDecoder(bytes.NewReader(encoded))
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&requirement); err != nil {
 			return fmt.Errorf("invalid hard_requirements[%d]: %w", index, err)
 		}
+	}
+	return nil
+}
+
+func validateHardRequirementCandidateShape(requirement HardRequirementCandidate) error {
+	if strings.TrimSpace(requirement.Requirement) == "" {
+		return errors.New("hard requirement candidate must have a non-empty requirement")
+	}
+	if _, ok := hardRequirementCategories[requirement.Category]; !ok {
+		return fmt.Errorf("invalid hard requirement category %q", requirement.Category)
+	}
+	if strings.TrimSpace(requirement.VacancyEvidence) == "" {
+		return fmt.Errorf("hard requirement candidate %q has empty vacancy_evidence", requirement.Requirement)
 	}
 	return nil
 }
@@ -503,8 +523,152 @@ func validateHardRequirementShape(requirement HardRequirementEvaluation) error {
 	return nil
 }
 
-// validateHardRequirements applies rules that cannot safely be delegated to
-// an AI model. Its error is fed back into the structured AI retry loop.
+// deriveHardRequirementStatus is intentionally conservative. Candidate data
+// does not currently contain structured education, experience duration,
+// relocation, language, license, or citizenship facts, so absence of a fact
+// is never turned into a fabricated mismatch.
+func deriveHardRequirementStatus(candidate CandidateContext, vacancy Vacancy, requirement HardRequirementCandidate) (string, string) {
+	unknown := "not provided"
+	switch requirement.Category {
+	case hardRequirementCategoryEducation:
+		return hardRequirementStatusUnknown, unknown
+	case hardRequirementCategoryExperienceYears:
+		return hardRequirementStatusUnknown, unknown
+	case hardRequirementCategoryLocation:
+		if candidate.Location != "" && vacancy.Area.Name != "" && locationsMatch(candidate.Location, vacancy.Area.Name) {
+			return hardRequirementStatusMet, "Candidate location: " + candidate.Location
+		}
+		return hardRequirementStatusUnknown, unknown
+	case hardRequirementCategorySkill, hardRequirementCategoryLanguage, hardRequirementCategoryOther:
+		if candidateRequirementMentioned(candidate, requirement.Requirement) {
+			return hardRequirementStatusMet, "Candidate skills/experience mention: " + requirement.Requirement
+		}
+		if explicitNegativeCandidateFact(candidate, requirement.Requirement) {
+			return hardRequirementStatusMissing, "Explicit negative candidate fact for: " + requirement.Requirement
+		}
+		return hardRequirementStatusUnknown, unknown
+	case hardRequirementCategoryLicense, hardRequirementCategoryCitizenship:
+		return hardRequirementStatusUnknown, unknown
+	default:
+		return hardRequirementStatusUnknown, unknown
+	}
+}
+
+func deriveHardRequirements(candidate CandidateContext, vacancy Vacancy, description string, candidates []HardRequirementCandidate) []HardRequirementEvaluation {
+	result := make([]HardRequirementEvaluation, 0, len(candidates))
+	for _, requirement := range candidates {
+		if err := validateHardRequirementCandidateShape(requirement); err != nil {
+			// The structured parser normally catches this. Keep the local stage
+			// fail-closed if it is called directly in a test or future code.
+			if logger != nil {
+				logger.Debug("Discard hard requirement: invalid candidate: %v", err)
+			}
+			continue
+		}
+		if vacancyDoesNotRequireExperience(vacancy.WorkExperience) && requirement.Category == hardRequirementCategoryExperienceYears {
+			if logger != nil {
+				logger.Debug("Discard hard requirement: vacancy does not require experience: %q", requirement.Requirement)
+			}
+			continue
+		}
+		if !hardRequirementEvidencePresent(vacancy, description, requirement) {
+			if logger != nil {
+				logger.Debug("Discard hard requirement: unsupported vacancy evidence: %q", requirement.Requirement)
+			}
+			continue
+		}
+		if isOptionalRequirementCandidate(vacancy, description, requirement) {
+			if logger != nil {
+				logger.Debug("Discard hard requirement: optional requirement: %q", requirement.Requirement)
+			}
+			continue
+		}
+
+		status, candidateEvidence := deriveHardRequirementStatus(candidate, vacancy, requirement)
+		result = append(result, HardRequirementEvaluation{
+			Requirement:       strings.TrimSpace(requirement.Requirement),
+			Category:          requirement.Category,
+			Status:            status,
+			VacancyEvidence:   strings.TrimSpace(requirement.VacancyEvidence),
+			CandidateEvidence: candidateEvidence,
+		})
+	}
+	return result
+}
+
+func hardRequirementEvidencePresent(vacancy Vacancy, description string, requirement HardRequirementCandidate) bool {
+	evidence := requirement.VacancyEvidence
+	switch requirement.Category {
+	case hardRequirementCategoryLocation:
+		return containsNormalizedText(vacancy.Area.Name, evidence) ||
+			containsNormalizedText(vacancy.WorkSchedule, evidence) ||
+			containsNormalizedText(description, evidence)
+	case hardRequirementCategoryExperienceYears:
+		return containsNormalizedText(vacancy.WorkExperience, evidence) ||
+			containsNormalizedText(description, evidence)
+	default:
+		return containsNormalizedText(description, evidence)
+	}
+}
+
+func isOptionalRequirementCandidate(vacancy Vacancy, description string, requirement HardRequirementCandidate) bool {
+	source := description
+	if requirement.Category == hardRequirementCategoryLocation {
+		source = strings.Join([]string{vacancy.Area.Name, vacancy.WorkSchedule, description}, " | ")
+	}
+	if requirement.Category == hardRequirementCategoryExperienceYears {
+		source = strings.Join([]string{vacancy.WorkExperience, description}, " | ")
+	}
+	normalizedSource := normalizeEvidenceText(source)
+	normalizedEvidence := normalizeEvidenceText(requirement.VacancyEvidence)
+	if index := strings.Index(normalizedSource, normalizedEvidence); index >= 0 {
+		start := 0
+		for i := index - 1; i >= 0; i-- {
+			if strings.ContainsRune(".!?;|", rune(normalizedSource[i])) {
+				start = i + 1
+				break
+			}
+		}
+		end := len(normalizedSource)
+		for i := index + len(normalizedEvidence); i < len(normalizedSource); i++ {
+			if strings.ContainsRune(".!?;|", rune(normalizedSource[i])) {
+				end = i
+				break
+			}
+		}
+		return containsOptionalMarker(normalizedSource[start:end])
+	}
+	return containsOptionalMarker(normalizeEvidenceText(requirement.Requirement))
+}
+
+func containsOptionalMarker(text string) bool {
+	for _, marker := range []string{
+		"желательно", "будет плюсом", "будет преимуществом", "приветствуется",
+		"nice to have", "plus", "optional", "preferred", "bonus",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeEvidenceText(value string) string {
+	return strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(value)), " "))
+}
+
+func containsNormalizedText(haystack, needle string) bool {
+	needle = normalizeEvidenceText(needle)
+	return needle != "" && strings.Contains(normalizeEvidenceText(haystack), needle)
+}
+
+func candidateRequirementMentioned(candidate CandidateContext, requirement string) bool {
+	return containsNormalizedText(candidate.Skills, requirement) || containsNormalizedText(candidate.Experience, requirement)
+}
+
+// validateHardRequirements is retained for validating already-derived result
+// objects. AI extraction no longer calls it, so semantic normalization errors
+// cannot trigger a whole-response retry.
 func validateHardRequirements(candidate CandidateContext, vacancy Vacancy, evaluation VacancyEvaluation) error {
 	if err := validateVacancyEvaluation(evaluation); err != nil {
 		return err
@@ -687,22 +851,28 @@ func (c *AIClient) EvaluateVacancy(input vacancyEvaluationInput) (VacancyEvaluat
 		return VacancyEvaluation{}, err
 	}
 	systemPrompt, userPrompt := buildVacancyEvaluationPrompt(input)
-	var evaluation VacancyEvaluation
-	_, err := c.ChatStructuredWithSchema(systemPrompt, userPrompt, 1024, 0.1, vacancyEvaluationJSONSchema(), func(response string) error {
-		parsed, err := parseVacancyEvaluationJSON(response)
+	var response VacancyEvaluationAIResponse
+	_, err := c.ChatStructuredWithSchema(systemPrompt, userPrompt, 1024, 0.1, vacancyEvaluationJSONSchema(), func(raw string) error {
+		parsed, err := parseVacancyEvaluationJSON(raw)
 		if err != nil {
 			return err
 		}
-		if err := validateHardRequirements(input.Candidate, input.Vacancy, parsed); err != nil {
-			return err
-		}
-		evaluation = parsed
+		// Only JSON/schema errors reach this validator and can trigger retry.
+		// Unsupported or optional extracted requirements are discarded below.
+		response = parsed
 		return nil
 	})
 	if err != nil {
 		return VacancyEvaluation{}, err
 	}
-	return evaluation, nil
+	return VacancyEvaluation{
+		Score:            response.Score,
+		Apply:            response.Apply,
+		Reasons:          response.Reasons,
+		Missing:          response.Missing,
+		HardRequirements: deriveHardRequirements(input.Candidate, input.Vacancy, input.Description, response.HardRequirements),
+		StrongMatch:      response.StrongMatch,
+	}, nil
 }
 
 func (c *AIClient) GenerateLetterWithEvaluation(v Vacancy, vacancyDescription string, candidate CandidateContext, evaluation VacancyEvaluation, extraPrompt string) (string, error) {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net/http"
@@ -42,7 +43,7 @@ func TestValidateHardRequirementsEducationIsAlwaysUnknown(t *testing.T) {
 	}
 }
 
-func TestEvaluateVacancyRetriesSemanticallyInvalidEducation(t *testing.T) {
+func TestEvaluateVacancyDerivesEducationLocallyWithoutSemanticRetry(t *testing.T) {
 	previousLogger := logger
 	logger = NewLogger(io.Discard, LevelDebug)
 	t.Cleanup(func() { logger = previousLogger })
@@ -52,11 +53,8 @@ func TestEvaluateVacancyRetriesSemanticallyInvalidEducation(t *testing.T) {
 
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if calls.Add(1) == 1 {
-			_, _ = io.WriteString(w, aiCompletionResponse(`{"score":90,"apply":true,"reasons":[],"missing":[],"hard_requirements":[{"requirement":"высшее образование","category":"education","status":"missing","vacancy_evidence":"Требуется высшее образование","candidate_evidence":"Образование отсутствует"}]}`))
-			return
-		}
-		_, _ = io.WriteString(w, aiCompletionResponse(`{"score":90,"apply":true,"reasons":[],"missing":[],"hard_requirements":[{"requirement":"высшее образование","category":"education","status":"unknown","vacancy_evidence":"Требуется высшее образование","candidate_evidence":"not provided"}]}`))
+		calls.Add(1)
+		_, _ = io.WriteString(w, aiCompletionResponse(`{"score":90,"apply":true,"reasons":[],"missing":[],"hard_requirements":[{"requirement":"высшее образование","category":"education","vacancy_evidence":"Требуется высшее образование"}]}`))
 	}))
 	defer server.Close()
 
@@ -65,7 +63,7 @@ func TestEvaluateVacancyRetriesSemanticallyInvalidEducation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("semantic retry failed: %v", err)
 	}
-	if calls.Load() != 2 || evaluation.HardRequirements[0].Status != hardRequirementStatusUnknown {
+	if calls.Load() != 1 || evaluation.HardRequirements[0].Status != hardRequirementStatusUnknown {
 		t.Fatalf("unexpected semantic retry result: calls=%d evaluation=%+v", calls.Load(), evaluation)
 	}
 }
@@ -147,5 +145,115 @@ func TestValidateHardRequirementsEvidenceAndOptionalRequirements(t *testing.T) {
 	grounded := testEvaluation(testHardRequirement("Python", hardRequirementCategorySkill, hardRequirementStatusMet, "Python обязателен", "Python указан в навыках"))
 	if err := validateHardRequirements(CandidateContext{Skills: "Python"}, Vacancy{}, grounded); err != nil {
 		t.Fatalf("grounded skill evidence was rejected: %v", err)
+	}
+}
+
+func TestDeriveHardRequirementsIsDeterministicAndConservative(t *testing.T) {
+	previousLogger := logger
+	logger = NewLogger(io.Discard, LevelDebug)
+	t.Cleanup(func() { logger = previousLogger })
+
+	candidate := CandidateContext{
+		Skills:   "Python, Django",
+		Location: "Екатеринбург",
+	}
+	vacancy := Vacancy{
+		Area:           NamedObject{Name: "Ташкент"},
+		WorkExperience: "Опыт 3-6 лет",
+	}
+	description := "Требуется FastAPI. Kubernetes будет плюсом. Обязательное образование (не указано в вакансии)."
+
+	requirements := []HardRequirementCandidate{
+		{Requirement: "FastAPI", Category: hardRequirementCategorySkill, VacancyEvidence: "Требуется FastAPI"},
+		{Requirement: "3+ года", Category: hardRequirementCategoryExperienceYears, VacancyEvidence: "Опыт 3-6 лет"},
+		{Requirement: "офис в Ташкенте", Category: hardRequirementCategoryLocation, VacancyEvidence: "Ташкент"},
+		{Requirement: "высшее образование", Category: hardRequirementCategoryEducation, VacancyEvidence: "Требуется высшее образование"},
+		{Requirement: "лицензия", Category: hardRequirementCategoryLicense, VacancyEvidence: "обязательная лицензия"},
+		{Requirement: "гражданство РФ", Category: hardRequirementCategoryCitizenship, VacancyEvidence: "гражданство РФ"},
+		{Requirement: "Kubernetes", Category: hardRequirementCategorySkill, VacancyEvidence: "Kubernetes"},
+	}
+	derived := deriveHardRequirements(candidate, vacancy, description, requirements)
+	if len(derived) != 3 {
+		t.Fatalf("unexpected derived requirements, optional/unsupported items were not discarded: %+v", derived)
+	}
+
+	byRequirement := make(map[string]HardRequirementEvaluation, len(derived))
+	for _, requirement := range derived {
+		byRequirement[requirement.Requirement] = requirement
+	}
+	for _, requirement := range []string{"FastAPI", "3+ года", "офис в Ташкенте"} {
+		if byRequirement[requirement].Status != hardRequirementStatusUnknown {
+			t.Fatalf("%q should be unknown: %+v", requirement, byRequirement[requirement])
+		}
+	}
+	if _, ok := byRequirement["высшее образование"]; ok {
+		t.Fatal("education without supported vacancy evidence should have been discarded")
+	}
+}
+
+func TestDeriveHardRequirementStatusesForKnownFacts(t *testing.T) {
+	candidate := CandidateContext{Skills: "Python, Django", Location: "Екатеринбург"}
+	vacancy := Vacancy{Area: NamedObject{Name: "Екатеринбург"}}
+	description := "Python обязателен. Офис в Екатеринбурге. Kafka обязателен."
+
+	derived := deriveHardRequirements(candidate, vacancy, description, []HardRequirementCandidate{
+		{Requirement: "Python", Category: hardRequirementCategorySkill, VacancyEvidence: "Python обязателен"},
+		{Requirement: "офис в Екатеринбурге", Category: hardRequirementCategoryLocation, VacancyEvidence: "Офис в Екатеринбурге"},
+		{Requirement: "Kafka", Category: hardRequirementCategorySkill, VacancyEvidence: "Kafka обязателен"},
+	})
+	if len(derived) != 3 {
+		t.Fatalf("unexpected derived requirement count: %+v", derived)
+	}
+	if derived[0].Status != hardRequirementStatusMet || derived[1].Status != hardRequirementStatusMet {
+		t.Fatalf("known skill/location facts were not met: %+v", derived)
+	}
+	if derived[2].Status != hardRequirementStatusUnknown {
+		t.Fatalf("missing skill must remain unknown: %+v", derived[2])
+	}
+}
+
+func TestUnsupportedRequirementDoesNotFailWholeEvaluation(t *testing.T) {
+	derived := deriveHardRequirements(
+		CandidateContext{Skills: "Python"},
+		Vacancy{},
+		"Python обязателен.",
+		[]HardRequirementCandidate{
+			{Requirement: "образование", Category: hardRequirementCategoryEducation, VacancyEvidence: "образование обязательно"},
+			{Requirement: "Python", Category: hardRequirementCategorySkill, VacancyEvidence: "Python обязателен"},
+		},
+	)
+	if len(derived) != 1 || derived[0].Requirement != "Python" {
+		t.Fatalf("unsupported requirement poisoned valid extraction: %+v", derived)
+	}
+}
+
+func TestEvaluateVacancyInvalidJSONStillRetries(t *testing.T) {
+	previousLogger := logger
+	logger = NewLogger(&bytes.Buffer{}, LevelDebug)
+	t.Cleanup(func() { logger = previousLogger })
+	previousDelay := aiRetryDelay
+	aiRetryDelay = 0
+	t.Cleanup(func() { aiRetryDelay = previousDelay })
+
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			_, _ = io.WriteString(w, aiCompletionResponse("not json"))
+			return
+		}
+		_, _ = io.WriteString(w, aiCompletionResponse(`{"score":90,"apply":true,"reasons":[],"missing":[],"hard_requirements":[{"requirement":"Python","category":"skill","vacancy_evidence":"Python обязателен"}]}`))
+	}))
+	defer server.Close()
+
+	client := NewAIClient(context.Background(), server.URL, "test-model", "", time.Second, time.Second, 2)
+	evaluation, err := client.EvaluateVacancy(vacancyEvaluationInput{
+		Candidate:   CandidateContext{Skills: "Python"},
+		Description: "Python обязателен",
+	})
+	if err != nil {
+		t.Fatalf("invalid JSON was not retried: %v", err)
+	}
+	if calls.Load() != 2 || len(evaluation.HardRequirements) != 1 {
+		t.Fatalf("unexpected retry result: calls=%d evaluation=%+v", calls.Load(), evaluation)
 	}
 }
