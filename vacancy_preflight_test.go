@@ -98,6 +98,14 @@ func TestLocalStructuredHardRequirements(t *testing.T) {
 			wantLocationHard: true,
 		},
 		{
+			name:             "onsite same city is met from trusted preflight",
+			preflight:        VacancyPreflight{AreaKnown: true, Area: "Екатеринбург", WorkScheduleKnown: true, WorkSchedule: "Офис"},
+			wantCategory:     hardRequirementCategoryLocation,
+			wantCount:        1,
+			wantStatus:       hardRequirementStatusMet,
+			wantLocationHard: true,
+		},
+		{
 			name:      "remote different area has no location blocker",
 			preflight: VacancyPreflight{AreaKnown: true, Area: "Ташкент", WorkScheduleKnown: true, WorkSchedule: "Можно удалённо"},
 			wantCount: 0,

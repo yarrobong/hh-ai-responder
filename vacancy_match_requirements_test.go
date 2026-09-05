@@ -111,6 +111,63 @@ func TestValidateHardRequirementsLocationIsConservative(t *testing.T) {
 	}
 }
 
+func TestLocationRequirementMatchesCandidateUsesExplicitEvidence(t *testing.T) {
+	candidateLocation := "Екатеринбург"
+	tests := []struct {
+		name        string
+		requirement string
+		evidence    string
+		want        bool
+	}{
+		{name: "same city", requirement: "Екатеринбург", evidence: "место работы: Екатеринбург", want: true},
+		{name: "same city with district", requirement: "Екатеринбург, р-н Октябрьский", evidence: "офис в Екатеринбурге, р-н Октябрьский", want: true},
+		{name: "specific village is not candidate city", requirement: "с. Кадниково", evidence: "место работы: Свердловская область, Сысертский р-он, с. Кадниково", want: false},
+		{name: "different city", requirement: "Берёзовский", evidence: "работа в Берёзовском", want: false},
+		{name: "different region city", requirement: "Тула", evidence: "офис в Туле", want: false},
+		{name: "business trips", requirement: "готовность к выездам", evidence: "готовность к выездам на объекты заказчика", want: false},
+		{name: "relocation", requirement: "релокация в Елабугу", evidence: "готовность к релокации в Елабугу", want: false},
+		{name: "onsite without city", requirement: "очный формат", evidence: "работа в очном формате", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := locationRequirementMatchesCandidate(candidateLocation, test.requirement, test.evidence); got != test.want {
+				t.Fatalf("location match: got %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
+func TestDeriveHardRequirementLocationDoesNotUseVacancyArea(t *testing.T) {
+	status, evidence := deriveHardRequirementStatus(
+		CandidateContext{Location: "Екатеринбург"},
+		Vacancy{Area: NamedObject{Name: "Екатеринбург"}},
+		HardRequirementCandidate{
+			Requirement:     "с. Кадниково",
+			Category:        hardRequirementCategoryLocation,
+			VacancyEvidence: "место работы: Свердловская область, Сысертский р-он, с. Кадниково",
+		},
+	)
+	if status != hardRequirementStatusUnknown || evidence != "not provided" {
+		t.Fatalf("AI location requirement was grounded by generic vacancy area: status=%q evidence=%q", status, evidence)
+	}
+}
+
+func TestAIHardRequirementLocationCannotUseVacancyAreaAsEvidence(t *testing.T) {
+	derived := deriveHardRequirements(
+		CandidateContext{Location: "Екатеринбург"},
+		Vacancy{Area: NamedObject{Name: "Екатеринбург"}},
+		"",
+		[]HardRequirementCandidate{{
+			Requirement:     "Екатеринбург",
+			Category:        hardRequirementCategoryLocation,
+			VacancyEvidence: "Екатеринбург",
+		}},
+	)
+	if len(derived) != 0 {
+		t.Fatalf("AI location requirement was accepted from generic vacancy area: %+v", derived)
+	}
+}
+
 func TestValidateHardRequirementsMissingSkillRequiresExplicitNegativeFact(t *testing.T) {
 	candidate := CandidateContext{Skills: "Python, Django"}
 	missing := testEvaluation(testHardRequirement("Kafka", hardRequirementCategorySkill, hardRequirementStatusMissing, "Kafka обязателен", "Kafka отсутствует в резюме"))
@@ -161,7 +218,7 @@ func TestDeriveHardRequirementsIsDeterministicAndConservative(t *testing.T) {
 		Area:           NamedObject{Name: "Ташкент"},
 		WorkExperience: "Опыт 3-6 лет",
 	}
-	description := "Требуется FastAPI. Kubernetes будет плюсом. Обязательное образование (не указано в вакансии)."
+	description := "Требуется FastAPI. Kubernetes будет плюсом. Обязательное образование (не указано в вакансии). Офис в Ташкенте."
 
 	requirements := []HardRequirementCandidate{
 		{Requirement: "FastAPI", Category: hardRequirementCategorySkill, VacancyEvidence: "Требуется FastAPI"},

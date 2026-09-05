@@ -8,6 +8,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 type vacancyEvaluationInput struct {
@@ -527,7 +528,7 @@ func validateHardRequirementShape(requirement HardRequirementEvaluation) error {
 // does not currently contain structured education, experience duration,
 // relocation, language, license, or citizenship facts, so absence of a fact
 // is never turned into a fabricated mismatch.
-func deriveHardRequirementStatus(candidate CandidateContext, vacancy Vacancy, requirement HardRequirementCandidate) (string, string) {
+func deriveHardRequirementStatus(candidate CandidateContext, _ Vacancy, requirement HardRequirementCandidate) (string, string) {
 	unknown := "not provided"
 	switch requirement.Category {
 	case hardRequirementCategoryEducation:
@@ -535,7 +536,7 @@ func deriveHardRequirementStatus(candidate CandidateContext, vacancy Vacancy, re
 	case hardRequirementCategoryExperienceYears:
 		return hardRequirementStatusUnknown, unknown
 	case hardRequirementCategoryLocation:
-		if candidate.Location != "" && vacancy.Area.Name != "" && locationsMatch(candidate.Location, vacancy.Area.Name) {
+		if locationRequirementMatchesCandidate(candidate.Location, requirement.Requirement, requirement.VacancyEvidence) {
 			return hardRequirementStatusMet, "Candidate location: " + candidate.Location
 		}
 		return hardRequirementStatusUnknown, unknown
@@ -600,8 +601,11 @@ func hardRequirementEvidencePresent(vacancy Vacancy, description string, require
 	evidence := requirement.VacancyEvidence
 	switch requirement.Category {
 	case hardRequirementCategoryLocation:
-		return containsNormalizedText(vacancy.Area.Name, evidence) ||
-			containsNormalizedText(vacancy.WorkSchedule, evidence) ||
+		// AI-extracted location evidence must come from the work schedule or
+		// description. The search-card area is generic context, not proof for
+		// an AI requirement; trusted preflight area is handled separately by
+		// localStructuredHardRequirements.
+		return containsNormalizedText(vacancy.WorkSchedule, evidence) ||
 			containsNormalizedText(description, evidence)
 	case hardRequirementCategoryExperienceYears:
 		return containsNormalizedText(vacancy.WorkExperience, evidence) ||
@@ -691,7 +695,7 @@ func validateHardRequirements(candidate CandidateContext, vacancy Vacancy, evalu
 				return fmt.Errorf("experience requirement %q must be unknown without structured candidate duration", requirement.Requirement)
 			}
 		case hardRequirementCategoryLocation:
-			if err := validateLocationRequirement(candidate.Location, vacancy.Area.Name, requirement); err != nil {
+			if err := validateLocationRequirement(candidate.Location, requirement); err != nil {
 				return err
 			}
 		case hardRequirementCategorySkill:
@@ -731,16 +735,15 @@ func vacancyDoesNotRequireExperience(value string) bool {
 	return strings.Contains(text, "без опыта") || strings.Contains(text, "опыт не требуется")
 }
 
-func validateLocationRequirement(candidateLocationValue, vacancyLocation string, requirement HardRequirementEvaluation) error {
+func validateLocationRequirement(candidateLocationValue string, requirement HardRequirementEvaluation) error {
 	candidateLocationValue = strings.TrimSpace(candidateLocationValue)
-	vacancyLocation = strings.TrimSpace(vacancyLocation)
-	if candidateLocationValue == "" || vacancyLocation == "" {
+	if candidateLocationValue == "" {
 		if requirement.Status != hardRequirementStatusUnknown {
 			return fmt.Errorf("location requirement %q must be unknown when location is not fully provided", requirement.Requirement)
 		}
 		return nil
 	}
-	if locationsMatch(candidateLocationValue, vacancyLocation) {
+	if locationRequirementMatchesCandidate(candidateLocationValue, requirement.Requirement, requirement.VacancyEvidence) {
 		if requirement.Status != hardRequirementStatusMet {
 			return fmt.Errorf("same-city location requirement %q must be met, not %s", requirement.Requirement, requirement.Status)
 		}
@@ -750,6 +753,98 @@ func validateLocationRequirement(candidateLocationValue, vacancyLocation string,
 		return fmt.Errorf("different-city location requirement %q must be unknown while relocation is unspecified", requirement.Requirement)
 	}
 	return nil
+}
+
+// locationRequirementMatchesCandidate only confirms a location requirement
+// when the candidate's explicit settlement is present in the AI-extracted
+// requirement or its vacancy evidence. Generic vacancy.Area data is not
+// evidence for AI requirements, and mobility/availability requirements cannot
+// be inferred from CandidateContext.Location.
+func locationRequirementMatchesCandidate(candidateLocation, requirement, evidence string) bool {
+	candidateWords := strings.Fields(normalizeLocationText(candidateLocation))
+	if len(candidateWords) == 0 {
+		return false
+	}
+
+	locationText := normalizeLocationText(strings.Join([]string{requirement, evidence}, " "))
+	if locationText == "" || isLocationAvailabilityRequirement(locationText) {
+		return false
+	}
+	evidenceWords := strings.Fields(locationText)
+	for start := 0; start+len(candidateWords) <= len(evidenceWords); start++ {
+		matched := true
+		for offset, candidateWord := range candidateWords {
+			if !locationWordMatches(candidateWord, evidenceWords[start+offset]) {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeLocationText(value string) string {
+	value = strings.Map(func(r rune) rune {
+		if unicode.IsPunct(r) {
+			return ' '
+		}
+		return unicode.ToLower(r)
+	}, value)
+	return strings.Join(strings.Fields(value), " ")
+}
+
+func locationWordMatches(candidateWord, evidenceWord string) bool {
+	if candidateWord == evidenceWord {
+		return true
+	}
+
+	// Handle common Russian case endings (for example, Екатеринбург / в
+	// Екатеринбурге) without treating a related adjective or region name as
+	// the same settlement (for example, Екатеринбургский район).
+	for _, base := range []string{candidateWord, trimLocationInflection(candidateWord)} {
+		if base == "" || !strings.HasPrefix(evidenceWord, base) {
+			continue
+		}
+		suffix := strings.TrimPrefix(evidenceWord, base)
+		if isLocationInflectionSuffix(suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func trimLocationInflection(value string) string {
+	for _, suffix := range []string{"а", "я", "ь"} {
+		if strings.HasSuffix(value, suffix) {
+			return strings.TrimSuffix(value, suffix)
+		}
+	}
+	return ""
+}
+
+func isLocationInflectionSuffix(value string) bool {
+	switch value {
+	case "а", "е", "и", "о", "у", "ы", "ю", "я", "ом", "ем", "ой", "ей", "ым", "им":
+		return true
+	default:
+		return false
+	}
+}
+
+func isLocationAvailabilityRequirement(value string) bool {
+	return containsAny(value,
+		"выезд",
+		"командировк",
+		"релокац",
+		"переезд",
+		"объект заказчика",
+		"объекта заказчика",
+		"объектам заказчика",
+		"объектах заказчика",
+	)
 }
 
 func locationsMatch(candidateValue, vacancyValue string) bool {
