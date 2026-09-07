@@ -10,13 +10,8 @@ cd "$(dirname "$0")" || {
   exit 1
 }
 
-# Загружаем .env если существует
-if [ -f ".env" ]; then
-  set -a
-  # shellcheck disable=SC1091
-  . ".env"
-  set +a
-fi
+# The application loads .env itself. Do not shell-source it here: dotenv
+# values such as comma-separated keyword lists are not necessarily shell code.
 
 # Проверяем наличие бинарника
 if [ ! -f "$APP" ]; then
@@ -30,5 +25,5 @@ if [ ! -x "$APP" ]; then
   exit 3
 fi
 
-# Запускаем приложение без передачи аргументов
-exec "./$APP"
+# Запускаем приложение с передачей аргументов
+exec "./$APP" "$@"

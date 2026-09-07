@@ -29,20 +29,21 @@ import (
 )
 
 const (
-	acceptHeader            = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
-	acceptLanguageHeader    = "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7"
-	botRecruiterAnswer      = "Спасибо!\nВаши ответы отправлены работодателю. Если ваш отклик его заинтересует, он напишет в этом же чате или позвонит по номеру, который вы указали."
-	chatCompletionsPath     = "/v1/chat/completions"
-	defaultAIAttempts       = 2
-	defaultAIBaseURL        = "http://localhost:11434"
-	defaultAIConnectTimeout = 5 * time.Second
-	defaultAIModel          = "llama3:8b"
-	defaultAITimeout        = 30 * time.Second
-	defaultHost             = "hh.ru"
-	defaultRequestInterval  = 1200 * time.Millisecond
-	defaultWorkers          = 2
-	secCHUAHeader           = `"Chromium";v="151", "Google Chrome";v="151", "Not-A.Brand";v="99"`
-	userAgent               = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
+	acceptHeader                  = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+	acceptLanguageHeader          = "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7"
+	botRecruiterAnswer            = "Спасибо!\nВаши ответы отправлены работодателю. Если ваш отклик его заинтересует, он напишет в этом же чате или позвонит по номеру, который вы указали."
+	chatCompletionsPath           = "/v1/chat/completions"
+	defaultAIAttempts             = 2
+	defaultAIBaseURL              = "http://localhost:11434"
+	defaultAIConnectTimeout       = 5 * time.Second
+	defaultAIModel                = "llama3:8b"
+	defaultAITimeout              = 30 * time.Second
+	defaultHost                   = "hh.ru"
+	defaultRequestInterval        = 1200 * time.Millisecond
+	defaultConversationDisplayTTL = 60 * time.Second
+	defaultWorkers                = 2
+	secCHUAHeader                 = `"Chromium";v="151", "Google Chrome";v="151", "Not-A.Brand";v="99"`
+	userAgent                     = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
 )
 
 var aiRetryDelay = 3 * time.Second
@@ -65,6 +66,11 @@ var (
 )
 
 type Config struct {
+	HHReadOnly                bool // Internal capability restriction for sync/dashboard only.
+	StorageBackend            string
+	DatabaseURL               string
+	CandidateID               string
+	FollowUpPolicy            FollowUpPolicy
 	SearchURL                 string
 	SearchURLs                []string
 	CookiesPath               string
@@ -74,11 +80,14 @@ type Config struct {
 	AIBaseURL                 string
 	AIModel                   string
 	AIAPIKey                  string
+	EmbeddingProvider         string
+	EmbeddingModel            string
 	AITimeout                 time.Duration
 	AIConnectTimeout          time.Duration
 	AIAttempts                int
 	ExtraLetterPrompt         string
 	ExtraTestSolutionPrompt   string
+	HHReadConcurrency         int
 	RequestInterval           time.Duration
 	OutputPath                string
 	Contacts                  string
@@ -87,6 +96,10 @@ type Config struct {
 	ExtraChatReplyPrompt      string
 	GithubURL                 string
 	DryRun                    bool
+	HHWriteEnabled            bool
+	HHChatURL                 string
+	HHMaxWritesPerRun         int
+	HHMaxWritesPerDay         int
 	AutoApply                 bool
 	AutoChat                  bool
 	AutoTouch                 bool
@@ -103,9 +116,15 @@ type Config struct {
 	AlreadyRespondedStatePath string
 	CandidateProfilePath      string
 	CandidateStoriesPath      string
+	HHSyncStatePath           string
+	MonitorInterval           time.Duration
+	MonitorQuietHours         string
+	NotificationCooldown      time.Duration
+	ConversationDisplayTTL    time.Duration
+	BackgroundInboxRefresh    bool
 }
 
-type CandidateContext struct {
+type LegacyCandidateContext struct {
 	FullName                   string
 	ResumeTitle                string
 	Salary                     string
@@ -120,6 +139,7 @@ type CandidateContext struct {
 	TotalExperienceMonths      int
 	Profile                    CandidateProfile `json:"candidate_profile,omitempty"`
 	Stories                    []CandidateStory `json:"stories,omitempty"`
+	SafeContext                CandidateContext `json:"-"`
 }
 
 // HardRequirementCandidate is the only hard-requirement shape accepted from
@@ -156,23 +176,64 @@ type VacancyEvaluationAIResponse struct {
 }
 
 type Vacancy struct {
-	ID                       int               `json:"vacancyId"`
-	Name                     string            `json:"name"`
-	WorkSchedule             string            `json:"@workSchedule"`
-	WorkExperience           string            `json:"workExperience"`
-	Links                    map[string]string `json:"links"`
-	TotalResponsesCount      int               `json:"totalResponsesCount"`
-	Area                     NamedObject       `json:"area"`
-	Company                  Company           `json:"company"`
-	Compensation             Compensation      `json:"compensation"`
-	CreationTime             string            `json:"creationTime"`
-	LastChangeTime           ChangeTime        `json:"lastChangeTime"`
-	UserLabels               []string          `json:"userLabels"`
-	ResponseLetterRequired   bool              `json:"@responseLetterRequired"`
-	UserTestPresent          bool              `json:"userTestPresent"`
-	Archived                 bool              `json:"archived"`
-	ResponseURL              string            `json:"response_url"`
-	TotalResponsesCountKnown bool              `json:"-"`
+	ID                        int                        `json:"id"`
+	ExternalID                string                     `json:"external_id,omitempty"`
+	Name                      string                     `json:"name"`
+	Title                     string                     `json:"title,omitempty"`
+	Description               string                     `json:"description,omitempty"`
+	Requirements              []string                   `json:"requirements,omitempty"`
+	Skills                    []string                   `json:"skills,omitempty"`
+	Salary                    string                     `json:"salary,omitempty"`
+	SalaryCurrency            string                     `json:"salary_currency,omitempty"`
+	Location                  string                     `json:"location,omitempty"`
+	WorkFormat                string                     `json:"work_format,omitempty"`
+	EmploymentType            string                     `json:"employment_type,omitempty"`
+	Source                    string                     `json:"source,omitempty"`
+	PublishedAt               time.Time                  `json:"published_at,omitempty"`
+	HHUpdatedAt               time.Time                  `json:"hh_updated_at,omitempty"`
+	HHMetadata                map[string]string          `json:"hh_metadata,omitempty"`
+	CreatedAt                 time.Time                  `json:"created_at,omitempty"`
+	UpdatedAt                 time.Time                  `json:"updated_at,omitempty"`
+	WorkSchedule              string                     `json:"@workSchedule"`
+	WorkExperience            string                     `json:"workExperience"`
+	Links                     map[string]string          `json:"links"`
+	TotalResponsesCount       int                        `json:"totalResponsesCount"`
+	Area                      NamedObject                `json:"area"`
+	Company                   Company                    `json:"company"`
+	Compensation              Compensation               `json:"compensation"`
+	CreationTime              string                     `json:"creationTime"`
+	LastChangeTime            ChangeTime                 `json:"lastChangeTime"`
+	UserLabels                []string                   `json:"userLabels"`
+	ResponseLetterRequired    bool                       `json:"@responseLetterRequired"`
+	UserTestPresent           bool                       `json:"userTestPresent"`
+	Archived                  bool                       `json:"archived"`
+	ResponseURL               string                     `json:"response_url"`
+	TotalResponsesCountKnown  bool                       `json:"-"`
+	MatchResult               *MatchResult               `json:"match_result,omitempty"`
+	ApplicationRecommendation *ApplicationRecommendation `json:"application_recommendation,omitempty"`
+	DataCompleteness          DataCompleteness           `json:"data_completeness,omitempty"`
+	ReconciliationEvidence    []ReconciliationEvidence   `json:"reconciliation_evidence,omitempty"`
+}
+
+// Marshal both the domain-shaped id and HH's legacy vacancyId. The latter
+// keeps serialized vacancy payloads compatible with the existing read paths.
+func (v Vacancy) MarshalJSON() ([]byte, error) {
+	type vacancyAlias Vacancy
+	raw, err := json.Marshal(vacancyAlias(v))
+	if err != nil {
+		return nil, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil, err
+	}
+	id, err := json.Marshal(v.ID)
+	if err != nil {
+		return nil, err
+	}
+	fields["id"] = id
+	fields["vacancyId"] = id
+	return json.Marshal(fields)
 }
 
 // UnmarshalJSON tracks whether HH actually supplied the response count. A
@@ -188,6 +249,13 @@ func (v *Vacancy) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*v = Vacancy(decoded)
+	if decoded.ID == 0 {
+		if rawID, ok := fields["vacancyId"]; ok && !bytes.Equal(bytes.TrimSpace(rawID), []byte("null")) {
+			if err := json.Unmarshal(rawID, &v.ID); err != nil {
+				return err
+			}
+		}
+	}
 	responseCount, ok := fields["totalResponsesCount"]
 	v.TotalResponsesCountKnown = ok && !bytes.Equal(bytes.TrimSpace(responseCount), []byte("null"))
 	return nil
@@ -355,10 +423,11 @@ type ChatsResponse struct {
 }
 
 type ChatsList struct {
-	Page    int            `json:"page"`
-	PerPage int            `json:"per_page"`
-	Pages   int            `json:"pages"`
-	Items   []ChatListItem `json:"items"`
+	NextFrom string         `json:"nextFrom"`
+	Page     int            `json:"page"`
+	PerPage  int            `json:"per_page"`
+	Pages    int            `json:"pages"`
+	Items    []ChatListItem `json:"items"`
 }
 
 type ChatListItem struct {
@@ -1020,6 +1089,9 @@ func (r *HHAIResponder) SendChatMessage(chatID int64, text string) (map[string]a
 	if !r.chatSendingAllowed() {
 		return map[string]any{"disabled": true}, nil
 	}
+	if r.controlledWriteOnly {
+		return nil, errors.New("controlled HH Write Gateway is required")
+	}
 	token := r.XSRFToken()
 	if token == "" {
 		return nil, errors.New("xsrf token not found")
@@ -1080,6 +1152,9 @@ func (r *HHAIResponder) LeaveChat(chatId int64) (map[string]any, error) {
 	}
 	if !r.chatSendingAllowed() {
 		return map[string]any{"disabled": true}, nil
+	}
+	if r.controlledWriteOnly {
+		return nil, errors.New("controlled HH Write Gateway is required")
 	}
 	token := r.XSRFToken()
 	if token == "" {
@@ -1145,12 +1220,17 @@ type ChatToReply struct {
 	IsDiscard           bool
 	AlwaysEmphasize     string
 	AvoidClaiming       string
+	CandidateContext    CandidateContext `json:"-"`
 }
 
 func (r *HHAIResponder) getChatsAwaitingReply(maxPages int) ([]ChatToReply, error) {
 	resume := r.GetCurrentResume()
 	if resume == nil {
 		return nil, errors.New("resume not found")
+	}
+	baseCandidate, canonicalResolver, err := r.canonicalCandidateContext(*resume)
+	if err != nil {
+		return nil, fmt.Errorf("canonical candidate read failed: %w", err)
 	}
 
 	pages := 1
@@ -1224,7 +1304,12 @@ func (r *HHAIResponder) getChatsAwaitingReply(maxPages int) ([]ChatToReply, erro
 			if !slices.Contains(chat.Resources.Resume, strconv.FormatInt(resume.Id, 10)) {
 				continue
 			}
-			candidate := r.candidateContext(*resume)
+			candidate := baseCandidate
+			candidateContext, err := canonicalResolver.ResolveForEmployerMessage(last.Text, nil)
+			if err != nil {
+				logger.Warn("Skip chat %d: employer-safe candidate context unavailable: %v", chat.Id, err)
+				continue
+			}
 			alwaysEmphasize, avoidClaiming := candidate.Profile.TrustedCommunicationRules()
 
 			vacancy, vacancyExists := chatsResponse.Resources.Vacancies[chat.Resources.Vacancy[0]]
@@ -1261,6 +1346,7 @@ func (r *HHAIResponder) getChatsAwaitingReply(maxPages int) ([]ChatToReply, erro
 				Salary:              candidate.Salary,
 				AlwaysEmphasize:     alwaysEmphasize,
 				AvoidClaiming:       avoidClaiming,
+				CandidateContext:    candidateContext,
 			}
 
 			if last.WorkflowTransition != nil && last.WorkflowTransition.ApplicantState == "DISCARD" {
@@ -1493,9 +1579,12 @@ func buildReadableTestSolutions(tasks []Task, answers map[int]SolutionFields) []
 }
 
 type HHResponse struct {
-	Status int
-	URL    *url.URL
-	Body   []byte
+	RetryAfter     string
+	Status         int
+	URL            *url.URL
+	ContentType    string
+	Body           []byte
+	CorrelationIDs map[string]string
 }
 
 type HHAIResponder struct {
@@ -1515,6 +1604,10 @@ type HHAIResponder struct {
 	candidateProfilePath      string
 	candidateStoriesPath      string
 	candidateStories          []CandidateStory
+	candidateRepository       CandidateRepository
+	candidateMutations        *CandidateMutationService
+	semanticRetriever         CandidateSemanticRetriever
+	candidateClose            func()
 	latestResumeHash          string
 	resumes                   []ResumeItem
 	userId                    int64
@@ -1536,6 +1629,7 @@ type HHAIResponder struct {
 	autoTouch                 bool
 	autoJobStatus             bool
 	chatMode                  string
+	controlledWriteOnly       bool
 	minSalary                 int
 	minSalaryCurrency         string
 	includeKeywords           []string
@@ -1565,11 +1659,24 @@ type vacancySearchProfile struct {
 }
 
 type HHRequester struct {
-	ctx       context.Context
-	client    *http.Client
-	interval  time.Duration
-	mu        sync.Mutex
-	lastStart time.Time
+	readOnly        bool
+	ctx             context.Context
+	client          *http.Client
+	interval        time.Duration
+	mu              sync.Mutex
+	lastStart       time.Time
+	readNotBefore   time.Time
+	readConcurrency int
+	readQueue       []*hhReadWaiter
+	readWake        chan struct{}
+	readScheduler   bool
+	readActive      int
+}
+
+type hhReadWaiter struct {
+	priority hhReadPriority
+	granted  chan struct{}
+	ctx      context.Context
 }
 
 func NewHHRequester(ctx context.Context, client *http.Client, interval time.Duration) *HHRequester {
@@ -1588,24 +1695,29 @@ func cookieNames(req *http.Request) string {
 	return strings.Join(names, ",")
 }
 
-func (r *HHRequester) Do(req *http.Request) (*HHResponse, error) {
-	// Rate limiting
-	r.mu.Lock()
-	if !r.lastStart.IsZero() {
-		wait := time.Until(r.lastStart.Add(r.interval))
-		if wait > 0 {
-			timer := time.NewTimer(wait)
-			select {
-			case <-timer.C:
-			case <-r.ctx.Done():
-				timer.Stop()
-				r.mu.Unlock()
-				return nil, r.ctx.Err()
-			}
-		}
+func (r *HHRequester) doOnce(req *http.Request) (*HHResponse, error) {
+	if err := req.Context().Err(); err != nil {
+		return nil, err
 	}
-	r.lastStart = time.Now()
-	r.mu.Unlock()
+	if err := r.ctx.Err(); err != nil {
+		return nil, err
+	}
+	if req.Method == http.MethodGet || req.Method == http.MethodHead {
+		if err := r.acquireRead(req.Context()); err != nil {
+			return nil, err
+		}
+		defer r.releaseRead()
+	}
+
+	if r.readOnly && req.Method != http.MethodGet && req.Method != http.MethodHead {
+		return nil, errors.New("HH read-only client blocks state-changing methods")
+	}
+	waitStart := time.Now()
+	perfRecord("hh.rate_wait", waitStart, 1)
+	meterRecord(req.Context(), "wait", time.Since(waitStart))
+	start := time.Now()
+	defer perfRecord("hh.http", start, 1)
+	defer func() { meterRecord(req.Context(), "network", time.Since(start)) }()
 
 	// Execute request
 	resp, err := r.client.Do(req)
@@ -1620,13 +1732,156 @@ func (r *HHRequester) Do(req *http.Request) (*HHResponse, error) {
 		return nil, err
 	}
 
-	logger.Debug("REQ  %s %s cookies=[%s]", req.Method, req.URL.String(), cookieNames(req))
-	logger.Debug("RESP %d %s final_url=%s cookies=[%s]", resp.StatusCode, req.Method, resp.Request.URL.String(), cookieNames(resp.Request))
+	if logger != nil {
+		logger.Debug("REQ  %s %s cookies=[%s]", req.Method, req.URL.String(), cookieNames(req))
+		logger.Debug("RESP %d %s final_url=%s cookies=[%s]", resp.StatusCode, req.Method, resp.Request.URL.String(), cookieNames(resp.Request))
+	}
 	return &HHResponse{
-		Status: resp.StatusCode,
-		URL:    req.URL,
-		Body:   body,
+		Status:         resp.StatusCode,
+		URL:            req.URL,
+		ContentType:    resp.Header.Get("Content-Type"),
+		Body:           body,
+		CorrelationIDs: safeHHCorrelationIDs(resp.Header),
+		RetryAfter:     resp.Header.Get("Retry-After"),
 	}, nil
+}
+
+func (r *HHRequester) acquireRead(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	waiter := &hhReadWaiter{priority: hhReadPriorityFromContext(ctx), granted: make(chan struct{}), ctx: ctx}
+	r.mu.Lock()
+	if r.readWake == nil {
+		r.readWake = make(chan struct{}, 1)
+	}
+	r.readQueue = append(r.readQueue, waiter)
+	if !r.readScheduler {
+		r.readScheduler = true
+		go r.runReadScheduler()
+	}
+	r.signalReadSchedulerLocked()
+	r.mu.Unlock()
+	select {
+	case <-waiter.granted:
+		return nil
+	case <-ctx.Done():
+		r.signalReadScheduler()
+		return ctx.Err()
+	case <-r.ctx.Done():
+		r.signalReadScheduler()
+		return r.ctx.Err()
+	}
+}
+
+func (r *HHRequester) releaseRead() {
+	r.mu.Lock()
+	if r.readActive > 0 {
+		r.readActive--
+	}
+	r.signalReadSchedulerLocked()
+	r.mu.Unlock()
+}
+
+func (r *HHRequester) signalReadScheduler() {
+	r.mu.Lock()
+	r.signalReadSchedulerLocked()
+	r.mu.Unlock()
+}
+
+func (r *HHRequester) signalReadSchedulerLocked() {
+	if r.readWake == nil {
+		return
+	}
+	select {
+	case r.readWake <- struct{}{}:
+	default:
+	}
+}
+
+func (r *HHRequester) runReadScheduler() {
+	for {
+		r.mu.Lock()
+		for i := len(r.readQueue) - 1; i >= 0; i-- {
+			select {
+			case <-r.readQueue[i].ctx.Done():
+				r.readQueue = append(r.readQueue[:i], r.readQueue[i+1:]...)
+			default:
+			}
+		}
+		limit := r.readConcurrency
+		if limit < 1 {
+			limit = 4
+		}
+		if limit > 8 {
+			limit = 8
+		}
+		if r.readActive >= limit || len(r.readQueue) == 0 {
+			wake := r.readWake
+			r.mu.Unlock()
+			select {
+			case <-wake:
+			case <-r.ctx.Done():
+				return
+			}
+			continue
+		}
+		deadline := r.lastStart.Add(r.interval)
+		if r.readNotBefore.After(deadline) {
+			deadline = r.readNotBefore
+		}
+		if wait := time.Until(deadline); wait > 0 {
+			wake := r.readWake
+			r.mu.Unlock()
+			timer := time.NewTimer(wait)
+			select {
+			case <-timer.C:
+			case <-wake:
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+			case <-r.ctx.Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				return
+			}
+			continue
+		}
+		best := 0
+		for i := 1; i < len(r.readQueue); i++ {
+			if r.readQueue[i].priority > r.readQueue[best].priority {
+				best = i
+			}
+		}
+		waiter := r.readQueue[best]
+		r.readQueue = append(r.readQueue[:best], r.readQueue[best+1:]...)
+		r.readActive++
+		r.lastStart = time.Now()
+		close(waiter.granted)
+		r.mu.Unlock()
+	}
+}
+
+func safeHHCorrelationIDs(headers http.Header) map[string]string {
+	result := map[string]string{}
+	for _, name := range []string{"X-Request-ID", "X-Correlation-ID", "Trace-ID", "X-Amzn-Trace-Id"} {
+		value := strings.TrimSpace(headers.Get(name))
+		if value == "" || strings.ContainsAny(value, "\r\n") || sensitiveResponseField.MatchString(value) {
+			continue
+		}
+		if len(value) > 256 {
+			value = value[:256]
+		}
+		result[name] = value
+	}
+	return result
 }
 
 type AIClient struct {
@@ -1769,6 +2024,21 @@ func (r *HHAIResponder) getBaseHost() string {
 }
 
 func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
+	backend, err := normalizeStorageBackend(cfg.StorageBackend)
+	if err != nil {
+		return nil, err
+	}
+	var candidatePersistence CandidatePersistence
+	var closeCandidate func()
+	if backend == storageBackendPostgres {
+		if strings.TrimSpace(cfg.CandidateProfilePath) == "" {
+			cfg.CandidateProfilePath = "candidate_profile.json"
+		}
+		candidatePersistence, closeCandidate, err = BuildCandidatePersistence(ctx, cfg)
+		if err != nil {
+			return nil, err
+		}
+	}
 	var baseURL *url.URL
 	var searchParams url.Values
 	searchURLs := append([]string(nil), cfg.SearchURLs...)
@@ -1777,6 +2047,9 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 	}
 	searchProfiles, parsedBaseURL, err := buildVacancySearchProfiles(searchURLs)
 	if err != nil {
+		if closeCandidate != nil {
+			closeCandidate()
+		}
 		return nil, err
 	}
 	baseURL = parsedBaseURL
@@ -1815,6 +2088,7 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 		autoTouch:                 cfg.AutoTouch,
 		autoJobStatus:             cfg.AutoJobStatus,
 		chatMode:                  cfg.ChatMode,
+		controlledWriteOnly:       true,
 		minSalary:                 cfg.MinSalary,
 		minSalaryCurrency:         cfg.MinSalaryCurrency,
 		includeKeywords:           append([]string(nil), cfg.IncludeKeywords...),
@@ -1826,22 +2100,36 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 		alreadyRespondedStatePath: cfg.AlreadyRespondedStatePath,
 		candidateProfilePath:      cfg.CandidateProfilePath,
 		candidateStoriesPath:      cfg.CandidateStoriesPath,
+		candidateClose:            closeCandidate,
 	}
-	if responder.candidateProfilePath != "" {
+	if backend == storageBackendPostgres {
+		responder.candidateRepository = candidatePersistence.Repository
+		responder.candidateMutations = candidatePersistence.Mutations
+		responder.semanticRetriever = candidatePersistence.SemanticRetriever
+	}
+	if backend == storageBackendJSON && responder.candidateProfilePath != "" {
 		responder.candidateProfile, err = LoadCandidateProfile(responder.candidateProfilePath)
 		if err != nil {
+			if closeCandidate != nil {
+				closeCandidate()
+			}
 			return nil, err
 		}
 	}
-	if responder.candidateStoriesPath != "" {
+	if backend == storageBackendJSON && responder.candidateStoriesPath != "" {
 		stories, err := LoadCandidateStories(responder.candidateStoriesPath)
 		if err != nil {
+			if closeCandidate != nil {
+				closeCandidate()
+			}
 			return nil, err
 		}
 		responder.candidateStories = stories.Stories
 	}
 
 	responder.requester = NewHHRequester(ctx, client, cfg.RequestInterval)
+	responder.requester.readOnly = cfg.HHReadOnly
+	responder.requester.readConcurrency = cfg.HHReadConcurrency
 
 	// initialize event writer once
 	var out io.Writer = os.Stdout
@@ -1865,6 +2153,9 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 	logger.Debug("baseURL resolved to %s", responder.baseURL.String())
 
 	if err := responder.LoadProfileData(); err != nil {
+		if closeCandidate != nil {
+			closeCandidate()
+		}
 		return nil, err
 	}
 
@@ -1888,12 +2179,15 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 	}
 	responder.resumeFacts = resumeFacts
 	responder.resumeExperience = resumeFacts.ExperienceText
-	if responder.candidateProfilePath != "" {
+	if backend == storageBackendJSON && responder.candidateProfilePath != "" {
 		if fullName := strings.TrimSpace(responder.GetFullName()); fullName != "" && sourcePriority(responder.candidateProfile.Identity.FullName.Source) <= sourcePriority(CandidateSourceHHResume) {
 			responder.candidateProfile.Identity.FullName = ProfileStringFact{Value: fullName, ProfileFact: ProfileFact{Source: CandidateSourceHHResume, Confirmed: true, ConfirmedAt: time.Now(), Evidence: []string{"HH account profile"}}}
 		}
 		responder.candidateProfile.MergeHHResumeFacts(*resume, resumeFacts, time.Now())
 		if err := SaveCandidateProfile(responder.candidateProfilePath, responder.candidateProfile); err != nil {
+			if closeCandidate != nil {
+				closeCandidate()
+			}
 			return nil, fmt.Errorf("save merged candidate profile: %w", err)
 		}
 	}
@@ -2274,7 +2568,7 @@ func (c *AIClient) getChatResponse(body []byte, metadata ChatCompletionRequest) 
 	return content, nil
 }
 
-func buildLetterSystemPrompt(candidate CandidateContext, extraPrompt string) string {
+func buildLetterSystemPrompt(candidate LegacyCandidateContext, extraPrompt string) string {
 	systemPrompt := fmt.Sprintf(`Ты должен сгенерировать сопроводительное письмо для отклика на вакансию от имени соискателя.
 Пиши только о том, что подтверждается данными кандидата. Не приписывай кандидату отсутствующие навыки, опыт, образование, проекты, сертификаты или договорённости.
 Если в вакансии требуется незнакомая технология, можно честно отметить близкий опыт и готовность разобраться.
@@ -2310,13 +2604,92 @@ func buildLetterSystemPrompt(candidate CandidateContext, extraPrompt string) str
 	if strings.TrimSpace(extraPrompt) != "" {
 		systemPrompt += "\nДополнительные инструкции:\n" + extraPrompt
 	}
+	systemPrompt += "\nКанонический employer-safe context (единственный источник фактов; unknown и disputed не являются утверждениями):\n" + canonicalContextJSON(candidate.SafeContext)
 	systemPrompt += candidateStoriesPrompt(candidate.Stories)
 
 	return systemPrompt + "\n\n" + candidateCommunicationProfile
 }
 
-func (r *HHAIResponder) candidateContext(resume ResumeItem) CandidateContext {
-	profile := r.candidateProfile
+func (r *HHAIResponder) candidateContext(resume ResumeItem) LegacyCandidateContext {
+	legacy, _, err := r.canonicalCandidateContext(resume)
+	if err == nil {
+		return legacy
+	}
+	// Compatibility callers cannot return an error. A canonical conflict
+	// therefore produces an intentionally empty factual context.
+	return LegacyCandidateContext{ResumeTitle: resume.Title, Salary: resume.Salary, Location: resume.Area, Contacts: r.contacts}
+}
+
+func (r *HHAIResponder) canonicalCandidateContext(resume ResumeItem) (LegacyCandidateContext, *CandidateContextResolver, error) {
+	if r != nil && r.candidateRepository != nil {
+		candidate, err := r.candidateRepository.CurrentCandidate(r.ctx)
+		if err != nil {
+			return LegacyCandidateContext{}, nil, err
+		}
+		resolver := NewCandidateContextResolverFromCandidate(candidate)
+		view, err := CanonicalEmployerSafeProjection(candidate)
+		if err != nil {
+			return LegacyCandidateContext{}, nil, err
+		}
+		fullName := candidate.Identity.FullName
+		if strings.TrimSpace(fullName) == "" {
+			fullName = r.GetFullName()
+		}
+		location := candidate.Identity.Location
+		if strings.TrimSpace(location) == "" {
+			location = resume.Area
+		}
+		totalExperience, totalKnown, err := resolver.canonicalTotalExperience()
+		if err != nil {
+			return LegacyCandidateContext{}, nil, err
+		}
+		legacy := LegacyCandidateContext{
+			FullName: fullName, ResumeTitle: resume.Title, Salary: resume.Salary,
+			Experience: joinCanonicalExperience(view), Skills: joinCanonicalSkills(view),
+			Location: location, Contacts: r.contacts, Profile: canonicalProfileForLegacy(candidate), Stories: canonicalStoriesForLegacy(candidate),
+			TotalExperienceMonthsKnown: totalKnown, TotalExperienceMonths: totalExperience.Value,
+		}
+		for _, education := range view.Profile.Education {
+			legacy.EducationKnown = true
+			legacy.EducationLevel = education.Level
+			legacy.EducationDetails = joinNonEmptyStrings(", ", education.Institution, education.Specialty, education.Details)
+			break
+		}
+		for _, item := range view.Profile.WorkExperience {
+			legacy.Experience = joinNonEmptyStrings("\n\n", legacy.Experience, item.Description)
+		}
+		for _, item := range view.Profile.Projects {
+			legacy.Experience = joinNonEmptyStrings("\n\n", legacy.Experience, item.Description)
+		}
+		return legacy, resolver, nil
+	}
+	originalProfile := r.candidateProfile
+	profile := originalProfile
+	resumeFacts := r.resumeFacts
+	if strings.TrimSpace(resumeFacts.ExperienceText) == "" && strings.TrimSpace(r.resumeExperience) != "" {
+		// Compatibility input is folded into the canonical source before any
+		// prompt-facing projection is produced.
+		resumeFacts.ExperienceText = r.resumeExperience
+	}
+	readAt := profile.UpdatedAt
+	if readAt.IsZero() {
+		readAt = time.Unix(1, 0).UTC()
+	}
+	// Merge into a local copy only. Legacy profile persistence remains the
+	// writer; this supplies the canonical runtime snapshot for reads.
+	profile.MergeHHResumeFacts(resume, resumeFacts, readAt)
+	candidateRepository := NewJSONCandidateRepositoryFromInput(CanonicalCandidateInput{
+		Profile: profile, Knowledge: CandidateKnowledgeBase{Profile: profile},
+		Stories: r.candidateStories, ResumeFacts: &resumeFacts,
+		Contacts: r.contacts, GitHubURL: r.githubURL,
+	})
+	candidate, diagnostics, err := candidateRepository.CurrentCandidateWithDiagnostics(r.ctx)
+	if err != nil {
+		return LegacyCandidateContext{}, nil, err
+	}
+	if len(diagnostics.Conflicts) > 0 {
+		return LegacyCandidateContext{}, nil, errors.New("critical canonical candidate conflict")
+	}
 	fullName := r.GetFullName()
 	if profile.Identity.FullName.Confirmed && sourceTrustedForEmployerCommunication(profile.Identity.FullName.Source) && strings.TrimSpace(profile.Identity.FullName.Value) != "" {
 		fullName = profile.Identity.FullName.Value
@@ -2325,25 +2698,28 @@ func (r *HHAIResponder) candidateContext(resume ResumeItem) CandidateContext {
 	if profile.Identity.Location.Confirmed && sourceTrustedForEmployerCommunication(profile.Identity.Location.Source) && strings.TrimSpace(profile.Identity.Location.Value) != "" {
 		location = profile.Identity.Location.Value
 	}
-	skills := joinNonEmptyStrings(", ", profile.TrustedSkillsText(), resume.Skills)
-	experience := joinNonEmptyStrings("\n\n", profile.TrustedExperienceText(), profile.TrustedProjectsText(), r.resumeExperience)
-	educationKnown := r.resumeFacts.EducationKnown
-	educationLevel := r.resumeFacts.EducationLevel
-	educationDetails := r.resumeFacts.EducationDetails
-	if level, details, ok := profile.TrustedEducation(); ok {
-		educationKnown, educationLevel, educationDetails = true, level, details
+	educationKnown := false
+	var educationLevel, educationDetails string
+	for _, education := range candidate.Education {
+		if !safeMetadata(education.Metadata) {
+			continue
+		}
+		educationKnown = true
+		educationLevel = education.Level
+		educationDetails = joinNonEmptyStrings(", ", education.Institution, education.Specialty, education.Details)
+		break
 	}
-	totalExperienceKnown := r.resumeFacts.TotalExperienceMonthsKnown
-	totalExperienceMonths := r.resumeFacts.TotalExperienceMonths
-	if profile.TotalExperienceMonths.Confirmed && sourceTrustedForEmployerCommunication(profile.TotalExperienceMonths.Source) {
-		totalExperienceKnown, totalExperienceMonths = true, profile.TotalExperienceMonths.Value
+	totalExperienceKnown := safeProfileFact(candidate.Profile.TotalExperienceMonths.ProfileFact)
+	totalExperienceMonths := candidate.Profile.TotalExperienceMonths.Value
+	if !totalExperienceKnown {
+		totalExperienceMonths = 0
 	}
-	return CandidateContext{
+	legacy := LegacyCandidateContext{
 		FullName:                   fullName,
 		ResumeTitle:                resume.Title,
 		Salary:                     resume.Salary,
-		Experience:                 experience,
-		Skills:                     skills,
+		Experience:                 joinNonEmptyStrings("\n\n", profile.TrustedExperienceText(), profile.TrustedProjectsText()),
+		Skills:                     joinNonEmptyStrings(", ", profile.TrustedSkillsText()),
 		Location:                   location,
 		Contacts:                   r.contacts,
 		EducationKnown:             educationKnown,
@@ -2354,6 +2730,7 @@ func (r *HHAIResponder) candidateContext(resume ResumeItem) CandidateContext {
 		Profile:                    profile,
 		Stories:                    append([]CandidateStory(nil), r.candidateStories...),
 	}
+	return legacy, NewCandidateContextResolverFromCandidate(candidate), nil
 }
 
 func (r *HHAIResponder) addPendingQuestionForRequirement(vacancy Vacancy, requirement HardRequirementEvaluation) {
@@ -2371,6 +2748,20 @@ func (r *HHAIResponder) addPendingQuestionForRequirement(vacancy Vacancy, requir
 		question = "Подходят ли тебе условия/локация из требования: " + topic + "?"
 	} else if requirement.Category == hardRequirementCategoryLanguage {
 		question = "Какой у тебя подтверждённый уровень языка/языков для требования: " + topic + "?"
+	}
+	if r.candidateMutations != nil {
+		if current, err := r.candidateRepository.CurrentCandidate(r.ctx); err == nil {
+			for _, unknown := range current.Unknowns {
+				if normalizeProfileName(unknown.Question) == normalizeProfileName(question) || normalizeProfileName(unknown.RelatedEntity) == normalizeProfileName(topic) && unknown.Status == CandidateUnknownNeedsConfirmation {
+					return
+				}
+			}
+			_, err := r.candidateMutations.AskUnknown(r.ctx, AskCandidateUnknownCommand{Actor: KnowledgeActorAI, Value: CandidateUnknown{Question: question, RelatedEntity: topic, Status: CandidateUnknownNeedsConfirmation}, Update: KnowledgeUpdate{Source: KnowledgeSourceRecord{Type: KnowledgeSourceUnknown, Evidence: []string{"vacancy hard requirement"}}, Reason: "required " + requirement.Category}})
+			if err != nil && logger != nil {
+				logger.Warn("Could not save candidate unknown for vacancy %d: %v", vacancy.ID, err)
+			}
+		}
+		return
 	}
 	added := r.candidateProfile.AddPendingQuestion(PendingProfileQuestion{
 		Topic: topic, Question: question, Category: requirement.Category, VacancyID: vacancy.ID, Reason: "required " + requirement.Category,
@@ -2409,7 +2800,7 @@ func candidateLocation(location string) string {
 	return location
 }
 
-func (c *AIClient) GenerateLetter(v Vacancy, vacancyDescription string, candidate CandidateContext, extraPrompt string) (string, error) {
+func (c *AIClient) GenerateLetter(v Vacancy, vacancyDescription string, candidate LegacyCandidateContext, extraPrompt string) (string, error) {
 	if err := c.ctx.Err(); err != nil {
 		return "", err
 	}
@@ -2433,7 +2824,7 @@ func (c *AIClient) GenerateLetter(v Vacancy, vacancyDescription string, candidat
 	return letter, nil
 }
 
-func validateGeneratedLetterExperience(candidate CandidateContext, letter string) error {
+func validateGeneratedLetterExperience(candidate LegacyCandidateContext, letter string) error {
 	if !candidate.TotalExperienceMonthsKnown || candidate.TotalExperienceMonths%12 == 0 {
 		return nil
 	}
@@ -2774,6 +3165,9 @@ func (r *HHAIResponder) SetActiveJobSearchStatus() (bool, error) {
 		logger.Info("DRY-RUN: would update job-search status")
 		return true, nil
 	}
+	if r.controlledWriteOnly {
+		return false, errors.New("controlled HH Write Gateway is required")
+	}
 
 	token := r.XSRFToken()
 	if token == "" {
@@ -2845,6 +3239,9 @@ func (r *HHAIResponder) SendResponse(payload url.Values, refererURL string) (map
 	}
 	if !r.autoApply {
 		return map[string]any{"disabled": true}, nil
+	}
+	if r.controlledWriteOnly {
+		return nil, errors.New("controlled HH Write Gateway is required")
 	}
 	vacancyID, err := strconv.Atoi(payload.Get("vacancy_id"))
 	if err != nil || vacancyID <= 0 {
@@ -2947,8 +3344,11 @@ func (r *HHAIResponder) GetResumeFacts() (ResumeFacts, error) {
 }
 
 func (r *HHAIResponder) GetVacancyDescription(vacancyId int) (string, error) {
+	return r.getVacancyDescriptionContext(r.ctx, vacancyId)
+}
+func (r *HHAIResponder) getVacancyDescriptionContext(ctx context.Context, vacancyId int) (string, error) {
 
-	if err := r.ctx.Err(); err != nil {
+	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 
@@ -2957,7 +3357,7 @@ func (r *HHAIResponder) GetVacancyDescription(vacancyId int) (string, error) {
 		return "", err
 	}
 
-	resp, err := r.requester.Do(req)
+	resp, err := r.requester.Do(req.WithContext(ctx))
 	if err != nil {
 		return "", err
 	}
@@ -2999,6 +3399,9 @@ func (r *HHAIResponder) ApplyVacancyWithTest(vacancyId int, letter string) (map[
 		return nil, nil, err
 	}
 	if !r.dryRun {
+		if r.controlledWriteOnly {
+			return nil, nil, errors.New("controlled HH Write Gateway is required")
+		}
 		if err := r.requireLiveApplicationPreflight(vacancyId); err != nil {
 			return nil, nil, err
 		}
@@ -3092,7 +3495,10 @@ func (r *HHAIResponder) fetchVacancyPageForProfile(profile vacancySearchProfile,
 }
 
 func (r *HHAIResponder) fetchVacancyPageWithSearch(searchParams url.Values, baseURL *url.URL, page int) ([]Vacancy, error) {
-	if err := r.ctx.Err(); err != nil {
+	return r.fetchVacancyPageContext(r.ctx, searchParams, baseURL, page)
+}
+func (r *HHAIResponder) fetchVacancyPageContext(ctx context.Context, searchParams url.Values, baseURL *url.URL, page int) ([]Vacancy, error) {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	params := cloneValues(searchParams)
@@ -3102,7 +3508,7 @@ func (r *HHAIResponder) fetchVacancyPageWithSearch(searchParams url.Values, base
 		return nil, err
 	}
 
-	resp, err := r.requester.Do(req)
+	resp, err := r.requester.Do(req.WithContext(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -3181,6 +3587,10 @@ func (r *HHAIResponder) ApplyVacancies() error {
 	if resume == nil {
 		return errors.New("resume not found")
 	}
+	baseCandidate, candidateResolver, err := r.canonicalCandidateContext(*resume)
+	if err != nil {
+		return fmt.Errorf("canonical candidate read failed: %w", err)
+	}
 
 	applicationsInRun := 0
 	eligibleVacancies := 0
@@ -3247,9 +3657,19 @@ func (r *HHAIResponder) ApplyVacancies() error {
 			continue
 		}
 
+		safeCandidateContext, contextErr := candidateResolver.ResolveForVacancy(vacancy, vacancyDescription)
+		if contextErr != nil {
+			summary.Errors++
+			summary.ReviewRequired++
+			logger.Warn("REVIEW — vacancy %d: canonical candidate context unavailable: %v", vacancy.ID, contextErr)
+			continue
+		}
+		candidate := baseCandidate
+		candidate.SafeContext = safeCandidateContext
+
 		summary.AIEvaluated++
 		evaluation, err := r.ai.EvaluateVacancy(vacancyEvaluationInput{
-			Candidate:       r.candidateContext(*resume),
+			Candidate:       candidate,
 			Vacancy:         vacancy,
 			Description:     vacancyDescription,
 			Salary:          FormatCompensation(&vacancy.Compensation),
@@ -3352,10 +3772,10 @@ func (r *HHAIResponder) ApplyVacancies() error {
 			structuredVacancy.WorkExperience = preflight.WorkExperience
 		}
 		evaluation.HardRequirements = mergeHardRequirements(
-			localStructuredHardRequirements(preflight, r.candidateContext(*resume)),
+			localStructuredHardRequirements(preflight, candidate),
 			evaluation.HardRequirements,
 		)
-		if err := validateHardRequirements(r.candidateContext(*resume), structuredVacancy, evaluation); err != nil {
+		if err := validateHardRequirements(candidate, structuredVacancy, evaluation); err != nil {
 			summary.ReviewRequired++
 			reason := "structured preflight requirements could not be validated: " + err.Error()
 			logger.Info("REVIEW — vacancy %d: %s", vacancy.ID, reason)
@@ -3420,12 +3840,14 @@ func (r *HHAIResponder) ApplyVacancies() error {
 
 		var letter string
 		if preflight.LetterRequired || r.forceLetter {
-			letter, err = r.ai.GenerateLetterWithEvaluation(
+			examples := r.coverLetterSemanticExamples(vacancy, vacancyDescription, evaluation, candidateResolver)
+			letter, err = r.ai.GenerateLetterWithEvaluationAndSemantic(
 				vacancy,
 				vacancyDescription,
-				r.candidateContext(*resume),
+				candidate,
 				evaluation,
 				r.extraLetterPrompt,
+				examples,
 			)
 			if err != nil || strings.TrimSpace(letter) == "" {
 				summary.Errors++
@@ -3552,6 +3974,29 @@ func (r *HHAIResponder) ApplyVacancies() error {
 	return nil
 }
 
+func (r *HHAIResponder) coverLetterSemanticExamples(vacancy Vacancy, description string, evaluation VacancyEvaluation, resolver *CandidateContextResolver) []SafeSemanticSelection {
+	if r == nil || r.semanticRetriever == nil || resolver == nil {
+		return []SafeSemanticSelection{}
+	}
+	candidate, diagnostics, err := resolver.canonicalCandidate()
+	if err != nil || len(diagnostics.Conflicts) > 0 || strings.TrimSpace(candidate.ID) == "" {
+		return []SafeSemanticSelection{}
+	}
+	query := buildCoverLetterSemanticQuery(vacancy.Name, description, MatchResult{MatchedSkills: append([]string{}, evaluation.StrongMatch...), MissingSkills: append([]string{}, evaluation.Missing...)})
+	results, err := r.semanticRetriever.Retrieve(r.ctx, SemanticRetrievalRequest{CandidateID: candidate.ID, Query: query, EntityTypes: semanticEntityTypesForPurpose(SemanticRetrievalPurposeCoverLetter), Limit: semanticRetrievalTopK, Purpose: SemanticRetrievalPurposeCoverLetter})
+	if err != nil {
+		if logger != nil {
+			logger.Warn("semantic retrieval skipped for automatic cover letter: %v", err)
+		}
+		return []SafeSemanticSelection{}
+	}
+	selected := BuildSafeSemanticContext(candidate, results)
+	if logger != nil {
+		logger.Debug("semantic retrieval used purpose=%s candidates=%d selected=%d ids=%s", SemanticRetrievalPurposeCoverLetter, len(results), len(selected), semanticSelectionIDs(selected))
+	}
+	return selected
+}
+
 func (r *HHAIResponder) SaveCookies() error {
 	return r.jar.Save(r.cookiesPath)
 }
@@ -3579,6 +4024,9 @@ func (r *HHAIResponder) TouchResume() (bool, error) {
 			Time:        time.Now(),
 		})
 		return true, nil
+	}
+	if r.controlledWriteOnly {
+		return false, errors.New("controlled HH Write Gateway is required")
 	}
 
 	token := r.XSRFToken()
@@ -3880,21 +4328,33 @@ func parseConfig() (Config, error) {
 	}
 
 	cfg := Config{
+		FollowUpPolicy: DefaultFollowUpPolicy(),
+		StorageBackend: "json",
+		CandidateID:    "candidate-local",
 		// Safe by default: writes require an explicit HH_DRY_RUN=false.
-		DryRun:               true,
-		AutoApply:            true,
-		AutoChat:             true,
-		AutoTouch:            true,
-		AutoJobStatus:        true,
-		ChatMode:             "review",
-		MinMatchScore:        65,
-		MinSalaryCurrency:    "RUR",
-		CandidateProfilePath: filepath.Join(wd, "candidate_profile.json"),
-		CandidateStoriesPath: filepath.Join(wd, "candidate_stories.json"),
+		DryRun:                 true,
+		AutoApply:              true,
+		AutoChat:               true,
+		AutoTouch:              true,
+		AutoJobStatus:          true,
+		ChatMode:               "review",
+		MinMatchScore:          65,
+		MinSalaryCurrency:      "RUR",
+		CandidateProfilePath:   filepath.Join(wd, "candidate_profile.json"),
+		CandidateStoriesPath:   filepath.Join(wd, "candidate_stories.json"),
+		HHSyncStatePath:        filepath.Join(wd, HHSyncStateFilename),
+		MonitorInterval:        15 * time.Minute,
+		NotificationCooldown:   15 * time.Minute,
+		ConversationDisplayTTL: defaultConversationDisplayTTL,
+		HHMaxWritesPerRun:      1,
+		HHMaxWritesPerDay:      5,
 	}
 	var includeKeywordsRaw, excludeKeywordsRaw string
 
 	flag.StringVar(&cfg.SearchURL, "u", "", "URL для поиска вакансий")
+	flag.StringVar(&cfg.StorageBackend, "storage-backend", cfg.StorageBackend, "Хранилище вакансий: json или postgres")
+	flag.StringVar(&cfg.DatabaseURL, "database-url", "", "PostgreSQL connection URL (только при storage-backend=postgres)")
+	flag.StringVar(&cfg.CandidateID, "candidate-id", cfg.CandidateID, "Стабильный canonical ID кандидата")
 	flag.StringVar(&cfg.CookiesPath, "c", filepath.Join(wd, "cookies.txt"), "Путь к файлу cookies")
 	flag.StringVar(&cfg.LogLevel, "l", "info", "Уровень логирования: debug, info, warn, error")
 	flag.StringVar(&cfg.Resume, "r", "", "ID резюме (если не указан — используется последнее)")
@@ -3904,6 +4364,7 @@ func parseConfig() (Config, error) {
 	flag.BoolVar(&cfg.ForceLetter, "force-letter", false, "Всегда генерировать сопроводительное письмо")
 	flag.DurationVar(&cfg.AITimeout, "ai-timeout", defaultAITimeout, "Общий таймаут AI-запроса: соединение и чтение ответа")
 	flag.DurationVar(&cfg.AIConnectTimeout, "ai-connect-timeout", defaultAIConnectTimeout, "Таймаут соединения с AI-сервером")
+	flag.IntVar(&cfg.HHReadConcurrency, "hh-read-concurrency", 4, "Maximum independent HH reads (1..8; existing request interval still applies)")
 	flag.DurationVar(&cfg.RequestInterval, "request-interval", defaultRequestInterval, "Минимальный интервал между запросами к hh.ru")
 	flag.IntVar(&cfg.AIAttempts, "ai-attempts", defaultAIAttempts, "Количество попыток отправить запрос к ИИ")
 	flag.StringVar(&cfg.AIAPIKey, "ai-api-key", "", "API-ключ AI")
@@ -3915,6 +4376,10 @@ func parseConfig() (Config, error) {
 	flag.StringVar(&cfg.ExtraLetterPrompt, "letter-prompt", "", "Дополнительный промпт для сопроводительного письма")
 	flag.StringVar(&cfg.GithubURL, "github-url", "", "Ссылка на GitHub кандидата (не указывать, если не настроена)")
 	flag.BoolVar(&cfg.DryRun, "dry-run", true, "Не выполнять записи в HH (по умолчанию включено)")
+	flag.BoolVar(&cfg.HHWriteEnabled, "hh-write-enabled", false, "Разрешить только подтверждённые отправки через HH Write Gateway")
+	flag.StringVar(&cfg.HHChatURL, "hh-chat-url", defaultHHChatURL, "HH Chatik URL для offline request preview")
+	flag.IntVar(&cfg.HHMaxWritesPerRun, "hh-max-writes-per-run", 1, "Максимум ручных HH-отправок за один процесс; 0 — без лимита")
+	flag.IntVar(&cfg.HHMaxWritesPerDay, "hh-max-writes-per-day", 5, "Максимум ручных HH-отправок за UTC-день; 0 — без лимита")
 	flag.BoolVar(&cfg.AutoApply, "auto-apply", true, "Разрешить автоматические отклики")
 	flag.BoolVar(&cfg.AutoChat, "auto-chat", true, "Разрешить автоматические ответы в чатах")
 	flag.BoolVar(&cfg.AutoTouch, "auto-touch", true, "Разрешить поднятие резюме")
@@ -3931,6 +4396,13 @@ func parseConfig() (Config, error) {
 	flag.StringVar(&cfg.AlreadyRespondedStatePath, "already-responded-state", filepath.Join(wd, ".hh-already-responded.json"), "Локальный JSON-файл подтверждённых предыдущих откликов")
 	flag.StringVar(&cfg.CandidateProfilePath, "candidate-profile", filepath.Join(wd, "candidate_profile.json"), "Локальный профиль кандидата")
 	flag.StringVar(&cfg.CandidateStoriesPath, "candidate-stories", filepath.Join(wd, "candidate_stories.json"), "Примеры опыта кандидата")
+	flag.StringVar(&cfg.HHSyncStatePath, "hh-sync-state", filepath.Join(wd, HHSyncStateFilename), "Состояние read-only синхронизации HH")
+	flag.DurationVar(&cfg.MonitorInterval, "sync-interval", 15*time.Minute, "Интервал background monitor")
+	flag.StringVar(&cfg.MonitorQuietHours, "quiet-hours", "", "Тихие часы уведомлений, например 23:00-07:00")
+	flag.DurationVar(&cfg.NotificationCooldown, "notification-cooldown", 15*time.Minute, "Cooldown одинаковых уведомлений")
+	flag.DurationVar(&cfg.ConversationDisplayTTL, "conversation-display-ttl", defaultConversationDisplayTTL, "TTL display freshness targeted refresh")
+	flag.BoolVar(&cfg.BackgroundInboxRefresh, "background-inbox-refresh", false, "Периодически обновлять Inbox metadata в фоне")
+	followUpPolicyFlags(flag.CommandLine, &cfg.FollowUpPolicy)
 	flag.Parse()
 
 	_ = loadDotEnv(".env")
@@ -3940,6 +4412,13 @@ func parseConfig() (Config, error) {
 		flags[f.Name] = true
 	})
 
+	// Web options parse their own CLI flags after the subcommand, then env.
+	if len(os.Args) < 2 || (os.Args[1] != "web" && os.Args[1] != "dashboard") {
+		cfg.FollowUpPolicy, err = followUpPolicyEnv(cfg.FollowUpPolicy, os.Getenv, flags)
+		if err != nil {
+			return Config{}, err
+		}
+	}
 	if !flags["u"] {
 		fallbackSearchURL := getEnv("HH_SEARCH_URL", cfg.SearchURL)
 		cfg.SearchURLs, err = configuredSearchURLs(os.Getenv("HH_SEARCH_URLS"), fallbackSearchURL)
@@ -3953,6 +4432,23 @@ func parseConfig() (Config, error) {
 	if !flags["r"] {
 		cfg.Resume = getEnv("HH_RESUME", cfg.Resume)
 	}
+	if !flags["storage-backend"] {
+		cfg.StorageBackend = getEnv("STORAGE_BACKEND", cfg.StorageBackend)
+	}
+	if !flags["database-url"] {
+		cfg.DatabaseURL = getEnv("DATABASE_URL", cfg.DatabaseURL)
+	}
+	if !flags["candidate-id"] {
+		cfg.CandidateID = getEnv("HH_CANDIDATE_ID", cfg.CandidateID)
+	}
+	var storageErr error
+	cfg.StorageBackend, storageErr = normalizeStorageBackend(cfg.StorageBackend)
+	if storageErr != nil {
+		return Config{}, storageErr
+	}
+	if cfg.StorageBackend == storageBackendPostgres && strings.TrimSpace(cfg.DatabaseURL) == "" {
+		return Config{}, errors.New("DATABASE_URL is required when STORAGE_BACKEND=postgres")
+	}
 	if !flags["already-responded-state"] {
 		cfg.AlreadyRespondedStatePath = getEnv("HH_ALREADY_RESPONDED_STATE", cfg.AlreadyRespondedStatePath)
 	}
@@ -3961,6 +4457,48 @@ func parseConfig() (Config, error) {
 	}
 	if !flags["candidate-stories"] {
 		cfg.CandidateStoriesPath = getEnv("HH_CANDIDATE_STORIES", cfg.CandidateStoriesPath)
+	}
+	if !flags["hh-read-concurrency"] {
+		if raw := os.Getenv("HH_READ_CONCURRENCY"); raw != "" {
+			cfg.HHReadConcurrency, err = strconv.Atoi(raw)
+			if err != nil {
+				return Config{}, errors.New("invalid HH_READ_CONCURRENCY")
+			}
+		}
+	}
+	if cfg.HHReadConcurrency < 1 || cfg.HHReadConcurrency > 8 {
+		return Config{}, errors.New("hh-read-concurrency must be between 1 and 8")
+	}
+
+	if !flags["hh-sync-state"] {
+		cfg.HHSyncStatePath = getEnv("HH_SYNC_STATE", cfg.HHSyncStatePath)
+	}
+	if !flags["sync-interval"] {
+		cfg.MonitorInterval, err = parseDurationEnv("HH_SYNC_INTERVAL", cfg.MonitorInterval)
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if !flags["quiet-hours"] {
+		cfg.MonitorQuietHours = getEnv("HH_QUIET_HOURS", cfg.MonitorQuietHours)
+	}
+	if !flags["notification-cooldown"] {
+		cfg.NotificationCooldown, err = parseDurationEnv("HH_NOTIFICATION_COOLDOWN", cfg.NotificationCooldown)
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if !flags["conversation-display-ttl"] {
+		cfg.ConversationDisplayTTL, err = parseDurationEnv("HH_CONVERSATION_DISPLAY_TTL", cfg.ConversationDisplayTTL)
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if !flags["background-inbox-refresh"] {
+		cfg.BackgroundInboxRefresh, err = getEnvBool("HH_BACKGROUND_INBOX_REFRESH", cfg.BackgroundInboxRefresh)
+		if err != nil {
+			return Config{}, err
+		}
 	}
 	if !flags["ai-base-url"] {
 		cfg.AIBaseURL = getEnv("HH_AI_BASE_URL", cfg.AIBaseURL)
@@ -3971,6 +4509,8 @@ func parseConfig() (Config, error) {
 	if !flags["ai-api-key"] {
 		cfg.AIAPIKey = getEnv("HH_AI_API_KEY", cfg.AIAPIKey)
 	}
+	cfg.EmbeddingProvider = getEnv("EMBEDDING_PROVIDER", cfg.EmbeddingProvider)
+	cfg.EmbeddingModel = getEnv("EMBEDDING_MODEL", cfg.EmbeddingModel)
 	if !flags["letter-prompt"] {
 		cfg.ExtraLetterPrompt = getEnv("HH_LETTER_PROMPT", cfg.ExtraLetterPrompt)
 	}
@@ -4014,6 +4554,27 @@ func parseConfig() (Config, error) {
 		cfg.DryRun, boolErr = getEnvBool("HH_DRY_RUN", cfg.DryRun)
 		if boolErr != nil {
 			return Config{}, boolErr
+		}
+	}
+	if !flags["hh-write-enabled"] {
+		cfg.HHWriteEnabled, boolErr = getEnvBool("HH_WRITE_ENABLED", cfg.HHWriteEnabled)
+		if boolErr != nil {
+			return Config{}, boolErr
+		}
+	}
+	if !flags["hh-chat-url"] {
+		cfg.HHChatURL = getEnv("HH_CHAT_URL", cfg.HHChatURL)
+	}
+	if !flags["hh-max-writes-per-run"] {
+		cfg.HHMaxWritesPerRun, err = parseNonNegativeInt(os.Getenv("HH_MAX_WRITES_PER_RUN"), "HH_MAX_WRITES_PER_RUN", cfg.HHMaxWritesPerRun)
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if !flags["hh-max-writes-per-day"] {
+		cfg.HHMaxWritesPerDay, err = parseNonNegativeInt(os.Getenv("HH_MAX_WRITES_PER_DAY"), "HH_MAX_WRITES_PER_DAY", cfg.HHMaxWritesPerDay)
+		if err != nil {
+			return Config{}, err
 		}
 	}
 	if !flags["auto-apply"] {
@@ -4115,8 +4676,26 @@ func parseConfig() (Config, error) {
 	if cfg.RequestInterval <= 0 {
 		return Config{}, errors.New("request-interval must be greater than 0")
 	}
+	if cfg.MonitorInterval <= 0 || cfg.NotificationCooldown <= 0 || cfg.ConversationDisplayTTL <= 0 {
+		return Config{}, errors.New("monitor intervals must be greater than 0")
+	}
+	if cfg.MonitorQuietHours != "" && !validQuietHours(cfg.MonitorQuietHours) {
+		return Config{}, errors.New("quiet-hours must use HH:MM-HH:MM")
+	}
 
 	return cfg, nil
+}
+
+func parseDurationEnv(name string, fallback time.Duration) (time.Duration, error) {
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, errors.New("invalid " + name)
+	}
+	return parsed, nil
 }
 
 func getEnv(name, fallback string) string {
@@ -4398,10 +4977,134 @@ func (r *HHAIResponder) Run() {
 }
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "profile" {
-		// Profile subcommands are local-only, but should use the same optional
-		// path configuration as the main runner.
+	if len(os.Args) > 1 && os.Args[1] == "candidate" {
+		candidateArgs := append([]string{}, os.Args[2:]...)
 		_ = loadDotEnv(".env")
+		originalArgs := os.Args
+		os.Args = []string{originalArgs[0]}
+		cfg, err := parseConfig()
+		os.Args = originalArgs
+		if err == nil {
+			err = runCandidateCommand(candidateArgs, cfg, os.Stdout)
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "storage" {
+		// Storage has its own subcommand flags. Parse application configuration
+		// from environment only, then let runStorageCommand parse migration
+		// flags; no startup path reaches migration code.
+		storageArgs := append([]string{}, os.Args[2:]...)
+		_ = loadDotEnv(".env")
+		originalArgs := os.Args
+		os.Args = []string{originalArgs[0]}
+		cfg, err := parseConfig()
+		os.Args = originalArgs
+		// A migration-specific --database-url is parsed after this lightweight
+		// application config. Do not let STORAGE_BACKEND=postgres with an empty
+		// env URL hide that explicit command-line value.
+		if err != nil && strings.Contains(err.Error(), "DATABASE_URL is required when STORAGE_BACKEND=postgres") {
+			cfg, err = Config{}, nil
+		}
+		if err == nil {
+			err = runStorageCommand(storageArgs, cfg, os.Stdout)
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "reconcile" {
+		args := append([]string{}, os.Args[2:]...)
+		dryRun := reconcileDryRun(args)
+		os.Args = append(os.Args[:1], args...)
+		_ = loadDotEnv(".env")
+		cfg, err := parseConfig()
+		if err == nil {
+			err = runReconcileCommand(cfg, dryRun, os.Stdout)
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "monitor" {
+		os.Args = append(os.Args[:1], os.Args[2:]...)
+		_ = loadDotEnv(".env")
+		cfg, err := parseConfig()
+		if err == nil {
+			// Monitor is a permanently read-only HH capability, regardless of
+			// legacy write-related flags in the environment.
+			err = runMonitorCommand(cfg, os.Stdout)
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "audit" {
+		// Strip the subcommand so audit flags have normal CLI-over-env precedence.
+		os.Args = append(os.Args[:1], os.Args[2:]...)
+		cfg, err := parseConfig()
+		if err == nil {
+			err = runAuditCommand(cfg, os.Stdout)
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	if len(os.Args) > 1 && (os.Args[1] == "web" || os.Args[1] == "dashboard") {
+		_ = loadDotEnv(".env")
+		cfg, err := parseConfig()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		logger = NewLogger(os.Stderr, parseLogLevel(cfg.LogLevel))
+		if err := runDashboardCommand(os.Args[2:], cfg, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	if len(os.Args) > 1 && os.Args[1] == "hh" {
+		_ = loadDotEnv(".env")
+		cfg, err := parseConfig()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		if err := runHHCommand(os.Args[2:], cfg, os.Stdout, os.Stderr); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "profile" {
+		_ = loadDotEnv(".env")
+		if profileCLIUsesPostgres(os.Args[2:]) {
+			cfg := Config{StorageBackend: storageBackendPostgres, DatabaseURL: os.Getenv("DATABASE_URL"), CandidateID: firstNonEmpty(os.Getenv("HH_CANDIDATE_ID"), "candidate-local"), CandidateProfilePath: firstNonEmpty(os.Getenv("HH_CANDIDATE_PROFILE"), "candidate_profile.json")}
+			profileArgs := append([]string{}, os.Args[2:]...)
+			if len(profileArgs) > 0 && profileArgs[0] == "knowledge" {
+				if err := runKnowledgeCommandWithConfig(profileArgs[1:], cfg, os.Stdout); err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					os.Exit(2)
+				}
+				return
+			}
+			fmt.Fprintln(os.Stderr, "profile write commands are unsupported in STORAGE_BACKEND=postgres; use canonical candidate knowledge commands")
+			os.Exit(2)
+		}
 		if err := runProfileCommand(os.Args[2:], os.Stdin, os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(2)
@@ -4433,6 +5136,16 @@ func main() {
 	}
 
 	responder.Run()
+}
+
+func profileCLIUsesPostgres(args []string) bool {
+	backend := strings.ToLower(strings.TrimSpace(os.Getenv("STORAGE_BACKEND")))
+	for i, arg := range args {
+		if (arg == "-storage-backend" || arg == "--storage-backend") && i+1 < len(args) {
+			backend = strings.ToLower(strings.TrimSpace(args[i+1]))
+		}
+	}
+	return backend == storageBackendPostgres
 }
 
 func cloneValues(values url.Values) url.Values {

@@ -12,21 +12,7 @@ catch {
     exit 1
 }
 
-# Загружаем .env если существует
-if (Test-Path ".env") {
-    Get-Content ".env" |
-        Where-Object { $_ -and ($_ -notmatch '^\s*#') } |
-        ForEach-Object {
-            $parts = $_ -split '=', 2
-            if ($parts.Count -eq 2) {
-                $name = $parts[0].Trim()
-                $value = $parts[1].Trim().Trim('"')
-                if ($name) {
-                    [System.Environment]::SetEnvironmentVariable($name, $value)
-                }
-            }
-        }
-}
+# The application loads .env itself, using the same parser on every platform.
 
 # Проверяем наличие бинарника
 if (-not (Test-Path $App)) {
@@ -40,6 +26,6 @@ if (-not ($App.ToLower().EndsWith(".exe"))) {
     exit 3
 }
 
-# Запускаем приложение без передачи аргументов
-& ".\\$App"
+# Запускаем приложение с передачей аргументов
+& ".\\$App" @args
 exit $LASTEXITCODE

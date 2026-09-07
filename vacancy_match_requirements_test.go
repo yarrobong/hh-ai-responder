@@ -26,7 +26,7 @@ func testEvaluation(requirements ...HardRequirementEvaluation) VacancyEvaluation
 }
 
 func TestValidateHardRequirementsEducationIsAlwaysUnknown(t *testing.T) {
-	candidate := CandidateContext{}
+	candidate := LegacyCandidateContext{}
 	vacancy := Vacancy{}
 
 	missing := testEvaluation(testHardRequirement("высшее образование", hardRequirementCategoryEducation, hardRequirementStatusMissing, "Требуется высшее образование", "Образование отсутствует"))
@@ -59,7 +59,7 @@ func TestEvaluateVacancyDerivesEducationLocallyWithoutSemanticRetry(t *testing.T
 	defer server.Close()
 
 	client := NewAIClient(context.Background(), server.URL, "test-model", "", time.Second, time.Second, 2)
-	evaluation, err := client.EvaluateVacancy(vacancyEvaluationInput{Candidate: CandidateContext{}, Vacancy: Vacancy{Name: "Backend"}, Description: "Требуется высшее образование"})
+	evaluation, err := client.EvaluateVacancy(vacancyEvaluationInput{Candidate: LegacyCandidateContext{}, Vacancy: Vacancy{Name: "Backend"}, Description: "Требуется высшее образование"})
 	if err != nil {
 		t.Fatalf("semantic retry failed: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestEvaluateVacancyDerivesEducationLocallyWithoutSemanticRetry(t *testing.T
 }
 
 func TestValidateHardRequirementsExperienceRequiresUnknownDuration(t *testing.T) {
-	candidate := CandidateContext{Experience: "5 лет в backend-разработке"}
+	candidate := LegacyCandidateContext{Experience: "5 лет в backend-разработке"}
 	vacancy := Vacancy{WorkExperience: "Опыт 3-6 лет"}
 	for _, status := range []string{hardRequirementStatusMissing, hardRequirementStatusMet} {
 		evaluation := testEvaluation(testHardRequirement("3 года опыта", hardRequirementCategoryExperienceYears, status, "Опыт от 3 лет", "not provided"))
@@ -88,13 +88,13 @@ func TestValidateHardRequirementsExperienceRequiresUnknownDuration(t *testing.T)
 
 func TestValidateHardRequirementsDoesNotInventExperienceRequirement(t *testing.T) {
 	evaluation := testEvaluation(testHardRequirement("минимальный опыт", hardRequirementCategoryExperienceYears, hardRequirementStatusUnknown, "Опыт не требуется", "not provided"))
-	if err := validateHardRequirements(CandidateContext{}, Vacancy{WorkExperience: "Без опыта"}, evaluation); err == nil {
+	if err := validateHardRequirements(LegacyCandidateContext{}, Vacancy{WorkExperience: "Без опыта"}, evaluation); err == nil {
 		t.Fatal("experience requirement was accepted for a no-experience vacancy")
 	}
 }
 
 func TestValidateHardRequirementsLocationIsConservative(t *testing.T) {
-	candidate := CandidateContext{Location: "Екатеринбург"}
+	candidate := LegacyCandidateContext{Location: "Екатеринбург"}
 	vacancy := Vacancy{Area: NamedObject{Name: "Ташкент"}}
 	missing := testEvaluation(testHardRequirement("офис в Ташкенте", hardRequirementCategoryLocation, hardRequirementStatusMissing, "Работа в офисе Ташкента", "Кандидат находится в Екатеринбурге"))
 	if err := validateHardRequirements(candidate, vacancy, missing); err == nil {
@@ -139,7 +139,7 @@ func TestLocationRequirementMatchesCandidateUsesExplicitEvidence(t *testing.T) {
 
 func TestDeriveHardRequirementLocationDoesNotUseVacancyArea(t *testing.T) {
 	status, evidence := deriveHardRequirementStatus(
-		CandidateContext{Location: "Екатеринбург"},
+		LegacyCandidateContext{Location: "Екатеринбург"},
 		Vacancy{Area: NamedObject{Name: "Екатеринбург"}},
 		HardRequirementCandidate{
 			Requirement:     "с. Кадниково",
@@ -154,7 +154,7 @@ func TestDeriveHardRequirementLocationDoesNotUseVacancyArea(t *testing.T) {
 
 func TestAIHardRequirementLocationCannotUseVacancyAreaAsEvidence(t *testing.T) {
 	derived := deriveHardRequirements(
-		CandidateContext{Location: "Екатеринбург"},
+		LegacyCandidateContext{Location: "Екатеринбург"},
 		Vacancy{Area: NamedObject{Name: "Екатеринбург"}},
 		"",
 		[]HardRequirementCandidate{{
@@ -169,7 +169,7 @@ func TestAIHardRequirementLocationCannotUseVacancyAreaAsEvidence(t *testing.T) {
 }
 
 func TestValidateHardRequirementsMissingSkillRequiresExplicitNegativeFact(t *testing.T) {
-	candidate := CandidateContext{Skills: "Python, Django"}
+	candidate := LegacyCandidateContext{Skills: "Python, Django"}
 	missing := testEvaluation(testHardRequirement("Kafka", hardRequirementCategorySkill, hardRequirementStatusMissing, "Kafka обязателен", "Kafka отсутствует в резюме"))
 	if err := validateHardRequirements(candidate, Vacancy{}, missing); err == nil {
 		t.Fatal("missing skill was accepted from absence in candidate context")
@@ -186,7 +186,7 @@ func TestValidateHardRequirementsEvidenceAndOptionalRequirements(t *testing.T) {
 		testHardRequirement("Python", hardRequirementCategorySkill, hardRequirementStatusMet, "Python обязателен", ""),
 		testHardRequirement("Python", hardRequirementCategorySkill, hardRequirementStatusMissing, "Python обязателен", ""),
 	} {
-		if err := validateHardRequirements(CandidateContext{Skills: "Python"}, Vacancy{}, testEvaluation(requirement)); err == nil {
+		if err := validateHardRequirements(LegacyCandidateContext{Skills: "Python"}, Vacancy{}, testEvaluation(requirement)); err == nil {
 			t.Fatalf("invalid evidence was accepted: %+v", requirement)
 		}
 	}
@@ -195,12 +195,12 @@ func TestValidateHardRequirementsEvidenceAndOptionalRequirements(t *testing.T) {
 	if got := vacancyDecision(optional, 65); got == VacancyReject {
 		t.Fatal("optional requirement caused REJECT")
 	}
-	if err := validateHardRequirements(CandidateContext{}, Vacancy{}, optional); err == nil {
+	if err := validateHardRequirements(LegacyCandidateContext{}, Vacancy{}, optional); err == nil {
 		t.Fatal("optional requirement was accepted as hard requirement")
 	}
 
 	grounded := testEvaluation(testHardRequirement("Python", hardRequirementCategorySkill, hardRequirementStatusMet, "Python обязателен", "Python указан в навыках"))
-	if err := validateHardRequirements(CandidateContext{Skills: "Python"}, Vacancy{}, grounded); err != nil {
+	if err := validateHardRequirements(LegacyCandidateContext{Skills: "Python"}, Vacancy{}, grounded); err != nil {
 		t.Fatalf("grounded skill evidence was rejected: %v", err)
 	}
 }
@@ -210,7 +210,7 @@ func TestDeriveHardRequirementsIsDeterministicAndConservative(t *testing.T) {
 	logger = NewLogger(io.Discard, LevelDebug)
 	t.Cleanup(func() { logger = previousLogger })
 
-	candidate := CandidateContext{
+	candidate := LegacyCandidateContext{
 		Skills:   "Python, Django",
 		Location: "Екатеринбург",
 	}
@@ -252,7 +252,7 @@ func TestDeriveHardRequirementsIsDeterministicAndConservative(t *testing.T) {
 }
 
 func TestDeriveHardRequirementStatusesForKnownFacts(t *testing.T) {
-	candidate := CandidateContext{Skills: "Python, Django", Location: "Екатеринбург"}
+	candidate := LegacyCandidateContext{Skills: "Python, Django", Location: "Екатеринбург"}
 	vacancy := Vacancy{Area: NamedObject{Name: "Екатеринбург"}}
 	description := "Python обязателен. Офис в Екатеринбурге. Kafka обязателен."
 
@@ -274,7 +274,7 @@ func TestDeriveHardRequirementStatusesForKnownFacts(t *testing.T) {
 
 func TestUnsupportedRequirementDoesNotFailWholeEvaluation(t *testing.T) {
 	derived := deriveHardRequirements(
-		CandidateContext{Skills: "Python"},
+		LegacyCandidateContext{Skills: "Python"},
 		Vacancy{},
 		"Python обязателен.",
 		[]HardRequirementCandidate{
@@ -307,7 +307,7 @@ func TestEvaluateVacancyInvalidJSONStillRetries(t *testing.T) {
 
 	client := NewAIClient(context.Background(), server.URL, "test-model", "", time.Second, time.Second, 2)
 	evaluation, err := client.EvaluateVacancy(vacancyEvaluationInput{
-		Candidate:   CandidateContext{Skills: "Python"},
+		Candidate:   LegacyCandidateContext{Skills: "Python"},
 		Description: "Python обязателен",
 	})
 	if err != nil {

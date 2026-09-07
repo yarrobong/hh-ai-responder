@@ -110,7 +110,7 @@ func TestVacancyDecisionUsesTriStateHardRequirements(t *testing.T) {
 
 func TestNoExperienceRequirementDoesNotConflictWithCandidateExperience(t *testing.T) {
 	systemPrompt, userPrompt := buildVacancyEvaluationPrompt(vacancyEvaluationInput{
-		Candidate:   CandidateContext{Experience: "5 лет опыта в backend-разработке"},
+		Candidate:   LegacyCandidateContext{Experience: "5 лет опыта в backend-разработке"},
 		Vacancy:     Vacancy{Name: "Python developer"},
 		Description: "Опыт не требуется. Обучение на месте.",
 	})
@@ -127,7 +127,7 @@ func TestNoExperienceRequirementDoesNotConflictWithCandidateExperience(t *testin
 
 func TestVacancyEvaluationPromptUsesExactExperienceMonthsAndSoftHHBand(t *testing.T) {
 	systemPrompt, userPrompt := buildVacancyEvaluationPrompt(vacancyEvaluationInput{
-		Candidate: CandidateContext{TotalExperienceMonthsKnown: true, TotalExperienceMonths: 11},
+		Candidate: LegacyCandidateContext{TotalExperienceMonthsKnown: true, TotalExperienceMonths: 11},
 		Vacancy:   Vacancy{WorkExperience: "between1And3"},
 	})
 	if !strings.Contains(userPrompt, "Structured candidate total experience: 11 months") {
@@ -192,7 +192,7 @@ func TestVacancyResponseCountKnownness(t *testing.T) {
 }
 
 func TestPromptsRequireTruthfulAnswersAndOptionalGitHub(t *testing.T) {
-	letter := buildLetterSystemPrompt(CandidateContext{FullName: "Имя"}, "")
+	letter := buildLetterSystemPrompt(LegacyCandidateContext{FullName: "Имя"}, "")
 	if strings.Contains(letter, "Утверждай") || strings.Contains(letter, "всеми необходимыми навыками") {
 		t.Fatalf("letter prompt still encourages fabricated skills: %s", letter)
 	}
@@ -292,7 +292,7 @@ func TestFinalApplyDecisionUsesAIFlagAndThreshold(t *testing.T) {
 
 func TestVacancyEvaluationPromptContainsCandidateAndVacancyFacts(t *testing.T) {
 	systemPrompt, userPrompt := buildVacancyEvaluationPrompt(vacancyEvaluationInput{
-		Candidate: CandidateContext{
+		Candidate: LegacyCandidateContext{
 			FullName:    "Имя Кандидата",
 			ResumeTitle: "Python developer",
 			Salary:      "100000 руб",
@@ -859,7 +859,7 @@ func TestOrdinaryLetterDoesNotForceJSONMode(t *testing.T) {
 	}))
 	defer server.Close()
 	client := NewAIClient(context.Background(), server.URL, "test-model", "", time.Second, time.Second, 1)
-	letter, err := client.GenerateLetter(Vacancy{Name: "Backend"}, "Python", CandidateContext{ResumeTitle: "Python developer"}, "")
+	letter, err := client.GenerateLetter(Vacancy{Name: "Backend"}, "Python", LegacyCandidateContext{ResumeTitle: "Python developer"}, "")
 	if err != nil || letter != "Письмо" {
 		t.Fatalf("ordinary letter failed: letter=%q err=%v", letter, err)
 	}
@@ -884,7 +884,7 @@ func TestGeneratedLetterRejectsRoundedExperienceClaim(t *testing.T) {
 	_, err := client.GenerateLetter(
 		Vacancy{Name: "Backend"},
 		"Python",
-		CandidateContext{ResumeTitle: "Python developer", TotalExperienceMonthsKnown: true, TotalExperienceMonths: 11},
+		LegacyCandidateContext{ResumeTitle: "Python developer", TotalExperienceMonthsKnown: true, TotalExperienceMonths: 11},
 		"",
 	)
 	if err == nil || !strings.Contains(err.Error(), "rounds structured experience") {

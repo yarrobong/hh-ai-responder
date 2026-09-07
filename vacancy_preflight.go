@@ -399,7 +399,7 @@ func stateHasVacancyTest(value any, vacancyID int) bool {
 	}
 }
 
-func localStructuredHardRequirements(preflight VacancyPreflight, candidate CandidateContext) []HardRequirementEvaluation {
+func localStructuredHardRequirements(preflight VacancyPreflight, candidate LegacyCandidateContext) []HardRequirementEvaluation {
 	var result []HardRequirementEvaluation
 	// HH's structured WorkExperience is factual context and a ranking signal,
 	// not a hard requirement. Explicit duration requirements from the vacancy

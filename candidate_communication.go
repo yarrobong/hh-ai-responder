@@ -2,6 +2,7 @@ package main
 
 import (
 	_ "embed"
+	"encoding/json"
 	"fmt"
 )
 
@@ -42,5 +43,13 @@ func buildChatSystemPrompt(chatToReply ChatToReply) string {
 	if chatToReply.AvoidClaiming != "" {
 		systemPrompt += "\nНикогда не утверждай наличие: " + chatToReply.AvoidClaiming
 	}
-	return systemPrompt + "\n\n" + candidateCommunicationProfile + "\n\nДля ответа HR в HH chat используй короткий формат: обычно 1–3 предложения и до 400 символов, если нет требования выбрать вариант кнопки. Отвечай только на текущий вопрос и не добавляй нерелевантные кейсы."
+	return systemPrompt + "\n\nКанонический employer-safe context (единственный источник фактов; unknown и disputed не являются утверждениями):\n" + chatCandidateContextJSON(chatToReply.CandidateContext) + "\n\n" + candidateCommunicationProfile + "\n\nДля ответа HR в HH chat используй короткий формат: обычно 1–3 предложения и до 400 символов, если нет требования выбрать вариант кнопки. Отвечай только на текущий вопрос и не добавляй нерелевантные кейсы."
+}
+
+func chatCandidateContextJSON(context CandidateContext) string {
+	raw, err := json.Marshal(context)
+	if err != nil {
+		return "{}"
+	}
+	return string(raw)
 }

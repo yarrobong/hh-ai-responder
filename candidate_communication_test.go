@@ -10,7 +10,7 @@ func TestCommunicationProfileIsIncludedInEmployerPrompts(t *testing.T) {
 		t.Fatal("communication profile is empty")
 	}
 	prompts := map[string]string{
-		"letter": buildLetterSystemPrompt(CandidateContext{
+		"letter": buildLetterSystemPrompt(LegacyCandidateContext{
 			FullName: "Test Candidate", Skills: "VerifiedSkill", Experience: "VerifiedProject",
 			TotalExperienceMonthsKnown: true, TotalExperienceMonths: 11,
 		}, "ChannelSpecificInstruction"),

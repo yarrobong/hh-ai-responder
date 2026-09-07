@@ -421,9 +421,9 @@ func uniqueNonEmpty(values []string) []string {
 	return result
 }
 
-func candidateEducationSummary(candidate CandidateContext) string {
+func candidateEducationSummary(candidate LegacyCandidateContext) string {
 	if !candidate.EducationKnown || strings.TrimSpace(candidate.EducationLevel) == "" {
-		return "не передано в CandidateContext; уровень неизвестен"
+		return "не передано в LegacyCandidateContext; уровень неизвестен"
 	}
 	if details := strings.TrimSpace(candidate.EducationDetails); details != "" {
 		return fmt.Sprintf("%s (%s)", candidate.EducationLevel, details)
@@ -431,7 +431,7 @@ func candidateEducationSummary(candidate CandidateContext) string {
 	return candidate.EducationLevel
 }
 
-func candidateExperienceSummary(candidate CandidateContext) string {
+func candidateExperienceSummary(candidate LegacyCandidateContext) string {
 	if !candidate.TotalExperienceMonthsKnown {
 		return "не передана; не вычисляй её по датам"
 	}

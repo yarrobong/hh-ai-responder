@@ -14,3 +14,22 @@ work_experience.md
 /hh-ai-responder.exe
 .hh-already-responded.json
 /candidate_profile.json
+# Private temporary snapshots created by the knowledge store.
+/.candidate_*.tmp
+# Private conversation history and staged snapshots, including nested stores.
+employer_conversations.json
+.employer_conversations-*.tmp
+vacancies.json
+job_applications.json
+hh_sync_state.json
+candidate_clarifications.json
+ai_drafts.json
+quality_log.json
+daily_refresh_state.json
+hh_write_actions.json
+hh_write_events.json
+
+# Private read-only validation snapshots and reports
+/.career-validation/
+
+/candidate_profile.json.bak

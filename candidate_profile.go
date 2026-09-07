@@ -860,13 +860,20 @@ func runProfileCommand(args []string, in io.Reader, out io.Writer) error {
 	storiesPath := defaultCandidateStoriesPath()
 	command := ""
 	importSource := ""
+	var knowledgeArgs []string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
-		case "show", "questions", "bootstrap", "import", "stories", "communication":
+		case "show", "questions", "bootstrap", "import", "stories", "communication", "knowledge":
 			if command != "" {
 				return profileUsageError()
 			}
 			command = args[i]
+			if command == "knowledge" {
+				for i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+					i++
+					knowledgeArgs = append(knowledgeArgs, args[i])
+				}
+			}
 			if command == "import" {
 				if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" || strings.HasPrefix(args[i+1], "-") {
 					return errors.New("usage: profile import file [-candidate-profile path]")
@@ -887,8 +894,15 @@ func runProfileCommand(args []string, in io.Reader, out io.Writer) error {
 			storiesPath = args[i+1]
 			i++
 		default:
+			if command == "knowledge" && !strings.HasPrefix(args[i], "-") {
+				knowledgeArgs = append(knowledgeArgs, args[i])
+				continue
+			}
 			return profileUsageError()
 		}
+	}
+	if command == "knowledge" {
+		return runKnowledgeCommand(knowledgeArgs, path, out)
 	}
 	if command == "import" {
 		return ImportCandidateProfile(importSource, path)
@@ -946,7 +960,7 @@ func runProfileCommand(args []string, in io.Reader, out io.Writer) error {
 }
 
 func profileUsageError() error {
-	return errors.New("usage: profile [show|questions|bootstrap|import file|stories|communication] [-candidate-profile path] [-candidate-stories path]")
+	return errors.New("usage: profile [show|questions|bootstrap|import file|stories|communication|knowledge proposals|knowledge confirm <id>|knowledge reject <id>] [-candidate-profile path] [-candidate-stories path]")
 }
 
 func defaultCandidateProfilePath() string {

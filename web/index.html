@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta
+      name="description"
+      content="Локальный центр поиска работы Career Agent"
+    />
+    <title>Career Agent · Dashboard</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">К содержимому</a>
+    <aside class="sidebar">
+      <a href="/" class="brand"
+        ><span class="brand-mark">ca</span
+        ><span>Career Agent<small>YOUR NEXT CHAPTER</small></span></a
+      >
+      <div class="nav-label">WORKSPACE</div>
+      <nav aria-label="Главная навигация">
+        <a href="/" data-nav="/">◫ <span>Overview</span></a>
+        <a href="/today" data-nav="/today">☀ <span>Today</span></a>
+        <a href="/inbox" data-nav="/inbox"
+          >▤ <span>Inbox</span><span id="inbox-count" class="nav-count"></span
+        ></a>
+        <a href="/applications" data-nav="/applications"
+          >↗ <span>Applications</span></a
+        >
+        <a href="/vacancies" data-nav="/vacancies">▦ <span>Vacancies</span></a>
+        <a href="/knowledge" data-nav="/knowledge">◇ <span>Knowledge</span></a>
+        <a href="/analytics" data-nav="/analytics">▥ <span>Analytics</span></a>
+        <a href="/health" data-nav="/health">✓ <span>System Health</span></a>
+        <a href="/sync" data-nav="/sync">⟳ <span>Maintenance</span></a>
+      </nav>
+      <div class="local-note">
+        <span class="status-dot"></span> Local workspace
+        <p>HH read-only<br />Данные на вашем устройстве</p>
+      </div>
+    </aside>
+    <div class="workspace">
+      <header class="topbar">
+        <span
+          >WORKSPACE <span class="slash">/</span>
+          <strong id="breadcrumb">Overview</strong></span
+        ><span class="readonly"
+          ><span class="status-dot"></span> HH read-only</span
+        >
+      </header>
+      <main id="content" tabindex="-1">
+        <div class="loading">Загружаем ваш workspace…</div>
+      </main>
+      <div id="global-sync-status" class="sync-status" role="status" aria-live="polite"></div>
+      <footer>
+        <span>Career Agent · Local Dashboard</span
+        ><span id="refresh-status"
+          >Обновление локальных данных каждые 45 секунд</span
+        >
+      </footer>
+    </div>
+    <div id="toast" role="status" aria-live="polite" hidden></div>
+  </body>
+</html>

@@ -9,7 +9,7 @@ import (
 func TestGenericHHExperienceIsSoftContext(t *testing.T) {
 	for _, work := range []string{"between1And3", "between3And6", "moreThan6"} {
 		for _, months := range []int{0, 11} {
-			got := localStructuredHardRequirements(VacancyPreflight{WorkExperienceKnown: true, WorkExperience: work}, CandidateContext{TotalExperienceMonthsKnown: true, TotalExperienceMonths: months})
+			got := localStructuredHardRequirements(VacancyPreflight{WorkExperienceKnown: true, WorkExperience: work}, LegacyCandidateContext{TotalExperienceMonthsKnown: true, TotalExperienceMonths: months})
 			if len(got) != 0 {
 				t.Fatalf("HH WorkExperience %q created a hard requirement for %d months: %+v", work, months, got)
 			}
@@ -29,16 +29,16 @@ func TestCandidateContextCarriesResumeFacts(t *testing.T) {
 	}
 	candidate := r.candidateContext(ResumeItem{})
 	if !candidate.EducationKnown || candidate.EducationLevel != educationLevelHigher || candidate.EducationDetails != "structured level" {
-		t.Fatalf("education facts were not carried to CandidateContext: %+v", candidate)
+		t.Fatalf("education facts were not carried to LegacyCandidateContext: %+v", candidate)
 	}
 	if !candidate.TotalExperienceMonthsKnown || candidate.TotalExperienceMonths != 18 {
-		t.Fatalf("experience facts were not carried to CandidateContext: %+v", candidate)
+		t.Fatalf("experience facts were not carried to LegacyCandidateContext: %+v", candidate)
 	}
 }
 
 func TestNoExperienceDoesNotCreateGenericRequirement(t *testing.T) {
 	for _, value := range []string{"noExperience", "Без опыта", "Опыт не требуется"} {
-		if got := localStructuredHardRequirements(VacancyPreflight{WorkExperienceKnown: true, WorkExperience: value}, CandidateContext{TotalExperienceMonthsKnown: true, TotalExperienceMonths: 100}); len(got) != 0 {
+		if got := localStructuredHardRequirements(VacancyPreflight{WorkExperienceKnown: true, WorkExperience: value}, LegacyCandidateContext{TotalExperienceMonthsKnown: true, TotalExperienceMonths: 100}); len(got) != 0 {
 			t.Fatalf("%q created a requirement: %+v", value, got)
 		}
 	}
@@ -46,7 +46,7 @@ func TestNoExperienceDoesNotCreateGenericRequirement(t *testing.T) {
 
 func TestDescriptionSpecificExperienceDoesNotUseTotalExperience(t *testing.T) {
 	got := deriveHardRequirements(
-		CandidateContext{TotalExperienceMonthsKnown: true, TotalExperienceMonths: 50},
+		LegacyCandidateContext{TotalExperienceMonthsKnown: true, TotalExperienceMonths: 50},
 		Vacancy{WorkExperience: "Опыт 1-3 года"},
 		"Нужно 3 года SRE.",
 		[]HardRequirementCandidate{{Requirement: "3 года SRE", Category: hardRequirementCategoryExperienceYears, VacancyEvidence: "Нужно 3 года SRE"}},
@@ -75,7 +75,7 @@ func TestDescriptionExperienceUsesExplicitTotalDurationPolicy(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			got := deriveHardRequirements(
-				CandidateContext{TotalExperienceMonthsKnown: true, TotalExperienceMonths: test.months},
+				LegacyCandidateContext{TotalExperienceMonthsKnown: true, TotalExperienceMonths: test.months},
 				Vacancy{},
 				test.description,
 				[]HardRequirementCandidate{{
@@ -104,7 +104,7 @@ func TestEducationRequirementsUseTrustedLevel(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			got := deriveHardRequirements(
-				CandidateContext{EducationKnown: true, EducationLevel: test.level, EducationDetails: "structured education"},
+				LegacyCandidateContext{EducationKnown: true, EducationLevel: test.level, EducationDetails: "structured education"},
 				Vacancy{},
 				test.requirement,
 				[]HardRequirementCandidate{{Requirement: test.requirement, Category: hardRequirementCategoryEducation, VacancyEvidence: test.requirement}},
@@ -118,7 +118,7 @@ func TestEducationRequirementsUseTrustedLevel(t *testing.T) {
 
 func TestEducationSpecializationWithoutStructuredProfileIsUnknown(t *testing.T) {
 	got := deriveHardRequirements(
-		CandidateContext{EducationKnown: true, EducationLevel: educationLevelHigher},
+		LegacyCandidateContext{EducationKnown: true, EducationLevel: educationLevelHigher},
 		Vacancy{},
 		"Высшее образование по ИБ.",
 		[]HardRequirementCandidate{{Requirement: "высшее образование по ИБ", Category: hardRequirementCategoryEducation, VacancyEvidence: "Высшее образование по ИБ"}},

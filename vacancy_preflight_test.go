@@ -68,7 +68,7 @@ func TestVacancyPreflightDecisionFailsClosed(t *testing.T) {
 }
 
 func TestLocalStructuredHardRequirements(t *testing.T) {
-	candidate := CandidateContext{Location: "Екатеринбург"}
+	candidate := LegacyCandidateContext{Location: "Екатеринбург"}
 	tests := []struct {
 		name             string
 		preflight        VacancyPreflight
@@ -140,7 +140,7 @@ func TestMergeHardRequirementsKeepsLocalRequirementWhenAIIsEmpty(t *testing.T) {
 	local := localStructuredHardRequirements(VacancyPreflight{
 		WorkExperienceKnown: true,
 		WorkExperience:      "Опыт 3-6 лет",
-	}, CandidateContext{})
+	}, LegacyCandidateContext{})
 	merged := mergeHardRequirements(local, nil)
 	if len(merged) != 0 {
 		t.Fatalf("soft structured experience was turned into a hard requirement: %+v", merged)

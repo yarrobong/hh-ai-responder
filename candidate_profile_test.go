@@ -240,7 +240,7 @@ func TestUserConfirmedSkillSurvivesHHMerge(t *testing.T) {
 
 func TestConfirmedGitResolvesOnlyGit(t *testing.T) {
 	now := time.Now()
-	candidate := CandidateContext{Profile: CandidateProfile{Skills: []CandidateSkill{{Name: "Git", Level: SkillLevelWorking, ProfileFact: confirmedProfileFact(CandidateSourceUserConfirmed, now)}}}}
+	candidate := LegacyCandidateContext{Profile: CandidateProfile{Skills: []CandidateSkill{{Name: "Git", Level: SkillLevelWorking, ProfileFact: confirmedProfileFact(CandidateSourceUserConfirmed, now)}}}}
 	met := deriveHardRequirements(candidate, Vacancy{}, "Требуется Git", []HardRequirementCandidate{{Requirement: "Git", Category: hardRequirementCategorySkill, VacancyEvidence: "Требуется Git"}})
 	if len(met) != 1 || met[0].Status != hardRequirementStatusMet {
 		t.Fatalf("confirmed Git did not resolve: %+v", met)
@@ -272,7 +272,7 @@ func TestAnsweringPendingQuestionChangesFutureEvaluation(t *testing.T) {
 	if err := profile.AnswerPendingQuestion(0, SkillLevelWorking, now); err != nil {
 		t.Fatal(err)
 	}
-	candidate := CandidateContext{Profile: profile}
+	candidate := LegacyCandidateContext{Profile: profile}
 	got := deriveHardRequirements(candidate, Vacancy{}, "Требуется Kubernetes", []HardRequirementCandidate{{Requirement: "Kubernetes", Category: hardRequirementCategorySkill, VacancyEvidence: "Требуется Kubernetes"}})
 	if len(got) != 1 || got[0].Status != hardRequirementStatusMet {
 		t.Fatalf("answered profile fact did not affect evaluation: %+v", got)
@@ -281,7 +281,7 @@ func TestAnsweringPendingQuestionChangesFutureEvaluation(t *testing.T) {
 
 func TestDerivedFactIsExcludedFromCoverLetterContext(t *testing.T) {
 	now := time.Now()
-	candidate := CandidateContext{Profile: CandidateProfile{Skills: []CandidateSkill{{Name: "DerivedOnlyTechnology", Level: SkillLevelWorking, ProfileFact: ProfileFact{Source: CandidateSourceDerived, Confirmed: false, ConfirmedAt: now}}}}}
+	candidate := LegacyCandidateContext{Profile: CandidateProfile{Skills: []CandidateSkill{{Name: "DerivedOnlyTechnology", Level: SkillLevelWorking, ProfileFact: ProfileFact{Source: CandidateSourceDerived, Confirmed: false, ConfirmedAt: now}}}}}
 	prompt := buildLetterSystemPrompt(candidate, "")
 	if strings.Contains(prompt, "DerivedOnlyTechnology") {
 		t.Fatalf("derived skill appeared in cover-letter context: %s", prompt)

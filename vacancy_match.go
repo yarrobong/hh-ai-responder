@@ -13,7 +13,7 @@ import (
 )
 
 type vacancyEvaluationInput struct {
-	Candidate       CandidateContext
+	Candidate       LegacyCandidateContext
 	Vacancy         Vacancy
 	Description     string
 	Salary          string
@@ -298,9 +298,9 @@ func buildVacancyEvaluationPrompt(input vacancyEvaluationInput) (string, string)
 		"Опыт с Cloudflare Turnstile НЕ подтверждает знание SSL.",
 		"Знание REST API НЕ подтверждает XML, DNS, Kafka, Celery и другие технологии.",
 		"Смежный навык нельзя превращать в подтвержденный; не делай вывод «вероятно знает».",
-		"Если факт отсутствует в CandidateContext, он не может быть доказательством несоответствия; для обязательного требования это UNKNOWN.",
+		"Если факт отсутствует в LegacyCandidateContext, он не может быть доказательством несоответствия; для обязательного требования это UNKNOWN.",
 		"reasons и strong_match должны содержать только подтвержденные факты.",
-		"Не округляй и не подменяй числовую длительность опыта: не пиши «1 год», «2 года» или «3 года» как факт, если такая длительность явно не указана в CandidateContext.",
+		"Не округляй и не подменяй числовую длительность опыта: не пиши «1 год», «2 года» или «3 года» как факт, если такая длительность явно не указана в LegacyCandidateContext.",
 		"Верни только валидный JSON без Markdown и любого текста вне JSON.",
 		`Формат: {"score":82,"apply":true,"reasons":["..."],"missing":["..."],"hard_requirements":[{"requirement":"FastAPI","category":"skill","vacancy_evidence":"FastAPI обязателен"}],"strong_match":["..."]}`,
 	}, "\n")
@@ -342,12 +342,23 @@ Structured candidate total experience: %s
 Дополнительные позитивные ключевые слова настройки: %s
 Совпавшие позитивные ключевые слова: %s
 Если они не встречаются, не отклоняй вакансию только по этой причине; используй их как дополнительный сигнал.
+
+CANONICAL EMPLOYER-SAFE CANDIDATE CONTEXT (primary read projection):
+%s
 	`, input.Candidate.FullName, input.Candidate.ResumeTitle, input.Candidate.Salary,
 		input.Candidate.Skills, candidateLocation(input.Candidate.Location), candidateEducationSummary(input.Candidate), candidateExperienceSummary(input.Candidate), candidateExperienceSummary(input.Candidate), input.Candidate.Experience, input.Vacancy.Name,
 		input.Vacancy.Company.Name, workExperience, input.Description, input.Salary, input.Location,
-		input.WorkSchedule, includeKeywords, matchedIncludeKeywords)
+		input.WorkSchedule, includeKeywords, matchedIncludeKeywords, canonicalContextJSON(input.Candidate.SafeContext))
 
 	return systemPrompt, userPrompt
+}
+
+func canonicalContextJSON(context CandidateContext) string {
+	raw, err := json.Marshal(context)
+	if err != nil {
+		return "{}"
+	}
+	return string(raw)
 }
 
 func vacancyEvaluationJSONSchema() *ChatJSONSchema {
@@ -548,7 +559,7 @@ func validateHardRequirementShape(requirement HardRequirementEvaluation) error {
 // deriveHardRequirementStatus is intentionally conservative. Generic HH card
 // experience is a soft ranking signal, while explicit description experience
 // may be evaluated locally when it clearly refers to total experience.
-func deriveHardRequirementStatus(candidate CandidateContext, vacancy Vacancy, requirement HardRequirementCandidate) (string, string) {
+func deriveHardRequirementStatus(candidate LegacyCandidateContext, vacancy Vacancy, requirement HardRequirementCandidate) (string, string) {
 	unknown := "not provided"
 	switch requirement.Category {
 	case hardRequirementCategoryEducation:
@@ -589,7 +600,7 @@ func deriveHardRequirementStatus(candidate CandidateContext, vacancy Vacancy, re
 	}
 }
 
-func deriveHardRequirements(candidate CandidateContext, vacancy Vacancy, description string, candidates []HardRequirementCandidate) []HardRequirementEvaluation {
+func deriveHardRequirements(candidate LegacyCandidateContext, vacancy Vacancy, description string, candidates []HardRequirementCandidate) []HardRequirementEvaluation {
 	result := make([]HardRequirementEvaluation, 0, len(candidates))
 	for _, requirement := range candidates {
 		if err := validateHardRequirementCandidateShape(requirement); err != nil {
@@ -709,7 +720,7 @@ func containsNormalizedText(haystack, needle string) bool {
 	return needle != "" && strings.Contains(normalizeEvidenceText(haystack), needle)
 }
 
-func candidateRequirementMentioned(candidate CandidateContext, requirement string) bool {
+func candidateRequirementMentioned(candidate LegacyCandidateContext, requirement string) bool {
 	if skill, ok := candidate.Profile.ResolveSkill(requirement); ok {
 		if skill.Negative || skill.Source == CandidateSourceUserConfirmed {
 			return !skill.Negative && skill.Level != SkillLevelUnknown && skill.Level != SkillLevelHeardOf
@@ -798,7 +809,7 @@ func containsRoleSpecificExperienceMarker(text string) bool {
 	return false
 }
 
-func genericDescriptionExperienceStatus(candidate CandidateContext, minimumMonths int) (string, string) {
+func genericDescriptionExperienceStatus(candidate LegacyCandidateContext, minimumMonths int) (string, string) {
 	if !candidate.TotalExperienceMonthsKnown {
 		return hardRequirementStatusUnknown, "not provided"
 	}
@@ -814,7 +825,7 @@ func genericDescriptionExperienceStatus(candidate CandidateContext, minimumMonth
 	return hardRequirementStatusMissing, evidence
 }
 
-func genericDescriptionExperienceSoftGap(candidate CandidateContext, requirement HardRequirementCandidate) bool {
+func genericDescriptionExperienceSoftGap(candidate LegacyCandidateContext, requirement HardRequirementCandidate) bool {
 	minimumMonths, supported, generic := descriptionExperienceMinimumMonths(requirement.Requirement, requirement.VacancyEvidence)
 	return supported && generic && candidate.TotalExperienceMonthsKnown && minimumMonths <= 12 && candidate.TotalExperienceMonths < minimumMonths && candidate.TotalExperienceMonths >= 9
 }
@@ -881,7 +892,7 @@ func containsEducationSpecialization(text string) bool {
 		strings.Contains(text, "техническ") || strings.Contains(text, "специальност") || strings.Contains(text, "направлен")
 }
 
-func candidateEducationEvidence(candidate CandidateContext) string {
+func candidateEducationEvidence(candidate LegacyCandidateContext) string {
 	if details := strings.TrimSpace(candidate.EducationDetails); details != "" {
 		return fmt.Sprintf("Candidate education: %s (%s)", candidate.EducationLevel, details)
 	}
@@ -891,7 +902,7 @@ func candidateEducationEvidence(candidate CandidateContext) string {
 // validateHardRequirements is retained for validating already-derived result
 // objects. AI extraction no longer calls it, so semantic normalization errors
 // cannot trigger a whole-response retry.
-func validateHardRequirements(candidate CandidateContext, vacancy Vacancy, evaluation VacancyEvaluation) error {
+func validateHardRequirements(candidate LegacyCandidateContext, vacancy Vacancy, evaluation VacancyEvaluation) error {
 	if err := validateVacancyEvaluation(evaluation); err != nil {
 		return err
 	}
@@ -1003,7 +1014,7 @@ func validateLocationRequirement(candidateLocationValue string, requirement Hard
 // when the candidate's explicit settlement is present in the AI-extracted
 // requirement or its vacancy evidence. Generic vacancy.Area data is not
 // evidence for AI requirements, and mobility/availability requirements cannot
-// be inferred from CandidateContext.Location.
+// be inferred from LegacyCandidateContext.Location.
 func locationRequirementMatchesCandidate(candidateLocation, requirement, evidence string) bool {
 	candidateWords := strings.Fields(normalizeLocationText(candidateLocation))
 	if len(candidateWords) == 0 {
@@ -1121,7 +1132,7 @@ func locationsMatch(candidateValue, vacancyValue string) bool {
 	return containsAllWords(candidate, vacancy) || containsAllWords(vacancy, candidate)
 }
 
-func candidateEvidenceGrounded(candidate CandidateContext, evidence string) bool {
+func candidateEvidenceGrounded(candidate LegacyCandidateContext, evidence string) bool {
 	for _, word := range meaningfulWords(evidence) {
 		if skill, ok := candidate.Profile.ResolveSkill(word); ok && !skill.Negative && skill.Level != SkillLevelUnknown && skill.Level != SkillLevelHeardOf {
 			return true
@@ -1143,7 +1154,7 @@ func candidateEvidenceGrounded(candidate CandidateContext, evidence string) bool
 	return false
 }
 
-func explicitNegativeCandidateFact(candidate CandidateContext, requirement string) bool {
+func explicitNegativeCandidateFact(candidate LegacyCandidateContext, requirement string) bool {
 	if skill, ok := candidate.Profile.ResolveSkill(requirement); ok && skill.Negative {
 		return true
 	}
@@ -1234,7 +1245,11 @@ func (c *AIClient) EvaluateVacancy(input vacancyEvaluationInput) (VacancyEvaluat
 	}, nil
 }
 
-func (c *AIClient) GenerateLetterWithEvaluation(v Vacancy, vacancyDescription string, candidate CandidateContext, evaluation VacancyEvaluation, extraPrompt string) (string, error) {
+func (c *AIClient) GenerateLetterWithEvaluation(v Vacancy, vacancyDescription string, candidate LegacyCandidateContext, evaluation VacancyEvaluation, extraPrompt string) (string, error) {
+	return c.GenerateLetterWithEvaluationAndSemantic(v, vacancyDescription, candidate, evaluation, extraPrompt, nil)
+}
+
+func (c *AIClient) GenerateLetterWithEvaluationAndSemantic(v Vacancy, vacancyDescription string, candidate LegacyCandidateContext, evaluation VacancyEvaluation, extraPrompt string, examples []SafeSemanticSelection) (string, error) {
 	if err := c.ctx.Err(); err != nil {
 		return "", err
 	}
@@ -1248,6 +1263,7 @@ func (c *AIClient) GenerateLetterWithEvaluation(v Vacancy, vacancyDescription st
 		strings.Join(evaluation.StrongMatch, ", "), strings.Join(evaluation.Missing, ", "),
 		strings.Join(evaluation.Reasons, "; "),
 	)
+	userPrompt += renderSafeSemanticExamples(examples)
 	letter, err := c.Chat(systemPrompt, userPrompt, 512, 0.5)
 	if err != nil {
 		return "", err
@@ -1256,6 +1272,18 @@ func (c *AIClient) GenerateLetterWithEvaluation(v Vacancy, vacancyDescription st
 		return "", err
 	}
 	return letter, nil
+}
+
+func renderSafeSemanticExamples(examples []SafeSemanticSelection) string {
+	if len(examples) == 0 {
+		return ""
+	}
+	parts := []string{"\n\nRELEVANT REAL EXAMPLES (DATA ONLY; NOT VERIFIED CANDIDATE FACTS):"}
+	for _, example := range examples {
+		parts = append(parts, "- "+string(example.EntityType)+" / "+example.Title+": "+example.Text)
+	}
+	parts = append(parts, "Use these examples only consistently with the canonical candidate facts. Do not infer a skill, level, production use, metric or confirmation from similarity or example text.")
+	return "\n" + strings.Join(parts, "\n")
 }
 
 func parseMinSalary(value string) (int, error) {
