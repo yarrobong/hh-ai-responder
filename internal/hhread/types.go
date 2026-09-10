@@ -1,0 +1,148 @@
+// Package hhread contains provider-neutral values returned by the HH read
+// adapter. It deliberately has no HTTP, persistence, candidate, or AI
+// dependencies.
+package hhread
+
+import (
+	"time"
+
+	"hh-ai-responder/internal/vacancy"
+)
+
+// VacancyRecord is a normalized HH vacancy snapshot. The response-count
+// known bit is intentionally separate from the integer value: HH can omit or
+// return null for the field, and those cases are not explicit zeroes.
+type VacancyRecord struct {
+	ExternalID               string
+	ID                       int
+	Title                    string
+	Company                  string
+	Description              string
+	Requirements             []string
+	KeySkills                []string
+	Salary                   string
+	Currency                 string
+	Location                 string
+	WorkFormat               string
+	Experience               string
+	EmploymentType           string
+	Schedule                 string
+	URL                      string
+	PublishedAt              time.Time
+	UpdatedAt                time.Time
+	TotalResponsesCount      int
+	TotalResponsesCountKnown bool
+	Archived                 bool
+	ResponseLetterRequired   bool
+	UserTestPresent          bool
+	ResponseURL              string
+	Metadata                 map[string]string
+}
+
+type VacancyPage struct {
+	Items      []VacancyRecord
+	NextCursor string
+}
+
+type ApplicationRecord struct {
+	Vacancy              *vacancy.Vacancy
+	ExternalID           string
+	VacancyExternalID    string
+	VacancyID            int
+	Company              string
+	VacancyTitle         string
+	VacancyURL           string
+	Status               string
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+	ConversationExternal string
+	Metadata             map[string]string
+}
+
+type ApplicationPage struct {
+	Items      []ApplicationRecord
+	NextCursor string
+}
+
+type Action struct {
+	Kind     string
+	ID       string
+	Label    string
+	Value    string
+	Metadata map[string]string
+}
+
+// ChatListPage and ChatHistory are small neutral projections used by the
+// legacy chat responder compatibility façade. They contain no provider JSON
+// and expose no mutation affordance.
+type ChatSummary struct {
+	ID               int64
+	VacancyIDs       []string
+	ResumeIDs        []string
+	LastMessage      *MessageRecord
+	LastActivityTime time.Time
+}
+
+type ChatVacancySummary struct {
+	ID             int64
+	Name           string
+	Company        string
+	URL            string
+	SalaryFrom     *int
+	SalaryTo       *int
+	SalaryCurrency string
+}
+
+type ChatListPage struct {
+	NextFrom  string
+	Page      int
+	PerPage   int
+	Pages     int
+	Items     []ChatSummary
+	Vacancies map[string]ChatVacancySummary
+	ResumeIDs map[string]struct{}
+}
+
+type ChatHistory struct {
+	ID           int64
+	Messages     []MessageRecord
+	WriteAllowed bool
+}
+
+type MessageRecord struct {
+	SystemEvent            bool
+	ContentUnavailable     bool
+	ExternalID             string
+	Sender                 string
+	Direction              string
+	Text                   string
+	Timestamp              time.Time
+	Metadata               map[string]string
+	Actions                []Action
+	ParticipantID          string
+	ParticipantName        string
+	WorkflowApplicantState string
+}
+
+type ConversationRecord struct {
+	MetadataUnchanged  bool
+	ExternalID         string
+	VacancyExternalID  string
+	VacancyID          int
+	Company            string
+	VacancyTitle       string
+	VacancyDescription string
+	Status             string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	Metadata           map[string]string
+	Messages           []MessageRecord
+}
+
+type ConversationPage struct {
+	Items                []ConversationRecord
+	NextCursor           string
+	MetadataChecked      int
+	HistoryReused        int
+	DetailedChatsFetched int
+}

@@ -17,7 +17,7 @@
 Компиляции:
 
 ```sh
-go build .
+go build ./cmd/hh-ai-responder
 ```
 
 В [релизах](https://github.com/s3rgeym/hh-ai-responder/releases/latest) можно скачать готовую версию под все целевые платформы: Windows, Linux, Darwin (Mac) и Android (для запуска через Termux).
@@ -44,11 +44,11 @@ go build .
 
 Используйте флаг `-h` для справки.
 
-По умолчанию приложение использует модель `llama3:8b`, запущенную на `http://localhost:11434` (например через **Ollama**). Для Docker вместо localhost нужно указывать IP компьютера в локальной сети, например, `http://192.168.0.100:11434`
+По умолчанию приложение использует модель `llama3:8b`, запущенную на `http://localhost:11434` (например через **Ollama**).
 
 ## Переменные окружения
 
-Аргументы могут передаваться не только через командную строку, но и через переменные окружения. Для docker — это предпочтительный способ передачи.
+Аргументы могут передаваться не только через командную строку, но и через переменные окружения.
 
 Скопируйте пример файла, содержащего переменные окружения, и отредактируйте его:
 
@@ -67,8 +67,11 @@ cp example.env .env
 | `HH_AI_BASE_URL`       | `-ai-base-url`       | Базовый URL OpenAI-compatible API.                                     |
 | `HH_AI_MODEL`          | `-ai-model`          | Модель AI.                                                             |
 | `HH_AI_API_KEY`        | `-ai-api-key`        | API key для OpenAI-compatible API.                                     |
-| `EMBEDDING_PROVIDER`   | —                    | Явно включает semantic retrieval: `openai` или `openai-compatible`; используются `HH_AI_BASE_URL` и `HH_AI_API_KEY`. |
-| `EMBEDDING_MODEL`      | —                    | Embedding model; по умолчанию `text-embedding-3-small` (1536 dimensions). |
+| `EMBEDDING_PROVIDER`   | —                    | Явно включает semantic retrieval: `openai` или `openai-compatible`. Настройки embeddings независимы от `HH_AI_*`. |
+| `EMBEDDING_BASE_URL`   | —                    | Базовый URL embedding API; если пуст, используется `HH_AI_BASE_URL` для обратной совместимости. |
+| `EMBEDDING_API_KEY`    | —                    | Ключ embedding API; если пуст, используется `HH_AI_API_KEY` для обратной совместимости. Не выводится в status/help. |
+| `EMBEDDING_MODEL`      | —                    | Embedding model; по умолчанию `text-embedding-3-small`. |
+| `EMBEDDING_DIMENSIONS` | —                    | Явный размер embedding-вектора; по умолчанию `1536`, допустимо `1..16000`. Ответ другого размера отклоняется без padding/truncation. |
 | `HH_LETTER_PROMPT`     | `-letter-prompt`     | Дополнительные инструкции для сопроводительного письма.                |
 | `HH_SOLUTION_PROMPT`   | `-solution-prompt`   | Дополнительные инструкции для решения тестов.                          |
 | `HH_CHAT_REPLY_PROMPT` | `-chat-reply-prompt` | Дополнительные инструкции для ответов в чатах с работодателями.        |
@@ -95,6 +98,7 @@ cp example.env .env
 | `HH_RUN_ONCE`          | `-run-once`          | Выполнить разрешённые задачи один раз и завершиться.                 |
 | `HH_MAX_VACANCIES_PER_RUN` | `-max-vacancies-per-run` | Максимум вакансий после базовой eligibility-проверки за проход; `0` — без лимита, по умолчанию `20`. |
 | `HH_MAX_APPLICATIONS_PER_RUN` | `-max-applications-per-run` | Максимум откликов/превью за проход; `0` — без лимита, по умолчанию `10`. |
+| `HH_MAX_CONVERSATIONS_PER_RUN` | `-max-conversations-per-run` | Максимум чатов при явном `monitor --run-once`; `0` — полный scope. Ограничение применяется до чтения деталей чатов и не меняет scheduled Career monitor. |
 | `HH_CANDIDATE_PROFILE` | `-candidate-profile` | Локальная база знаний кандидата; по умолчанию `candidate_profile.json`, файл не коммитится. |
 | `HH_CANDIDATE_STORIES` | `-candidate-stories` | Необязательные примеры опыта; по умолчанию `candidate_stories.json`. Используются только в релевантных cover letters, максимум 2 кейса. |
 | `HH_SYNC_INTERVAL` | `-sync-interval` | Интервал локального Career Monitor; по умолчанию `15m`. Только read-only sync. |
@@ -118,7 +122,7 @@ Dashboard сохраняет лёгкий `quality_log.json` рядом с ос�
 
 ### Локальный профиль кандидата
 
-Общий [Communication Profile](candidate_communication.md) задаёт позиционирование, тон, структуру ответов и правила достоверности. Он автоматически включается в AI-промпты сопроводительных писем и ответов рекрутерам в HH chats. Для подготовки к собеседованиям используйте этот же файл как инструкцию вместе с подтверждёнными данными кандидата; отдельного режима собеседований в приложении нет. Файл встроен в бинарник через `go:embed`: после изменения пересоберите приложение (`go build .`). Посмотреть его можно командой `./hh-ai-responder profile communication`.
+Общий [Communication Profile](candidate_communication.md) задаёт позиционирование, тон, структуру ответов и правила достоверности. Он автоматически включается в AI-промпты сопроводительных писем и ответов рекрутерам в HH chats. Для подготовки к собеседованиям используйте этот же файл как инструкцию вместе с подтверждёнными данными кандидата; отдельного режима собеседований в приложении нет. Файл встроен в бинарник через `go:embed`: после изменения пересоберите приложение (`go build ./cmd/hh-ai-responder`). Посмотреть его можно командой `./hh-ai-responder profile communication`.
 
 `candidate_stories.json` содержит примеры опыта, но не расширяет факты `candidate_profile.json` и не участвует в vacancy matching. В письмо попадают только кейсы с явным совпадением ключевых слов, ролей или технологий с текстом вакансии; добавляется не более 1–2 кейсов. Если подтверждение результата или достижения вызывает сомнение, кейс не используется. Посмотреть загруженные stories можно командой `./hh-ai-responder profile stories`.
 
@@ -171,14 +175,14 @@ Candidate Knowledge Base — это живой профиль кандидата
 | `candidate_skills.json` | `CandidateSkillDetailed`: уровень, категория, confidence, статус достоверности, источники, evidence, проекты, способности, ограничения и время последнего использования. |
 | `candidate_projects.json` | `CandidateProject`: тип, роль, период, описание, технологии, задачи, результаты и связанные навыки. |
 | `candidate_achievements.json` | `CandidateAchievement`: проблема, решение, действия, результат, технологии и ссылка на проект. |
-| `candidate_unknowns.json` | `CandidateUnknown`: вопрос, связанная сущность, гипотеза и статус `needs_confirmation`, `confirmed` или `rejected`. |
+| `candidate_unknowns.json` | `CandidateUnknown`: вопрос, связанная сущность, provenance employer conversation и статус `needs_confirmation`, `confirmed`, `rejected`, `dismissed` или `superseded`. |
 | `candidate_proposals.json` | `KnowledgeProposal`: предлагаемое значение, причина, источник, confidence, состояние `pending` / `confirmed` / `rejected`, время создания и исходная запись для проверки устаревания. |
 | `candidate_events.json` | `CandidateKnowledgeEvent`: время, действие, сущность, прежнее/новое значение, источник и автор записи. |
 | `candidate_stories.json` | Прежние примеры опыта; миграция их не изменяет и не превращает в подтверждённые достижения. |
 
 Новые коллекции находятся рядом с выбранным файлом профиля. Формат каждой — объект с `version: 1` и массивом соответствующего имени, например `{"version":1,"skills":[]}`. Старые `CandidateProfile`, `CandidateSkill`, `ProjectFact` и строковый `level` остаются совместимыми.
 
-**Источник и достоверность.** `KnowledgeSource` поддерживает `user_confirmed`, `hh_resume`, `github_verified`, `candidate_interview`, `project_analysis`, `derived`, `unknown`. В `sources` хранятся записи с `type`, собственным `evidence`, необязательными `reference` и `observed_at`. Все новые сущности знаний имеют общие метаданные: `confidence`, `truth_status`, `sources`, `evidence`, `created_at`, `updated_at` и необязательное `confirmed_at`.
+**Источник и достоверность.** `KnowledgeSource` поддерживает `user_confirmed`, `hh_resume`, `github_verified`, `candidate_interview`, `project_analysis`, `employer_conversation`, `derived`, `unknown`. В `sources` хранятся записи с `type`, собственным `evidence`, необязательными `reference` и `observed_at`. Все новые сущности знаний имеют общие метаданные: `confidence`, `truth_status`, `sources`, `evidence`, `created_at`, `updated_at` и необязательное `confirmed_at`.
 
 - `confidence` — число от 0 до 1 либо `null`, если оценка неизвестна. Ноль отличается от неизвестной оценки.
 - `truth_status: confirmed` требует источника `user_confirmed` с непустым evidence и времени подтверждения.
@@ -229,7 +233,7 @@ ID миграции вычисляется по содержимому исхо�
 | `project_analysis`, `derived` | Только гипотеза и pending proposal; существующий подтверждённый/проверенный факт и повышение существующего уровня остаются без изменений до подтверждения. Подтверждение добавляет источник `user_confirmed`. |
 | `unknown` | Только вопрос в `candidate_unknowns.json`; факт и proposal не создаются. |
 
-`Actor` и `VerifyGitHub` задаются доверенным Go-кодом, не полями ответа AI. Для AI используется `KnowledgeActorAI`, для импорта — `KnowledgeActorImporter`. Callback `VerifyGitHub(source, entityType, value)` обязан проверить реальное, относящееся к кандидату доказательство **всего утверждения**, включая заявленные уровень и роль. URL репозитория или наличие Dockerfile сами по себе не доказывают уровень владения Docker. Без callback или при ошибке обновление отклоняется. Сетевой GitHub/AI-адаптер на этом этапе не реализован; JSON proposals — доверенное локальное хранилище, не формат импорта ответов AI.
+`Actor` и `VerifyGitHub` задаются доверенным Go-кодом, не полями ответа AI. Для AI используется `KnowledgeActorAI`, для импорта — `KnowledgeActorImporter`. Callback `VerifyGitHub(source, entityType, value)` обязан проверить реальное, относящееся к кандидату доказательство **всего утверждения**, включая заявленные уровень и роль. URL репозитория или наличие отдельного файла конфигурации сами по себе не доказывают уровень владения инструментом. Без callback или при ошибке обновление отклоняется. Сетевой GitHub/AI-адаптер на этом этапе не реализован; JSON proposals — доверенное локальное хранилище, не формат импорта ответов AI.
 
 `ConfirmKnowledge(proposalID)` и `RejectKnowledge(proposalID)` разрешены только для `KnowledgeActorUser`. Confirm применяет ровно просмотренное значение, добавляет пользовательское подтверждение и события для факта и proposal. Если исходная запись изменилась, подтверждение завершается ошибкой: нужно новое предложение. Reject меняет только состояние proposal и добавляет событие, сохраняя профиль и факты. Повторное решение и неизвестный ID возвращают ошибку. Неподтверждённая гипотеза после reject остаётся в локальной базе и не становится фактом для работодателя.
 
@@ -307,6 +311,13 @@ ineligible документы удаляются из active index. `status` н�
 private story text, а `search` показывает type, ID, score и title. Cosine
 `score` однозначно означает `higher = more relevant`; exact scan выбран для
 небольшого Candidate KB, без premature HNSW/IVFFlat.
+
+Embedding provider, endpoint, key, model and dimensions are configured
+separately from chat. Empty `EMBEDDING_BASE_URL`/`EMBEDDING_API_KEY` values
+fall back to the corresponding `HH_AI_*` values for compatibility only.
+Responses must match `EMBEDDING_DIMENSIONS` exactly. Changing the provider,
+endpoint, model or dimensions changes the non-secret embedding space identity;
+semantic search reports `REINDEX_REQUIRED` until the explicit reindex completes.
 
 Eligibility проверяется до индексации и повторно после retrieval по canonical
 Candidate. Hypothesis/unknown/disputed/unsupported references не попадают в
@@ -534,16 +545,6 @@ HH_EXCLUDE_KEYWORDS=1С,PHP Senior,DevOps Senior
 HH_CHAT_MODE=review
 ```
 
-## Docker
-
-Требует наличия `docker` и `docker-compose`, а так же файла `.env` (см. пред. пункт).
-
-Запуск:
-
-```bash
-docker compose up -d --build
-```
-
 ## Скрипты автозапуска
 
 В проекте добавлены вспомогательные скрипты для удобного запуска и добавления в автозагрузку:
@@ -607,7 +608,7 @@ https://github.com/s3rgeym/hh-ai-responder
 бинарник HTML/CSS и vanilla JS, без Node.js, npm и CDN при запуске.
 
 ```bash
-go build ./...
+go build ./cmd/hh-ai-responder
 ./hh-ai-responder web
 ```
 
@@ -709,13 +710,18 @@ knowledge hash и prompt version. Полностью answerable вопрос п�
 clarifications и вычисляемые предупреждения контекста.
 
 Ответ на clarification проходит через
-`AIReplyOrchestrator.ResolveCandidateClarification()` →
-`CandidateKnowledgeUpdater.UpdateUnknown()`. Свободный текст остаётся
-`CandidateUnknown` со статусом `needs_confirmation`: он **не становится
-подтверждённым навыком**. Готовые Knowledge Proposals показывают полный
-предлагаемый факт; отдельные кнопки вызывают `ConfirmKnowledge` или
-`RejectKnowledge`. Dashboard не создаёт confirmed facts напрямую и не реализует
-собственный извлекатель фактов из ответа.
+`AIReplyOrchestrator.ResolveCandidateClarification()` → typed Candidate Knowledge
+Acquisition Loop. Вопрос работодателя создаёт детерминированный `gap_key`, один
+`CandidateUnknown` и один clarification с provenance conversation/application/vacancy
+и employer message. Choice-ответ применяется атомарно только после явного выбора
+кандидата; free-text сохраняется без изменений и проходит строгий AI extraction в
+`hypothesis` proposal. AI не может подтвердить знание. Отдельное подтверждение
+кандидата через `ConfirmKnowledge`/canonical mutation закрывает unknown и помечает
+draft к регенерации; отправка в HH не выполняется автоматически. Невалидный ответ,
+неизвестный choice, неподдержанная ссылка или конфликт версии останавливают flow.
+Для PostgreSQL примените `migrations/000005_candidate_acquisition.up.sql` после
+базовых candidate migrations. `candidate status` показывает pending knowledge
+questions и pending proposals.
 
 ### Значение метрик
 
@@ -813,7 +819,7 @@ sender не перезаписывает исходную запись и ост
 dismiss сохраняются. Клиент sync/dashboard принудительно использует dry-run и
 дополнительно запрещает HTTP-методы, кроме GET/HEAD, на границе HHRequester.
 
-Подробный отчёт проверки: [VALIDATION_STAGE10.md](VALIDATION_STAGE10.md).
+Подробный отчёт проверки: [VALIDATION_STAGE10.md](docs/validation/VALIDATION_STAGE10.md).
 
 ## Stage 22: performance and read-only sync
 
@@ -891,5 +897,5 @@ prints its contents. Live contract measurements are separately opt-in:
 `HH_PERF_LIVE_FULL=true` and `HH_PERF_DATASET`. Run only
 `TestStage22LiveReadContract` for these measurements. It copies cookies, forces
 the GET-only capability and requires both safety environment variables above.
-See [PERFORMANCE_STAGE22.md](PERFORMANCE_STAGE22.md) for measured results and
+See [PERFORMANCE_STAGE22.md](docs/performance/PERFORMANCE_STAGE22.md) for measured results and
 remaining limits.

@@ -1,0 +1,3 @@
+DROP INDEX IF EXISTS legacy_auto_chat_attempts_trigger_created_idx;
+DROP INDEX IF EXISTS legacy_auto_chat_attempts_active_trigger_unique;
+DROP TABLE IF EXISTS legacy_auto_chat_attempts;

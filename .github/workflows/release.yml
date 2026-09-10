@@ -50,7 +50,7 @@ jobs:
         run: |
           mkdir -p dist
           bin="hh-ai-responder-${GOOS}-${GOARCH}${{ matrix.ext }}"
-          go build -trimpath -buildvcs=false -ldflags="-s -w" -o "dist/${bin}" .
+          go build -trimpath -buildvcs=false -ldflags="-s -w" -o "dist/${bin}" ./cmd/hh-ai-responder
 
       - name: Package
         run: |

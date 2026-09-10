@@ -1,9 +1,0 @@
-services:
-  hh-ai-responder:
-    build: .
-    container_name: hh-ai-responder
-    restart: unless-stopped
-    env_file: .env
-    volumes:
-      - .:/app
-    command: ["-o", "results.json", "-l", "debug", "-force-letter"]

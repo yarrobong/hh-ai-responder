@@ -29,6 +29,12 @@ daily_refresh_state.json
 hh_write_actions.json
 hh_write_events.json
 
+# Go test/build coverage artifacts
+*.test
+*.out
+coverage.*
+coverage/
+
 # Private read-only validation snapshots and reports
 /.career-validation/
 

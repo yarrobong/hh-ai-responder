@@ -74,6 +74,7 @@ const titles = {
   "/analytics": "Analytics",
   "/sync": "Maintenance",
   "/health": "System Health",
+  "/reliability": "Reliability",
 };
 const main = document.getElementById("content");
 let syncWatching = false, lastGeneration = null;
@@ -305,7 +306,7 @@ function applicationTable(rows) {
 function notificationPanel(d) {
   const rows = list(d?.notifications);
   if (!rows.length) return panel("Requires attention", '<div class="panel-body muted">Новых уведомлений нет.</div>');
-  return panel("Requires attention", `<div class="panel-body">${rows.slice(0, 8).map(n => `<article class="question"><p><strong>${esc(n.priority || "LOW")} · ${esc(n.lifecycle || "new")}</strong></p><p>${esc(n.message)}</p><p class="muted">${date(n.created_at)}</p><div class="actions">${n.related_conversation_id ? `<a class="secondary-link" data-action="notification-open" data-id="${esc(n.id)}" href="/conversations/${urlID(n.related_conversation_id)}">Открыть диалог →</a>` : ""}<button data-action="notification-ack" data-id="${esc(n.id)}">Dismiss</button><button data-action="notification-snooze" data-id="${esc(n.id)}">Remind tomorrow</button></div></article>`).join("")}</div>`);
+  return panel("Requires attention", `<div class="panel-body">${rows.slice(0, 8).map(n => { const reliability = String(n.type || "").startsWith("application_") || String(n.type || "").startsWith("autochat_"); const lifecycle = reliability && ["dismissed", "resolved"].includes(n.lifecycle) ? "Уведомление закрыто" : (n.lifecycle || "new"); const identifiers = reliability ? [n.related_attempt_id && `AttemptID ${n.related_attempt_id}`, n.related_vacancy_id && `VacancyID ${n.related_vacancy_id}`, n.related_conversation_id && `ConversationID ${n.related_conversation_id}`, n.related_trigger_message_id && `TriggerMessageID ${n.related_trigger_message_id}`, n.related_action_type && `ActionType ${n.related_action_type}`].filter(Boolean).join(" · ") : ""; return `<article class="question"><p><strong>${esc(n.priority || "LOW")} · ${esc(lifecycle)}</strong></p><p>${esc(n.message)}</p>${identifiers ? `<p class="muted">${esc(identifiers)}</p>` : ""}${reliability ? `<p class="muted">Уведомление можно закрыть; это не снимает блокировку отправки.</p>` : ""}<p class="muted">${date(n.created_at)}</p><div class="actions">${n.detail_path ? `<a class="secondary-link" data-action="notification-open" data-id="${esc(n.id)}" href="${esc(n.detail_path)}">Открыть reliability detail →</a>` : n.related_conversation_id ? `<a class="secondary-link" data-action="notification-open" data-id="${esc(n.id)}" href="/conversations/${urlID(n.related_conversation_id)}">Открыть диалог →</a>` : ""}<button data-action="notification-ack" data-id="${esc(n.id)}">Dismiss</button><button data-action="notification-snooze" data-id="${esc(n.id)}">Remind tomorrow</button></div></article>`; }).join("")}</div>`);
 }
 function todayItems(title, items) {
   return panel(title, list(items).length ? `<div class="today-items">${items.map(inboxCard).join("")}</div>` : '<div class="panel-body muted">Сейчас здесь пусто.</div>');
@@ -700,7 +701,11 @@ async function knowledge() {
     )
   );
 }
-function answerForm(kind, id) {
+function answerForm(kind, id, clarification) {
+  const shape = clarification?.suggested_answer_shape;
+  if (shape?.kind === "choice" && shape.options?.length) {
+    return `<form data-answer="${kind}" data-id="${esc(id)}"><input type="hidden" name="answer_kind" value="choice"><label>Выберите точный вариант<select name="choice_id" required><option value="">Выберите…</option>${shape.options.map((o) => `<option value="${esc(o.id)}">${esc(o.label)}</option>`).join("")}</select></label><div class="actions"><button type="submit" class="primary">Сохранить выбор</button><span class="muted">Choice применяется только после явного выбора</span></div></form>`;
+  }
   return `<form data-answer="${kind}" data-id="${esc(id)}"><label>Ваш ответ<textarea name="answer" required maxlength="6000" placeholder="Опишите только известные вам факты"></textarea></label><div class="actions"><button type="submit" class="primary">Сохранить ответ</button><span class="muted">Останется неподтверждённым уточнением</span></div></form>`;
 }
 function proposalValue(p) {
@@ -727,7 +732,7 @@ async function questions() {
         ? d.clarifications
             .map(
               (c) =>
-                `<article class="question"><div class="actions">${badge(c.status)}${c.conversation_id ? link(`/conversations/${urlID(c.conversation_id)}`, "Открыть диалог →") : ""}</div><h3>${esc(c.question)}</h3><p class="muted">${esc(c.reason)}</p>${c.status === "pending" ? answerForm("clarifications", c.id) : ""}</article>`,
+                `<article class="question"><div class="actions">${badge(c.status)}${c.conversation_id ? link(`/conversations/${urlID(c.conversation_id)}`, "Открыть диалог →") : ""}</div><h3>${esc(c.question)}</h3><p class="muted">${esc(c.reason)}</p>${c.status === "pending" ? answerForm("clarifications", c.id, c) : ""}</article>`,
             )
             .join("")
         : empty(
@@ -802,6 +807,45 @@ async function analytics() {
     ) +
     `<div class="callout"><strong>Как считаются метрики</strong>Response rate — доля откликов выбранного периода с сохранённым ответом работодателя. Interview conversion — доля с зафиксированным интервью. Отклики без достоверной даты входят только в «Всё время». Отказ сам по себе не считается сообщением работодателя. График учитывает даты откликов и первых ответов, а очереди AI и знаний показывают текущее состояние.</div>`
   );
+}
+function reliabilityState(item) {
+  return `<div><strong>${esc(item.state)}</strong><br><span class="muted">${esc(item.display_label)}</span></div>`;
+}
+function reliabilityApplicationTable(items) {
+  return items.length
+    ? `<div class="table-wrap"><table><thead><tr><th>State</th><th>Vacancy</th><th>Attempt ID</th><th>Resume</th><th>Provider evidence</th><th>Updated</th><th>Reason</th></tr></thead><tbody>${items.map((item) => `<tr><td>${reliabilityState(item)}</td><td>${esc(item.vacancy_id)}</td><td>${link(`/reliability/application-attempts/${urlID(item.attempt_id)}`, item.attempt_id)}</td><td>${esc(item.resume_id)}</td><td>${esc(item.provider_application_id || item.provider_negotiation_id || "none")}</td><td>${date(item.updated_at)}</td><td>${esc(item.reason || "—")}</td></tr>`).join("")}</tbody></table></div>`
+    : empty("Заявок для просмотра нет", "В выбранном bounded-фильтре нет durable application attempts.", "");
+}
+function reliabilityAutoChatTable(items) {
+  return items.length
+    ? `<div class="table-wrap"><table><thead><tr><th>State</th><th>Conversation</th><th>Trigger message</th><th>Action</th><th>Attempt ID</th><th>Outgoing provider ID</th><th>Updated</th><th>Reason</th></tr></thead><tbody>${items.map((item) => `<tr><td>${reliabilityState(item)}</td><td>${esc(item.conversation_id)}</td><td>${esc(item.trigger_message_id)}</td><td>${esc(item.action_type)}</td><td>${link(`/reliability/autochat-attempts/${urlID(item.attempt_id)}`, item.attempt_id)}</td><td>${esc(item.provider_outgoing_message_id || "none")}</td><td>${date(item.updated_at)}</td><td>${esc(item.reason || "—")}</td></tr>`).join("")}</tbody></table></div>`
+    : empty("Auto-chat попыток для просмотра нет", "В выбранном bounded-фильтре нет durable auto-chat attempts.", "");
+}
+async function reliabilityPage() {
+  const query = new URLSearchParams(location.search);
+  const suffix = query.toString() ? `?${query}` : "";
+  const [applications, autochat] = await Promise.all([
+    api(`/reliability/application-attempts?needs_attention=true${suffix ? `&${query}` : ""}`),
+    api(`/reliability/autochat-attempts?needs_attention=true${suffix ? `&${query}` : ""}`),
+  ]);
+  return heading("Reliability", "Bounded read-only inspection of durable automatic attempts.") +
+    `<div class="callout"><strong>Нужны внимание и read-only reconciliation</strong><p class="muted">Закрытие уведомления меняет только его lifecycle и не подтверждает попытку, не снимает блокировку и не разрешает повторную отправку.</p></div>` +
+    panel("Требуют внимания · applications", `<div class="panel-body"><p class="muted">${esc(applications.store?.status || "ERROR")} · backend ${esc(applications.store?.backend || "—")}</p>${reliabilityApplicationTable(list(applications.items))}</div>`) +
+    panel("Требуют внимания · legacy auto-chat", `<div class="panel-body"><p class="muted">${esc(autochat.store?.status || "ERROR")} · backend ${esc(autochat.store?.backend || "—")}</p>${reliabilityAutoChatTable(list(autochat.items))}</div>`);
+}
+async function reliabilityDetail(kind, id) {
+  const d = await api(`/reliability/${kind}/${urlID(id)}`);
+  const a = d.attempt || {};
+  const eligible = kind === "application-attempts"
+    ? ["SENDING", "ACCEPTED", "DELIVERY_UNCERTAIN", "TARGET_RESPONSE_CONFIRMED"].includes(a.state)
+    : ["SENDING", "ACCEPTED", "DELIVERY_UNCERTAIN", "TARGET_REPLY_CONFIRMED", "TARGET_LEAVE_CONFIRMED"].includes(a.state);
+  const values = kind === "application-attempts"
+    ? [["Attempt ID", a.attempt_id], ["Vacancy", a.vacancy_id], ["Resume", a.resume_id], ["Technical state", a.state], ["Classification", a.classification], ["Display", a.display_label], ["Provider application ID", a.provider_application_id], ["Provider negotiation ID", a.provider_negotiation_id], ["Evidence", a.evidence_kind], ["Evidence source", a.evidence_source], ["Observed", date(a.observed_at)], ["Created", date(a.created_at)], ["Updated", date(a.updated_at)], ["Reason", a.reason], ["Causality", a.causality_note]]
+    : [["Attempt ID", a.attempt_id], ["Conversation", a.conversation_id], ["Trigger message", a.trigger_message_id], ["Action", a.action_type], ["Technical state", a.state], ["Classification", a.classification], ["Display", a.display_label], ["Request key", a.provider_request_key], ["Outgoing provider ID", a.provider_outgoing_message_id], ["Evidence", a.evidence_kind], ["Evidence source", a.evidence_source], ["Evidence provider message ID", a.evidence_provider_message_id], ["Observed", date(a.observed_at)], ["Created", date(a.created_at)], ["Updated", date(a.updated_at)], ["Reason", a.reason], ["Causality", a.causality_note]];
+  const action = eligible
+    ? `<div class="callout"><strong>Проверить по HH</strong><p class="muted">Проверка только читает состояние HH и не отправляет отклик/сообщение.</p><button data-action="reconcile-reliability" data-kind="${esc(kind)}" data-id="${esc(id)}">Проверить по HH</button></div>`
+    : "";
+  return heading("Reliability detail", "Read-only durable attempt inspection.", link("/reliability", "← Reliability")) + action + panel("Attempt", pairs(values));
 }
 function syncResult(result) {
   if (!result) return "";
@@ -884,12 +928,15 @@ async function render(silent = false) {
     else if (path === "/analytics") html = await analytics();
     else if (path === "/sync") html = await syncPage();
     else if (path === "/health") html = await healthPage();
+    else if (path === "/reliability") html = await reliabilityPage();
     else if (parts.length === 2 && parts[0] === "applications")
       html = await applicationDetail(decodeURIComponent(parts[1]));
     else if (parts.length === 2 && parts[0] === "vacancies")
       html = await vacancyDetail(decodeURIComponent(parts[1]));
     else if (parts.length === 2 && parts[0] === "conversations")
       html = await conversationDetail(decodeURIComponent(parts[1]));
+    else if (parts.length === 3 && parts[0] === "reliability")
+      html = await reliabilityDetail(parts[1], decodeURIComponent(parts[2]));
     else throw new Error("Страница не найдена");
     if (request === currentRequest) {
       main.innerHTML = html;
@@ -925,10 +972,15 @@ document.addEventListener("submit", async (event) => {
   const button = form.querySelector("button");
   button.disabled = true;
   try {
-    const answer = new FormData(form).get("answer");
+    const formData = new FormData(form);
+    const payload = Object.fromEntries(formData.entries());
+    if (payload.answer_kind === "choice") {
+      const selected = form.querySelector("select[name=choice_id] option:checked");
+      payload.answer = selected?.textContent || payload.choice_id;
+    }
     await api(
       `/knowledge/${form.dataset.answer}/${urlID(form.dataset.id)}/answer`,
-      { answer },
+      payload,
     );
     toast("Ответ сохранён как неподтверждённое уточнение.");
     await render();
@@ -1035,6 +1087,18 @@ document.addEventListener("click", async (event) => {
     } else if (action === "reconcile-action") {
       const result = await api(`/actions/${urlID(id)}/reconcile`, {});
       toast(result.status === "delivery_confirmed" ? "Доставка подтверждена read-only sync" : (result.error || "Доставка пока не подтверждена"));
+    } else if (action === "reconcile-reliability") {
+      const result = await api(`/reliability/${button.dataset.kind}/${urlID(id)}/reconcile`, {});
+      const detail = result.result || {};
+      const messages = {
+        CONFIRMED: "Подтверждено по HH",
+        INSUFFICIENT: "Недостаточно данных; попытка остаётся блокирующей",
+        UNAVAILABLE: "Данные HH недоступны; состояние не изменено",
+        CONFLICTING: "Обнаружены противоречивые данные HH",
+        UNSUPPORTED: "HH не предоставляет достаточно сильных данных для безопасного подтверждения выхода из диалога",
+        NOT_APPLICABLE: "Проверка неприменима к этому состоянию",
+      };
+      toast(messages[detail.status] || detail.status || "Проверка завершена");
     } else if (action === "cancel-action") {
       await api(`/actions/${urlID(id)}/cancel`, {});
       toast("Отправка отменена локально");

@@ -1,0 +1,46 @@
+{
+  "chat": {
+    "id": 7,
+    "currentParticipantId": "me",
+    "resources": {
+      "VACANCY": ["42"],
+      "NEGOTIATION_TOPIC": ["topic"]
+    },
+    "lastActivityTime": "2026-09-01T13:00:00Z",
+    "messages": {
+      "items": [
+        {
+          "id": 101,
+          "type": "SIMPLE",
+          "participantId": "hr",
+          "creationTime": "2026-09-01T11:00:00Z",
+          "text": "Employer fixture"
+        },
+        {
+          "id": 102,
+          "type": "SIMPLE",
+          "participantId": "me",
+          "creationTime": "2026-09-01T12:00:00Z",
+          "text": "Candidate fixture"
+        }
+      ]
+    }
+  },
+  "resources": {
+    "vacancies": {
+      "42": {
+        "vacancyId": 42,
+        "name": "Fixture role",
+        "company": {"name": "Fixture company"},
+        "links": {"desktop": "https://hh.example/vacancy/42"},
+        "archived": {"@hidden": false}
+      }
+    },
+    "participants": {
+      "hr": {"type": "EMPLOYER_USER"}
+    },
+    "negotiation_topics": {
+      "topic": {"currentApplicantState": "RESPONSE"}
+    }
+  }
+}

@@ -22,6 +22,30 @@ Prefer a smaller number of relevant and truthful applications over maximizing ap
 
 ---
 
+## Agent skills
+
+Reusable task-specific procedures are stored under:
+
+`.agents/skills/`
+
+Use the relevant skill when a task clearly falls within its scope.
+
+Current project skills include:
+
+- `candidate-knowledge` — Candidate Knowledge acquisition, storage, provenance and use;
+- `hh-application` — vacancy evaluation, preflight and application flow;
+- `hh-employer-chat` — employer conversation handling and reply safety;
+- `hh-test-answering` — HH tests and questionnaires;
+- `go-refactor` — structural Go refactoring.
+
+AGENTS.md defines global project invariants.
+
+Skills provide task-specific procedures and must not override AGENTS.md.
+
+If a skill conflicts with AGENTS.md, follow AGENTS.md.
+
+Use only the skills relevant to the current task. Do not mechanically apply unrelated skills.
+
 ## Candidate positioning
 
 Primary target roles:
@@ -32,9 +56,20 @@ Primary target roles:
 - backend developer;
 - automation / API / integration roles.
 
-The HH resume and explicitly configured candidate data are the source of truth.
+Trusted candidate data is the source of truth.
+
+Trusted candidate data may include:
+
+- explicitly confirmed Candidate Knowledge;
+- HH resume/profile data;
+- explicitly configured candidate data;
+- verified external evidence where its scope is clear.
+
+Candidate Knowledge may contain facts broader than the HH resume, but provenance and confirmation state must be respected.
 
 Do not assume candidate facts that are not present in trusted data.
+
+Absence of a fact from the HH resume is not proof that the candidate lacks it.
 
 ---
 
@@ -305,6 +340,10 @@ Refactor incrementally when it directly improves the requested change.
 Before changing a function signature, search all usages.
 
 Avoid unrelated cleanup in bug-fix tasks.
+
+For substantial Go refactoring tasks, follow the `go-refactor` skill.
+
+Do not invoke a large refactor merely because the skill exists.
 
 ---
 
