@@ -60,5 +60,8 @@ func NewHandlers() appbootstrap.Handlers {
 			cfg := legacyConfigFromPackage(request.Config)
 			return commandResult(runCareerAgentCommand(request.Invocation.Args, cfg, request.Stdout, request.Stderr), request.Stderr, 1)
 		}),
+		HHDoctor: withCommandHelp(appcli.CommandHHDoctor, func(request appbootstrap.Request) int {
+			return commandResult(runHHDoctor(legacyConfigFromPackage(request.Config), request.Stdout, request.Stderr), request.Stderr, 1)
+		}),
 	}
 }

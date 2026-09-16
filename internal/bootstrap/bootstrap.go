@@ -50,6 +50,7 @@ type Handlers struct {
 	HH          Handler
 	Profile     Handler
 	CareerAgent Handler
+	HHDoctor    Handler
 }
 
 // Env contains process seams required by bootstrap. Nil streams and lookup
@@ -168,6 +169,8 @@ func handlerFor(command appcli.CommandKind, handlers Handlers) Handler {
 		return handlers.Profile
 	case appcli.CommandCareerAgent:
 		return handlers.CareerAgent
+	case appcli.CommandHHDoctor:
+		return handlers.HHDoctor
 	default:
 		return nil
 	}

@@ -74,6 +74,19 @@ go build ./cmd/hh-ai-responder
 явных `HH_DRY_RUN=false` и `HH_WRITE_ENABLED=true`; по умолчанию команда всегда
 работает в shadow mode.
 
+Перед Shadow или любым другим HH read-path проверьте доступ без discovery:
+
+```sh
+HH_DRY_RUN=true HH_WRITE_ENABLED=false ./hh-ai-responder hh-doctor
+```
+
+`hh-doctor` выполняет только два bounded GET: публичный vacancy search и
+authenticated `GET /applicant/my_resumes`. Он показывает безопасные metadata
+запроса, redirect chain, status, content type, размер ответа, классификацию
+403 и только имена cookies; значения cookies и секретные headers не выводятся.
+При недоступном authenticated read `career-agent --shadow` останавливается до
+discovery и не выполняет HH writes.
+
 Используйте флаг `-h` для справки.
 
 По умолчанию приложение использует модель `llama3:8b`, запущенную на `http://localhost:11434` (например через **Ollama**).

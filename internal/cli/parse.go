@@ -80,6 +80,8 @@ func topLevelCommand(value string) (CommandKind, bool) {
 		return CommandAudit, true
 	case "career-agent":
 		return CommandCareerAgent, true
+	case "hh-doctor":
+		return CommandHHDoctor, true
 	default:
 		return "", false
 	}
@@ -105,6 +107,10 @@ func validateCommandArgs(command CommandKind, args []string) error {
 		return false
 	}
 	switch command {
+	case CommandHHDoctor:
+		if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+			return fmt.Errorf("hh-doctor does not accept positional arguments")
+		}
 	case CommandHH:
 		if !known(args[0], "sync", "inbox", "workflow", "draft", "pilot-candidates", "pilot-shortlist", "pilot-show", "write-status", "eligible", "eligibility-report", "eligibility-summary", "quality-report", "action", "reliability") {
 			return fmt.Errorf("unknown hh command %q", args[0])

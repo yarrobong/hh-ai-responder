@@ -29,6 +29,7 @@ func writeCommandHelp(command appcli.CommandKind, out io.Writer) error {
 		appcli.CommandMonitor:     "usage: monitor [--run-once] [application flags]",
 		appcli.CommandAudit:       "usage: audit [application flags]",
 		appcli.CommandCareerAgent: "usage: career-agent --shadow | career-agent --canary | career-agent resumes | career-agent resume enable|disable --id <resume-id> | career-agent feedback --vacancy <id> --type <type>",
+		appcli.CommandHHDoctor:    "usage: hh-doctor (GET/read-only HH access diagnostics)",
 		appcli.CommandHH:          "usage: hh sync [vacancies|applications|conversations] | hh sync conversation <conversation-id-or-chat-id> | hh inbox | hh workflow | hh draft <conversation-id> | hh pilot-candidates | hh pilot-shortlist | hh pilot-show <conversation-id> | hh write-status | hh eligible | hh eligibility-report | hh eligibility-summary | hh quality-report | hh action preflight|request-preview <action-id> | hh reliability applications|autochat [--limit N] [--state STATE] [--all] [--json] | hh reliability applications|autochat reconcile <attempt-id> [--json]",
 	}
 	value, ok := usage[command]

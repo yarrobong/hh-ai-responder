@@ -27,6 +27,7 @@ func TestParseSupportedInvocations(t *testing.T) {
 		{name: "dashboard alias", args: []string{"dashboard"}, command: CommandWeb},
 		{name: "monitor", args: []string{"monitor", "--run-once"}, command: CommandMonitor, commandArgs: []string{"--run-once"}},
 		{name: "audit", args: []string{"audit"}, command: CommandAudit},
+		{name: "hh doctor", args: []string{"hh-doctor"}, command: CommandHHDoctor},
 		{name: "career agent shadow", args: []string{"career-agent", "--shadow"}, command: CommandCareerAgent, commandArgs: []string{"--shadow"}},
 		{name: "career agent subcommand shadow", args: []string{"career-agent", "shadow"}, command: CommandCareerAgent, subcommand: "shadow", commandArgs: []string{"shadow"}},
 		{name: "career agent feedback", args: []string{"career-agent", "feedback", "--vacancy", "1"}, command: CommandCareerAgent, subcommand: "feedback", commandArgs: []string{"feedback", "--vacancy", "1"}},

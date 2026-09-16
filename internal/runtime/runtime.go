@@ -1085,12 +1085,18 @@ func buildReadableTestSolutions(tasks []Task, answers map[int]SolutionFields) []
 }
 
 type HHResponse struct {
-	RetryAfter     string
-	Status         int
-	URL            *url.URL
-	ContentType    string
-	Body           []byte
-	CorrelationIDs map[string]string
+	RetryAfter         string
+	Status             int
+	URL                *url.URL
+	FinalURL           string
+	Redirects          []HHRedirectHop
+	ContentType        string
+	Body               []byte
+	Headers            map[string]string
+	ResponseSize       int
+	RequestCookieNames []string
+	Purpose            string
+	CorrelationIDs     map[string]string
 }
 
 type HHAIResponder struct {
@@ -1227,6 +1233,18 @@ func cookieNames(req *http.Request) string {
 	return strings.Join(names, ",")
 }
 
+func cookieNamesList(req *http.Request) []string {
+	if req == nil {
+		return nil
+	}
+	names := make([]string, 0, len(req.Cookies()))
+	for _, c := range req.Cookies() {
+		names = append(names, c.Name)
+	}
+	slices.Sort(names)
+	return names
+}
+
 func (r *HHRequester) doOnce(req *http.Request) (*HHResponse, error) {
 	if err := req.Context().Err(); err != nil {
 		return nil, err
@@ -1251,6 +1269,8 @@ func (r *HHRequester) doOnce(req *http.Request) (*HHResponse, error) {
 	defer perfRecord("hh.http", start, 1)
 	defer func() { meterRecord(req.Context(), "network", time.Since(start)) }()
 
+	traceContext, trace := withHHRequestTrace(req.Context())
+	req = req.WithContext(traceContext)
 	// Execute request
 	resp, err := r.client.Do(req)
 	if err != nil {
@@ -1264,17 +1284,30 @@ func (r *HHRequester) doOnce(req *http.Request) (*HHResponse, error) {
 		return nil, err
 	}
 
+	hops := trace.snapshot()
+	finalURL := req.URL.String()
+	if resp.Request != nil && resp.Request.URL != nil {
+		finalURL = resp.Request.URL.String()
+	}
+	if len(hops) == 0 {
+		hops = []HHRedirectHop{{Status: resp.StatusCode, URL: finalURL, CookieNames: cookieNamesList(resp.Request)}}
+	}
 	if logger != nil {
 		logger.Debug("REQ  %s %s cookies=[%s]", req.Method, req.URL.String(), cookieNames(req))
 		logger.Debug("RESP %d %s final_url=%s cookies=[%s]", resp.StatusCode, req.Method, resp.Request.URL.String(), cookieNames(resp.Request))
 	}
 	return &HHResponse{
-		Status:         resp.StatusCode,
-		URL:            req.URL,
-		ContentType:    resp.Header.Get("Content-Type"),
-		Body:           body,
-		CorrelationIDs: safeHHCorrelationIDs(resp.Header),
-		RetryAfter:     resp.Header.Get("Retry-After"),
+		Status:             resp.StatusCode,
+		URL:                req.URL,
+		FinalURL:           finalURL,
+		Redirects:          hops,
+		ContentType:        resp.Header.Get("Content-Type"),
+		Body:               body,
+		Headers:            safeResponseHeaders(resp.Header),
+		ResponseSize:       len(body),
+		RequestCookieNames: firstHopCookieNames(hops),
+		CorrelationIDs:     safeHHCorrelationIDs(resp.Header),
+		RetryAfter:         resp.Header.Get("Retry-After"),
 	}, nil
 }
 
@@ -1645,6 +1678,7 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 	}
 
 	responder.requester = NewHHRequester(ctx, client, cfg.RequestInterval)
+	responder.configureReadDiagnostics()
 	responder.requester.readOnly = cfg.HHReadOnly
 	responder.requester.readConcurrency = cfg.HHReadConcurrency
 
@@ -2163,7 +2197,7 @@ func (r *HHAIResponder) LoadProfileData() error {
 	}
 
 	if resp.Status != http.StatusOK {
-		return unexpectedHTTPStatus(resp.Status)
+		return r.profileReadAccessError(*resp)
 	}
 
 	bodyText := string(resp.Body)
@@ -2759,6 +2793,7 @@ func (r *HHAIResponder) TouchResume() (bool, error) {
 type MemoryPersistentJar struct {
 	mu          sync.Mutex
 	cookies     map[string][]*http.Cookie
+	parsed      int
 	persistPath string
 }
 
@@ -2816,6 +2851,7 @@ func NewMemoryPersistentJar(cookiesPath string) (*MemoryPersistentJar, error) {
 		}
 
 		jar.cookies[domain] = append(jar.cookies[domain], cookie)
+		jar.parsed++
 	}
 
 	if logger != nil {
@@ -2886,8 +2922,6 @@ func (j *MemoryPersistentJar) Cookies(u *url.URL) []*http.Cookie {
 	var matched []*http.Cookie
 	host := u.Hostname()
 	now := time.Now()
-	changed := false
-
 	for domain, list := range j.cookies {
 		// Standard cookie domain semantics: a dot-prefixed domain like ".hh.ru"
 		// matches the bare host "hh.ru" and any subdomain "*.hh.ru".
@@ -2900,7 +2934,8 @@ func (j *MemoryPersistentJar) Cookies(u *url.URL) []*http.Cookie {
 
 			for _, cookie := range list {
 				if !cookie.Expires.IsZero() && cookie.Expires.Before(now) {
-					changed = true
+					// A read excludes expired cookies but must not rewrite the
+					// local cookie file as a side effect.
 					continue
 				}
 
@@ -2917,10 +2952,6 @@ func (j *MemoryPersistentJar) Cookies(u *url.URL) []*http.Cookie {
 				j.cookies[domain] = active
 			}
 		}
-	}
-
-	if changed && j.persistPath != "" {
-		_ = j.saveLockedTo(j.persistPath)
 	}
 
 	return matched
