@@ -9,7 +9,8 @@ write-операций в Shadow Mode.
 ## Git
 
 - Before SHA: `692af6cd5be868ac6169a97b85dfc533e77dd11d`
-- After SHA (implementation commit): будет указан после commit validation changes.
+- After SHA (implementation commit): `e88015c`.
+- Report metadata commit: будет указан после фиксации точных Git SHA.
 - `origin/main`: проверяется после push; должен совпасть с final commit.
 - Force push не использовался.
 - Существующий untracked `out` не добавлялся и не изменялся.
