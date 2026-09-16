@@ -1,155 +1,214 @@
-# Stage 29 — Career Agent pipeline validation
+# Stage 29 — real HH validation
 
 Дата: 2026-09-16 (Asia/Yekaterinburg).
 
-Stage 29 исправляет порядок routing: неполная search card теперь даёт
-internal `NEEDS_DETAIL`, а не terminal `REVIEW_REQUIRED`. После read-only
-detail выполняется новый final route. Search-profile provenance добавляется
-как bounded soft signal (+4 максимум) и не может разрешить близкий fit.
+Validation выполнена после пересборки binary из `HEAD`:
 
-## Git and safety
+```text
+195f777353b50edff990d7145345180bb908ed86
+```
 
-- Starting `HEAD`: `b42c09158ac2a6557afa2f2d71dedc3376fdc451`.
-- Starting `origin/main`: `b42c09158ac2a6557afa2f2d71dedc3376fdc451`.
-- Existing untracked `out` сохранён и в commit не включается.
-- Shadow mode принудительно устанавливает `HH_DRY_RUN=true` и
-  `HH_WRITE_ENABLED=false`, а также отключает chat/touch/job-status.
-- HH writes выполнены: **NO**.
+`origin/main` совпадает с этим SHA. Существующий untracked `out` сохранён.
 
-## Что было причиной Stage 28
+## Safety boundary
 
-В Stage 28 orchestration вызывала `RouteResume` на search-card до чтения
-description/detail. Для 96 вакансий, прошедших cheap filters, неполные поля
-делали scores близкими; 82 записи сразу становились terminal
-`REVIEW_REQUIRED`. Только 14 выбранных resume доходили до detail, из них 13
-до AI. Таким образом, provider evidence, уже доступный на detail endpoint,
-не участвовал в выборе resume для 82 вакансий.
+Оба real-run выполнены с:
 
-Stage 29 разделяет:
+```text
+HH_DRY_RUN=true HH_WRITE_ENABLED=false
+```
 
-`search card → cheap filters → preliminary route → detail (только для
-неполных/потенциально релевантных cards) → final route → AI`.
+Использованы только HH GET/read paths: doctor, search, vacancy detail,
+profile/resume reads, preflight reads и AI evaluation. Applications, messages,
+tests, resume touch и job-status writes не выполнялись.
 
-`REVIEW_REQUIRED` теперь означает final ambiguity, unknown critical state или
-другой safety reason после доступного detail. Для каждой vacancy trace
-содержит `preliminary_route`, `preliminary_reason_code`,
-`detail_fetch_status`, `detail_evidence`, `final_route_reason_code` и
-`ai_call_reason`.
+`career-agent --shadow` сам принудительно удерживает `DryRun=true`,
+`HHWriteEnabled=false`, `AutoChat=false`, `AutoTouch=false` и
+`AutoJobStatus=false`.
 
-## Deterministic router validation
+Первый automatic запуск с текущим `.env` остановился до HH из-за локального
+`STORAGE_BACKEND=postgres`: database `hh_ai_responder_s3` отсутствует. Это не
+HH/auth failure. Для real validation был повторён тот же pipeline с явным
+`-storage-backend json`; architecture, OAuth и transport layer не менялись.
 
-Это structured regression evidence, без chain-of-thought:
+## HH doctor
 
-| Category | Search-card evidence | Detail evidence | Before detail | After detail | Final result |
-|---|---|---|---|---|---|
-| Python/backend | `Backend specialist` | `Python backend service development`, key skill `Python` | `NEEDS_DETAIL` | Python resume wins with role + skill evidence | selected |
-| automation/integration | partial integration title | `API`, `SQL`, `integration` | `NEEDS_DETAIL` | integration resume wins on normalized terms | selected |
-| technical support | sparse support card | support title/description and structured fields | `NEEDS_DETAIL` | support resume is evaluated with full evidence | selected/review by fit |
-| clearly irrelevant | unrelated title, no source provenance | not requested | `OBVIOUS_REJECT` | no final route | reject, zero detail reads |
-| ambiguous | same Python/backend evidence for two enabled resumes | same full detail | `NEEDS_DETAIL` | equal fit remains equal | `REVIEW_REQUIRED` |
+Пересобрано:
 
-Covered regressions include RU/EN canonical groups (`автоматизация` /
-`automation`, `интеграция` / `integration`, `поддержка` / `support`,
-`внедрение` / `implementation`, `разработчик` / `developer`, `бэкенд` /
-`backend`), punctuation/hyphen tokenization, title/description/key-skills
-evidence, disabled resume exclusion, hard-blocker precedence, and soft-only
-search-profile provenance.
+```text
+go build -o ./hh-ai-responder ./cmd/hh-ai-responder
+```
 
-## Tests and smoke checks
+`./hh-ai-responder -h` показывает application flags; command help для
+`hh-doctor` присутствует в исходном CLI dispatcher. Фактический запуск:
 
-PASS:
+```text
+HH_DRY_RUN=true HH_WRITE_ENABLED=false ./hh-ai-responder hh-doctor
+```
 
-- `go test ./...`
-- `go test -race ./...`
-- `go vet ./...`
-- `go build ./...`
-- `git diff --check`
-- `node --check web/app.js`
-- local dashboard/API smoke: `GET /api/dashboard` → HTTP 200.
+Результат: `AUTHENTICATED_READ_OK`.
 
-The test suite verifies exact one-terminal-outcome accounting and the new
-detail-first behavior, including cached detail reuse so the subsequent
-application preparation does not issue a duplicate description read.
+- Public HH read: `GET /search/vacancy` → HTTP 200.
+- Authenticated profile read: `GET /applicant/my_resumes` → HTTP 200.
+- Cookie file: found, Netscape format, parsed successfully.
+- HH writes attempted: 0.
 
-## Real Shadow validation
+## Real Shadow commands
 
-Both requested read-only commands were attempted with
-`HH_DRY_RUN=true HH_WRITE_ENABLED=false`:
+Automatic planner (generated profiles, explicit `-u ""`):
 
-1. automatic planner (`career-agent --shadow` with generated profiles);
-2. manual/legacy profiles (`career-agent --shadow` with configured explicit
-   search profiles).
+```text
+HH_DRY_RUN=true HH_WRITE_ENABLED=false ./hh-ai-responder -u "" \
+  -storage-backend json career-agent --shadow
+```
 
-Both runs stopped before search discovery because the first authenticated HH
-GET returned `403 Forbidden`. No valid Stage 29 provider dataset was produced;
-therefore the following values are intentionally **N/A**, not zero:
+Manual/legacy profiles (configured `HH_SEARCH_URL(S)`):
 
-| Metric | Automatic | Manual/legacy |
+```text
+HH_DRY_RUN=true HH_WRITE_ENABLED=false ./hh-ai-responder \
+  -storage-backend json career-agent --shadow
+```
+
+Both runs completed successfully against real HH reads. `ACCOUNTING CHECK` is
+`PASS` and `shadow_write_count` is `0` in both reports.
+
+## Automatic planner — real counters
+
+The current `.env` has `HH_MAX_VACANCIES_PER_RUN=50`. Discovery still accounts
+for every unique vacancy; 93 unique vacancies received the explicit terminal
+`VACANCY_LIMIT` after the run budget was reached.
+
+| Counter | Value |
+|---|---:|
+| Raw | 199 |
+| Duplicates | 46 |
+| Unique | 153 |
+| Already responded | 13 |
+| Obvious deterministic reject | 0 |
+| Preliminary `CLEAR_ROUTE` | 0 |
+| Preliminary `NEEDS_DETAIL` | 50 |
+| Detail requested | 50 |
+| Detail succeeded | 50 |
+| Detail failed | 0 |
+| Final routed | 20 |
+| Final `REVIEW_REQUIRED` | 30 |
+| AI evaluated | 17 |
+| AI rejected | 14 |
+| AI matched | 0 |
+| `MATCH` | 0 |
+| `REJECT` | 17 |
+| `REVIEW_REQUIRED` | 30 |
+| Would apply | 0 |
+| Shadow writes | 0 |
+| ACCOUNTING CHECK | PASS |
+
+Terminal outcomes: `AI_REJECT=14`, `ALREADY_RESPONDED=13`,
+`DETAIL_NOT_REQUIRED=3`, `REVIEW_REQUIRED=30`, `VACANCY_LIMIT=93`; total
+terminal records `153`, exactly equal to unique discovery IDs.
+
+## Manual/legacy Shadow — real counters
+
+| Counter | Value |
+|---|---:|
+| Raw | 79 |
+| Duplicates | 36 |
+| Unique | 43 |
+| Already responded | 7 |
+| Obvious deterministic reject | 0 |
+| Preliminary `CLEAR_ROUTE` | 0 |
+| Preliminary `NEEDS_DETAIL` | 40 |
+| Detail requested | 40 |
+| Detail succeeded | 40 |
+| Detail failed | 0 |
+| Final routed | 26 |
+| Final `REVIEW_REQUIRED` | 15 |
+| AI evaluated | 18 |
+| AI rejected | 13 |
+| AI matched | 0 |
+| `MATCH` | 0 |
+| `REJECT` | 21 |
+| `REVIEW_REQUIRED` | 15 |
+| Would apply | 0 |
+| Shadow writes | 0 |
+| ACCOUNTING CHECK | PASS |
+
+## Stage 29 experiment
+
+Automatic planner funnel:
+
+```text
+NEEDS_DETAIL 50
+  → successful detail fetch 50
+  → clear final resume route 20
+  → genuine final REVIEW_REQUIRED 30
+```
+
+All 50 preliminary routes requiring detail received successful detail. Twenty
+vacancies then got a deterministic selected resume route. Thirty remained
+`REVIEW_REQUIRED` because the full detail still left the top resume scores too
+close (`ROUTE_AMBIGUOUS_AFTER_DETAIL`). AI was called only after a selected
+resume route and successful detail/preparation; 17 cases reached AI.
+
+The 93 `VACANCY_LIMIT` records are not counted as final review: they were
+explicitly terminalized by the configured run budget before final routing.
+
+## Stage 28 comparison
+
+Stage 28 baseline from `VALIDATION_STAGE28.md`:
+
+| Metric | Stage 28 | Stage 29 automatic |
 |---|---:|---:|
-| Raw / Duplicates / Unique | N/A | N/A |
-| Already responded | N/A | N/A |
-| Obvious deterministic rejects | N/A | N/A |
-| Preliminary clear route | N/A | N/A |
-| Preliminary needs detail | N/A | N/A |
-| Detail requested / succeeded / failed | N/A | N/A |
-| Final selected resume | N/A | N/A |
-| Final ambiguous | N/A | N/A |
-| AI evaluated / rejected / matched | N/A | N/A |
-| MATCH / REVIEW_REQUIRED / REJECT | N/A | N/A |
-| Would apply | N/A | N/A |
-| Shadow writes | 0 | 0 |
-| ACCOUNTING CHECK | N/A: no discovery records | N/A: no discovery records |
+| Unique | 105 | 153 |
+| Detail fetched | 14 | 50 succeeded / 50 requested |
+| AI evaluated | 4 | 17 |
+| Final `REVIEW_REQUIRED` | 82 | 30 |
+| Review rate over unique | 82/105 = 78.1% | 30/153 = 19.6% |
 
-Real HH read attempts: 2; successful Stage 29 provider reads: 0; provider
-response: `403 Forbidden`.
+Because the current Stage 29 run budget terminalized 93 unique vacancies as
+`VACANCY_LIMIT`, the comparable post-limit final-routing denominator is 60:
+`30/60 = 50.0%`. The headline `30/153` is the rate over all unique discovery
+records; the post-limit rate is shown to avoid hiding the configured budget
+effect.
 
-## Stage 28 vs Stage 29
+## Ten real automatic routing examples
 
-The Stage 28 column is the verified automatic run from
-`VALIDATION_STAGE28.md`. Stage 29 has no comparable real-run numbers because
-HH rejected the first read, so claiming an improved REVIEW percentage would
-be misleading.
+`detail evidence` lists structured fields present in the successful HH detail
+read. Alternative scores are abbreviated as `resume title: score`.
 
-| Metric | Stage 28 | Stage 29 |
-|---|---:|---:|
-| Unique | 105 | N/A — provider blocked |
-| Detail fetches | 14 | N/A — provider blocked |
-| Resume selected | 14 | N/A — provider blocked |
-| Final `REVIEW_REQUIRED` | 82 | N/A — provider blocked |
-| AI evaluated | 4 | N/A — provider blocked |
-| MATCH | 0 | N/A — provider blocked |
-| REJECT | 13 | N/A — provider blocked |
-| Errors | 0 | 2 run-start failures (`403`) |
-| Writes | 0 | 0 |
+| Vacancy | Title / company | Selected resume | Alternative scores | Preliminary | Detail evidence | Final route | Confidence | AI | Final |
+|---:|---|---|---|---|---|---|---|---|---|
+| [137402396](https://ekaterinburg.hh.ru/vacancy/137402396) | Инженер технической поддержки второй линии (r-keeper & iiko) / ООО КОМПАНИЯ РДМ | Технический специалист | Тех. 100; Авто 88; Backend 36; Py/Django 30 | NEEDS_DETAIL | title, description, roles, experience, schedule, employment, work format, location, salary | ROUTE_SELECTED | HIGH | yes, AI 20 | REJECT |
+| [137380411](https://ekaterinburg.hh.ru/vacancy/137380411) | IT-специалист (Cloud, DevOps, AI) / ИП Purinvest | — | Авто 100; Py/Django 100; Тех. 100; Backend 90 | NEEDS_DETAIL | title, description, roles, experience, schedule, employment, work format, location | ROUTE_AMBIGUOUS_AFTER_DETAIL | LOW | no | REVIEW_REQUIRED |
+| [136764415](https://ekaterinburg.hh.ru/vacancy/136764415) | Программист робототехнических комплексов / ООО ИнКрафт | Автоматизация и интеграции | Авто 100; Py/Django 72; Тех. 70; Backend 66 | NEEDS_DETAIL | title, description, roles, experience, schedule, employment, work format, location, salary | ROUTE_SELECTED | HIGH | yes, AI 10 | REJECT |
+| [136563592](https://ekaterinburg.hh.ru/vacancy/136563592) | AI-специалист / Prompt Engineer / ИП Елисеев Максим Анатольевич | — | Авто 100; Тех. 100; Py/Django 78; Backend 54 | NEEDS_DETAIL | title, description, roles, experience, schedule, employment, work format, location | ROUTE_AMBIGUOUS_AFTER_DETAIL | LOW | no | REVIEW_REQUIRED |
+| [135644599](https://ekaterinburg.hh.ru/vacancy/135644599) | Инженер второй линии технической поддержки / ООО Клеверенс Софт | — | Авто 100; Тех. 100; Backend 84; Py/Django 72 | NEEDS_DETAIL | title, description, roles, experience, schedule, employment, work format, location, salary | ROUTE_AMBIGUOUS_AFTER_DETAIL | LOW | no | REVIEW_REQUIRED |
+| [137252236](https://ekaterinburg.hh.ru/vacancy/137252236) | Аналитик данных / ООО Эво | — | Авто 100; Backend 100; Py/Django 100; Тех. 100 | NEEDS_DETAIL | title, description, roles, experience, schedule, employment, work format, location, salary | ROUTE_AMBIGUOUS_AFTER_DETAIL | LOW | no | REVIEW_REQUIRED |
+| [137184982](https://ekaterinburg.hh.ru/vacancy/137184982) | BI-аналитик Junior+\\Middle / ПАО «Газпром нефть» ИТ | Технический специалист | Тех. 100; Авто 88; Py/Django 60; Backend 36 | NEEDS_DETAIL | title, description, roles, experience, employment, work format, location | ROUTE_SELECTED | HIGH | yes, AI 20 | REJECT |
+| [137430509](https://ekaterinburg.hh.ru/vacancy/137430509) | Fullstack-разработчик / ООО Трианон | — | Авто 100; Backend 100; Py/Django 100; Тех. 100 | NEEDS_DETAIL | title, description, roles, experience, schedule, employment, work format, location, salary | ROUTE_AMBIGUOUS_AFTER_DETAIL | LOW | no | REVIEW_REQUIRED |
+| [134160545](https://ekaterinburg.hh.ru/vacancy/134160545) | Разработчик (Medical Imaging) / ООО ГравиЛинк | — | Backend 64; Py/Django 54; Тех. 40; Авто 30 | NEEDS_DETAIL | title, description, roles, experience, schedule, employment, work format, location, salary | ROUTE_AMBIGUOUS_AFTER_DETAIL | LOW | no | REVIEW_REQUIRED |
+| [137428040](https://ekaterinburg.hh.ru/vacancy/137428040) | Python Backend Developer / Miles&Miles | — | Авто 100; Backend 100; Py/Django 100; Тех. 100 | NEEDS_DETAIL | title, description, roles, experience, schedule, employment, work format, location, salary | ROUTE_AMBIGUOUS_AFTER_DETAIL | LOW | no | REVIEW_REQUIRED |
 
-The implementation-level evidence does demonstrate the intended change:
-review is counted only after final routing, `review_before_detail` is exposed
-separately, and a selected full-detail vacancy reaches AI unless a distinct
-deterministic preparation or safety reason stops it. The real percentage
-change requires rerunning after HH read access is restored.
+## Pilot candidates
 
-## Best controlled-pilot candidates
+No `MATCH` and no `would_apply` candidates were produced in either real Shadow
+run. Therefore there are no top-five pilot candidates and no cover-letter
+previews to claim or send.
 
-No Stage 29 provider run reached AI, so there are **0 verified Stage 29
-`MATCH`/high-confidence candidates** and no truthful cover-letter previews to
-save. No application was submitted. After read access is restored, the JSON
-report's `would_apply`, selected resume, score, confidence, reasons,
-`ai_call_reason`, and application preview fields are the source for the
-controlled top-five pilot list.
+## Verification status
 
-## Answers to the required questions
+The full requested local suite was run after this report update:
 
-1. Stage 28 produced 82 reviews because routing happened before detail and
-   treated sparse card evidence as terminal ambiguity.
-2. Stage 29 cases resolved after detail: not measurable in this run because
-   HH returned `403` before discovery; regression fixtures prove the
-   ambiguous-card → detail → clear-route path.
-3. Genuine ambiguity: regression fixture confirms equal full-detail fits stay
-   `REVIEW_REQUIRED`; real count is pending provider access.
-4. Resume choices: deterministic fixtures cover Python/backend,
-   integration/automation, and support routes; real Stage 29 choices are
-   pending provider access.
-5. AI reached all successfully selected full-detail fixtures; real run count
-   is pending provider access.
-6. Best five: none verified in Stage 29 because no vacancy reached AI.
-7. HH write performed: **NO**. Shadow writes: **0**.
+```text
+gofmt -w .
+go test ./...
+go test -race ./...
+go vet ./...
+go build ./...
+git diff --check
+node --check web/app.js
+```
+
+Final results are reported in the handoff. No architecture, OAuth or transport
+layer changes were made.
+
+Real HH writes: **0**. Shadow writes: **0**.
