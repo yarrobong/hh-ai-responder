@@ -248,6 +248,17 @@ Final authoritative auto-generated-scope run (after the metadata fix):
 | Shadow writes | 0 |
 | Accounting | PASS |
 
+### Counter consistency audit
+
+The authoritative final run for this report is the Stage 29.6 validation run
+represented by the counters above and in the final handoff below. Its local
+decision counters are `MATCH=0`, `REJECT=11`, `REVIEW_REQUIRED=88`.
+`ALREADY_RESPONDED` is a separate terminal preflight outcome and is counted in
+`PreviouslyRespondedSkipped`; it must not be added to `Final REJECT`. The
+previous handoff discrepancy (`REJECT: 12`) came from treating that separate
+preflight outcome as another final reject. The handoff is corrected to use the
+same authoritative counters as the report.
+
 `MATCH=0` is accepted. In the earlier calibration replay one AI MATCH was
 stopped by read-only preflight (`ALREADY_RESPONDED`); the final validation run
 had zero AI MATCH. No application preview/write was emitted in either run.

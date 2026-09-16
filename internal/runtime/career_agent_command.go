@@ -39,6 +39,9 @@ func runCareerAgentCommand(args []string, cfg Config, stdout, stderr io.Writer) 
 	if len(args) > 0 && args[0] == "resumes" {
 		return runCareerAgentResumes(cfg, stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "pilot" {
+		return runCareerAgentPilotCommand(args[1:], cfg, stdout, stderr)
+	}
 	// Accept both the flag spelling documented for automation and the
 	// subcommand spelling used by operators. Keeping both avoids making the
 	// new flow a breaking CLI change while the parser remains explicit.
@@ -54,7 +57,7 @@ func runCareerAgentCommand(args []string, cfg Config, stdout, stderr io.Writer) 
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: career-agent --shadow | career-agent --canary | career-agent feedback ... | career-agent resumes")
+		return errors.New("usage: career-agent --shadow | career-agent --canary | career-agent feedback ... | career-agent resumes | career-agent pilot ...")
 	}
 	if !shadow && !canary {
 		shadow = true
