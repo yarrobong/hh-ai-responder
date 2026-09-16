@@ -10,8 +10,10 @@ write-операций в Shadow Mode.
 
 - Before SHA: `692af6cd5be868ac6169a97b85dfc533e77dd11d`
 - After SHA (implementation commit): `e88015c`.
-- Report metadata commit: будет указан после фиксации точных Git SHA.
-- `origin/main`: проверяется после push; должен совпасть с final commit.
+- Validation report commit: `d3aa8925147ce75b7db02963ad717b552e692222`.
+- `origin/main` verified after validation push: `d3aa8925147ce75b7db02963ad717b552e692222`.
+- A final report-metadata follow-up commit may advance both `HEAD` and
+  `origin/main`; the final exact values are also printed in the handoff.
 - Force push не использовался.
 - Существующий untracked `out` не добавлялся и не изменялся.
 
