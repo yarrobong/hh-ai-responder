@@ -48,6 +48,8 @@ type VacancyReviewRequiredResult struct {
 	URL                     string                      `json:"url"`
 	Score                   int                         `json:"score"`
 	Apply                   bool                        `json:"apply"`
+	Recommendation          string                      `json:"recommendation,omitempty"`
+	RecommendationReasons   []string                    `json:"recommendation_reasons,omitempty"`
 	Reasons                 []string                    `json:"reasons"`
 	Missing                 []string                    `json:"missing"`
 	HardRequirementsUnknown []string                    `json:"hard_requirements_unknown"`
@@ -61,6 +63,8 @@ type VacancyMatchResult struct {
 	Name                    string                      `json:"name"`
 	URL                     string                      `json:"url"`
 	Score                   int                         `json:"score"`
+	Recommendation          string                      `json:"recommendation,omitempty"`
+	RecommendationReasons   []string                    `json:"recommendation_reasons,omitempty"`
 	Reasons                 []string                    `json:"reasons"`
 	Missing                 []string                    `json:"missing"`
 	HardRequirementsMissing []string                    `json:"hard_requirements_missing,omitempty"`
@@ -89,6 +93,10 @@ type RunSummaryResult struct {
 	AIRejected                 int                    `json:"ai_rejected,omitempty"`
 	AIApplyTrue                int                    `json:"ai_apply_true,omitempty"`
 	AIApplyFalse               int                    `json:"ai_apply_false,omitempty"`
+	AIRecommendationApply      int                    `json:"ai_recommendation_apply,omitempty"`
+	AIRecommendationDoNotApply int                    `json:"ai_recommendation_do_not_apply,omitempty"`
+	AIRecommendationUncertain  int                    `json:"ai_recommendation_uncertain,omitempty"`
+	AIAdvisoryOnlyConcerns     int                    `json:"ai_advisory_only_concerns,omitempty"`
 	AIHardMissing              int                    `json:"ai_hard_missing,omitempty"`
 	AIHardUnknown              int                    `json:"ai_hard_unknown,omitempty"`
 	AIScoreBelowThreshold      int                    `json:"ai_score_below_threshold,omitempty"`
@@ -132,42 +140,45 @@ type StageStats struct {
 }
 
 type CareerAgentVacancyResult struct {
-	Type                  string                      `json:"type"`
-	VacancyID             int                         `json:"vacancy_id"`
-	Title                 string                      `json:"title"`
-	Company               string                      `json:"company,omitempty"`
-	URL                   string                      `json:"url,omitempty"`
-	FoundByProfiles       []string                    `json:"found_by_profiles,omitempty"`
-	SearchCardEvidence    []string                    `json:"search_card_evidence,omitempty"`
-	CheapFilterResult     string                      `json:"cheap_filter_result,omitempty"`
-	CheapFilterReasons    []string                    `json:"cheap_filter_reasons,omitempty"`
-	PreliminaryRoute      string                      `json:"preliminary_route,omitempty"`
-	PreliminaryReasonCode string                      `json:"preliminary_reason_code,omitempty"`
-	DetailFetchStatus     string                      `json:"detail_fetch_status,omitempty"`
-	DetailEvidence        []string                    `json:"detail_evidence,omitempty"`
-	AIEvaluated           bool                        `json:"ai_evaluated"`
-	AIScore               *int                        `json:"ai_score,omitempty"`
-	AIReasons             []string                    `json:"ai_reasons,omitempty"`
-	AIApply               *bool                       `json:"ai_apply,omitempty"`
-	AIHardRequirements    []HardRequirementEvaluation `json:"ai_hard_requirements,omitempty"`
-	AIDecision            string                      `json:"ai_decision,omitempty"`
-	AIReasonCode          string                      `json:"ai_reason_code,omitempty"`
-	AIHardMissing         []string                    `json:"ai_hard_missing,omitempty"`
-	AIHardUnknown         []string                    `json:"ai_hard_unknown,omitempty"`
-	AIThreshold           int                         `json:"ai_threshold,omitempty"`
-	AICallReason          string                      `json:"ai_call_reason,omitempty"`
-	ResumeCandidates      []careeragent.ResumeScore   `json:"resume_candidates,omitempty"`
-	PreliminaryCandidates []careeragent.ResumeScore   `json:"preliminary_candidates,omitempty"`
-	SelectedResume        string                      `json:"selected_resume,omitempty"`
-	SelectedResumeTitle   string                      `json:"selected_resume_title,omitempty"`
-	ResumeConfidence      string                      `json:"resume_confidence,omitempty"`
-	FinalRouteReasonCode  string                      `json:"final_route_reason_code,omitempty"`
-	FinalDecision         string                      `json:"final_decision"`
-	WouldApply            bool                        `json:"would_apply"`
-	BlockedReason         string                      `json:"blocked_reason,omitempty"`
-	CoverLetterGenerated  bool                        `json:"cover_letter_generated"`
-	TerminalOutcome       string                      `json:"terminal_outcome"`
-	ProcessedAt           time.Time                   `json:"processed_at"`
+	Type                    string                      `json:"type"`
+	VacancyID               int                         `json:"vacancy_id"`
+	Title                   string                      `json:"title"`
+	Company                 string                      `json:"company,omitempty"`
+	URL                     string                      `json:"url,omitempty"`
+	FoundByProfiles         []string                    `json:"found_by_profiles,omitempty"`
+	SearchCardEvidence      []string                    `json:"search_card_evidence,omitempty"`
+	CheapFilterResult       string                      `json:"cheap_filter_result,omitempty"`
+	CheapFilterReasons      []string                    `json:"cheap_filter_reasons,omitempty"`
+	PreliminaryRoute        string                      `json:"preliminary_route,omitempty"`
+	PreliminaryReasonCode   string                      `json:"preliminary_reason_code,omitempty"`
+	DetailFetchStatus       string                      `json:"detail_fetch_status,omitempty"`
+	DetailEvidence          []string                    `json:"detail_evidence,omitempty"`
+	AIEvaluated             bool                        `json:"ai_evaluated"`
+	AIScore                 *int                        `json:"ai_score,omitempty"`
+	AIReasons               []string                    `json:"ai_reasons,omitempty"`
+	AIApply                 *bool                       `json:"ai_apply,omitempty"`
+	AIRecommendation        string                      `json:"ai_recommendation,omitempty"`
+	AIRecommendationReasons []string                    `json:"ai_recommendation_reasons,omitempty"`
+	AIHardRequirements      []HardRequirementEvaluation `json:"ai_hard_requirements,omitempty"`
+	AIDecision              string                      `json:"ai_decision,omitempty"`
+	AIReasonCode            string                      `json:"ai_reason_code,omitempty"`
+	AIHardMissing           []string                    `json:"ai_hard_missing,omitempty"`
+	AIHardUnknown           []string                    `json:"ai_hard_unknown,omitempty"`
+	AIThreshold             int                         `json:"ai_threshold,omitempty"`
+	AICallReason            string                      `json:"ai_call_reason,omitempty"`
+	ResumeCandidates        []careeragent.ResumeScore   `json:"resume_candidates,omitempty"`
+	PreliminaryCandidates   []careeragent.ResumeScore   `json:"preliminary_candidates,omitempty"`
+	SelectedResume          string                      `json:"selected_resume,omitempty"`
+	SelectedResumeTitle     string                      `json:"selected_resume_title,omitempty"`
+	ResumeConfidence        string                      `json:"resume_confidence,omitempty"`
+	FinalRouteReasonCode    string                      `json:"final_route_reason_code,omitempty"`
+	FinalReasonCode         string                      `json:"final_reason_code,omitempty"`
+	FinalDecision           string                      `json:"final_decision"`
+	WouldApply              bool                        `json:"would_apply"`
+	BlockedReason           string                      `json:"blocked_reason,omitempty"`
+	CoverLetterGenerated    bool                        `json:"cover_letter_generated"`
+	TerminalOutcome         string                      `json:"terminal_outcome"`
+	ProcessedAt             time.Time                   `json:"processed_at"`
 }
 
 const (
@@ -263,11 +274,18 @@ const (
 )
 
 const (
+	// AIReasonApplyFalse is retained for readers of older reports. New traces
+	// use the local reason codes below and never use this as a terminal blocker.
 	AIReasonApplyFalse          = "AI_APPLY_FALSE"
 	AIReasonHardMissing         = "HARD_REQUIREMENT_MISSING"
 	AIReasonScoreBelowThreshold = "AI_SCORE_BELOW_THRESHOLD"
 	AIReasonHardUnknown         = "HARD_REQUIREMENT_UNKNOWN"
 	AIReasonMatch               = "AI_MATCH"
+	ReasonMatchConfirmed        = "MATCH_CONFIRMED"
+	ReasonHardMissing           = "HARD_REQUIREMENT_MISSING"
+	ReasonHardUnknown           = "HARD_REQUIREMENT_UNKNOWN"
+	ReasonScoreBelowThreshold   = "FIT_SCORE_BELOW_THRESHOLD"
+	ReasonAIAdvisoryConcern     = "AI_ADVISORY_CONCERN"
 )
 
 func recordAIDecisionBreakdown(summary *RunSummaryResult, trace *CareerAgentVacancyResult, evaluation VacancyEvaluation, minScore int) {
@@ -276,6 +294,8 @@ func recordAIDecisionBreakdown(summary *RunSummaryResult, trace *CareerAgentVaca
 	}
 	apply := evaluation.Apply
 	trace.AIApply = &apply
+	trace.AIRecommendation = assessmentRecommendation(evaluation)
+	trace.AIRecommendationReasons = append([]string(nil), evaluation.RecommendationReasons...)
 	trace.AIHardRequirements = append([]HardRequirementEvaluation(nil), evaluation.HardRequirements...)
 	trace.AIHardMissing = hardRequirementsMissing(evaluation)
 	trace.AIHardUnknown = hardRequirementsUnknown(evaluation)
@@ -283,52 +303,74 @@ func recordAIDecisionBreakdown(summary *RunSummaryResult, trace *CareerAgentVaca
 	if summary.AIReasonCounts == nil {
 		summary.AIReasonCounts = map[string]int{}
 	}
+	switch trace.AIRecommendation {
+	case vacancyanalysis.RecommendationApply:
+		summary.AIRecommendationApply++
+	case vacancyanalysis.RecommendationDoNotApply:
+		summary.AIRecommendationDoNotApply++
+	default:
+		summary.AIRecommendationUncertain++
+	}
 	if apply {
 		summary.AIApplyTrue++
 	} else {
 		summary.AIApplyFalse++
 	}
 
-	// Keep the same fail-closed precedence as the application policy. The
-	// first matching code is the primary structured reason; all requirement
-	// details remain attached to the trace for audit.
-	switch {
-	case len(trace.AIHardMissing) > 0:
-		trace.AIDecision, trace.AIReasonCode = string(VacancyReject), AIReasonHardMissing
+	if len(trace.AIHardMissing) > 0 {
 		summary.AIHardMissing++
-		summary.AIRejected++
-	case !apply:
-		trace.AIDecision, trace.AIReasonCode = string(VacancyReject), AIReasonApplyFalse
-		summary.AIRejected++
-	case evaluation.Score < minScore:
-		trace.AIDecision, trace.AIReasonCode = string(VacancyReject), AIReasonScoreBelowThreshold
-		summary.AIScoreBelowThreshold++
-		summary.AIRejected++
-	case len(trace.AIHardUnknown) > 0:
-		trace.AIDecision, trace.AIReasonCode = string(VacancyReviewRequired), AIReasonHardUnknown
-		summary.AIReviewed++
+	}
+	if len(trace.AIHardUnknown) > 0 {
 		summary.AIHardUnknown++
-	default:
-		trace.AIDecision, trace.AIReasonCode = string(VacancyMatch), AIReasonMatch
+	}
+	if evaluation.Score < minScore {
+		summary.AIScoreBelowThreshold++
+	}
+	decision, reasonCode, _ := vacancyDecisionWithReason(evaluation, minScore)
+	trace.AIDecision, trace.AIReasonCode = string(decision), reasonCode
+	switch decision {
+	case VacancyMatch:
 		summary.AIMatched++
+	case VacancyReviewRequired:
+		summary.AIReviewed++
+		if reasonCode == ReasonAIAdvisoryConcern {
+			summary.AIAdvisoryOnlyConcerns++
+		}
+	default:
+		summary.AIRejected++
 	}
 	summary.AIReasonCounts[trace.AIReasonCode]++
 }
 
 func vacancyDecision(evaluation VacancyEvaluation, minScore int) VacancyDecision {
+	decision, _, _ := vacancyDecisionWithReason(evaluation, minScore)
+	return decision
+}
+
+func vacancyDecisionWithReason(evaluation VacancyEvaluation, minScore int) (VacancyDecision, string, string) {
 	if len(hardRequirementsMissing(evaluation)) > 0 {
-		return VacancyReject
-	}
-	if !evaluation.Apply {
-		return VacancyReject
+		return VacancyReject, ReasonHardMissing, "hard requirements not met: " + strings.Join(hardRequirementsMissing(evaluation), ", ")
 	}
 	if evaluation.Score < minScore {
-		return VacancyReject
+		return VacancyReject, ReasonScoreBelowThreshold, fmt.Sprintf("AI score below threshold (%d/100, minimum %d)", evaluation.Score, minScore)
 	}
 	if len(hardRequirementsUnknown(evaluation)) > 0 {
-		return VacancyReviewRequired
+		return VacancyReviewRequired, ReasonHardUnknown, "hard requirements could not be verified: " + strings.Join(hardRequirementsUnknown(evaluation), ", ")
 	}
-	return VacancyMatch
+	if assessmentRecommendation(evaluation) != vacancyanalysis.RecommendationApply {
+		return VacancyReviewRequired, ReasonAIAdvisoryConcern, "AI advisory recommendation requires review"
+	}
+	return VacancyMatch, ReasonMatchConfirmed, ""
+}
+
+func assessmentRecommendation(evaluation VacancyEvaluation) string {
+	if evaluation.Recommendation != "" {
+		return evaluation.Recommendation
+	}
+	if evaluation.Apply {
+		return vacancyanalysis.RecommendationApply
+	}
+	return vacancyanalysis.RecommendationDoNotApply
 }
 
 func hardRequirementsMissing(evaluation VacancyEvaluation) []string {
@@ -434,19 +476,9 @@ func finalApplyDecision(evaluation VacancyEvaluation, minScore int) bool {
 }
 
 func vacancyEvaluationRejectReason(evaluation VacancyEvaluation, minScore int) string {
-	missing := hardRequirementsMissing(evaluation)
-	if len(missing) > 0 {
-		return "hard requirements not met: " + strings.Join(missing, ", ")
-	}
-	if !evaluation.Apply {
-		return fmt.Sprintf("AI recommended not applying (%d/100)", evaluation.Score)
-	}
-	if evaluation.Score < minScore {
-		return fmt.Sprintf("AI score below threshold (%d/100, minimum %d)", evaluation.Score, minScore)
-	}
-	unknown := hardRequirementsUnknown(evaluation)
-	if len(unknown) > 0 {
-		return "hard requirements could not be verified: " + strings.Join(unknown, ", ")
+	_, _, reason := vacancyDecisionWithReason(evaluation, minScore)
+	if reason != "" {
+		return reason
 	}
 	return "vacancy does not meet application criteria"
 }

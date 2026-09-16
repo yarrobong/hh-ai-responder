@@ -20,6 +20,18 @@ const (
 	HardRequirementStatusMet     = "met"
 	HardRequirementStatusMissing = "missing"
 	HardRequirementStatusUnknown = "unknown"
+
+	RecommendationApply      = "APPLY"
+	RecommendationDoNotApply = "DO_NOT_APPLY"
+	RecommendationUncertain  = "UNCERTAIN"
+
+	RecommendationReasonRoleMismatch    = "ROLE_MISMATCH"
+	RecommendationReasonStackMismatch   = "STACK_MISMATCH"
+	RecommendationReasonSeniorityGap    = "SENIORITY_GAP"
+	RecommendationReasonHardRequirement = "HARD_REQUIREMENT"
+	RecommendationReasonLowOverallFit   = "LOW_OVERALL_FIT"
+	RecommendationReasonLocationConcern = "LOCATION_CONCERN"
+	RecommendationReasonOther           = "OTHER"
 )
 
 // CandidateFacts is the bounded candidate projection used by vacancy AI. It
@@ -70,24 +82,28 @@ type HardRequirementEvaluation struct {
 }
 
 type AIResponse struct {
-	Score            int                        `json:"score"`
-	Apply            bool                       `json:"apply"`
-	Reasons          []string                   `json:"reasons"`
-	Missing          []string                   `json:"missing"`
-	HardRequirements []HardRequirementCandidate `json:"hard_requirements"`
-	StrongMatch      []string                   `json:"strong_match,omitempty"`
+	Score                 int                        `json:"score"`
+	Apply                 bool                       `json:"apply"` // legacy compatibility; advisory only
+	Recommendation        string                     `json:"recommendation,omitempty"`
+	RecommendationReasons []string                   `json:"recommendation_reasons,omitempty"`
+	Reasons               []string                   `json:"reasons"`
+	Missing               []string                   `json:"missing"`
+	HardRequirements      []HardRequirementCandidate `json:"hard_requirements"`
+	StrongMatch           []string                   `json:"strong_match,omitempty"`
 }
 
 // Assessment is validated AI output combined with deterministic evidence
 // checks. It is advisory; application eligibility remains a higher-workflow
 // decision.
 type Assessment struct {
-	Score            int                         `json:"score"`
-	Apply            bool                        `json:"apply"`
-	Reasons          []string                    `json:"reasons"`
-	Missing          []string                    `json:"missing"`
-	HardRequirements []HardRequirementEvaluation `json:"hard_requirements"`
-	StrongMatch      []string                    `json:"strong_match,omitempty"`
+	Score                 int                         `json:"score"`
+	Apply                 bool                        `json:"apply"` // legacy compatibility; advisory only
+	Recommendation        string                      `json:"recommendation"`
+	RecommendationReasons []string                    `json:"recommendation_reasons,omitempty"`
+	Reasons               []string                    `json:"reasons"`
+	Missing               []string                    `json:"missing"`
+	HardRequirements      []HardRequirementEvaluation `json:"hard_requirements"`
+	StrongMatch           []string                    `json:"strong_match,omitempty"`
 }
 
 type Dependencies struct {

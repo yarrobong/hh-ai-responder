@@ -153,6 +153,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 			summary.PreviouslyRespondedSkipped++
 			r.skipVacancy(value, value.Links["desktop"], "previously confirmed already responded", nil)
 			trace.CheapFilterResult, trace.DetailFetchStatus = "REJECT", "NOT_REQUIRED"
+			trace.FinalDecision, trace.FinalReasonCode = string(VacancyReject), "ALREADY_RESPONDED"
 			finish(trace, TerminalAlreadyResponded, "previously confirmed already responded")
 			continue
 		}
@@ -330,6 +331,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 			trace.AIScore = &score
 			trace.AIReasons = append([]string(nil), prep.Analysis.Reasons...)
 			recordAIDecisionBreakdown(&summary, &trace, *prep.Analysis, r.minMatchScore)
+			_, trace.FinalReasonCode, _ = vacancyDecisionWithReason(*prep.Analysis, r.minMatchScore)
 			recordStage(stageStats, "ai_evaluation", "completed", false, true)
 		}
 		if r.careerAgentMode != "" && prep.Analysis == nil && trace.AICallReason == "" {
@@ -357,7 +359,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 			if prep.Reason == "per-run application limit reached" && prep.Analysis != nil {
 				evaluation := *prep.Analysis
 				summary.Matched++
-				r.writeEvent(VacancyMatchResult{Type: "vacancy_match", VacancyID: value.ID, Name: value.Name, URL: vacancyURL, Score: evaluation.Score, Reasons: evaluation.Reasons, Missing: evaluation.Missing, HardRequirementsMissing: hardRequirementsMissing(evaluation), HardRequirements: evaluation.HardRequirements, SearchProfiles: r.vacancySearchSources[value.ID]})
+				r.writeEvent(VacancyMatchResult{Type: "vacancy_match", VacancyID: value.ID, Name: value.Name, URL: vacancyURL, Score: evaluation.Score, Recommendation: assessmentRecommendation(evaluation), RecommendationReasons: append([]string(nil), evaluation.RecommendationReasons...), Reasons: evaluation.Reasons, Missing: evaluation.Missing, HardRequirementsMissing: hardRequirementsMissing(evaluation), HardRequirements: evaluation.HardRequirements, SearchProfiles: r.vacancySearchSources[value.ID]})
 				summary.ApplicationLimitSkipped++
 				r.skipVacancy(value, vacancyURL, prep.Reason, &evaluation.Score)
 				trace.FinalDecision = string(VacancyMatch)
@@ -374,6 +376,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 				} else if strings.HasPrefix(lowerReason, "preflight:") {
 					terminal = TerminalDeterministicReject
 					summary.Rejected++
+					trace.FinalReasonCode = preflightFinalReasonCode(prep.Reason)
 				} else {
 					summary.Rejected++
 				}
@@ -409,7 +412,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 		trace.SelectedResume = firstNonEmpty(trace.SelectedResume, selectedResume.Hash)
 		trace.SelectedResumeTitle = firstNonEmpty(trace.SelectedResumeTitle, selectedResume.Title)
 		trace.CoverLetterGenerated = strings.TrimSpace(prep.Prepared.CoverLetter) != ""
-		r.writeEvent(VacancyMatchResult{Type: "vacancy_match", VacancyID: value.ID, Name: value.Name, URL: vacancyURL, Score: evaluation.Score, Reasons: evaluation.Reasons, Missing: evaluation.Missing, HardRequirementsMissing: hardRequirementsMissing(evaluation), HardRequirements: evaluation.HardRequirements, SearchProfiles: r.vacancySearchSources[value.ID]})
+		r.writeEvent(VacancyMatchResult{Type: "vacancy_match", VacancyID: value.ID, Name: value.Name, URL: vacancyURL, Score: evaluation.Score, Recommendation: assessmentRecommendation(evaluation), RecommendationReasons: append([]string(nil), evaluation.RecommendationReasons...), Reasons: evaluation.Reasons, Missing: evaluation.Missing, HardRequirementsMissing: hardRequirementsMissing(evaluation), HardRequirements: evaluation.HardRequirements, SearchProfiles: r.vacancySearchSources[value.ID]})
 		logger.Info("MATCH — vacancy %d: %d/100", value.ID, evaluation.Score)
 
 		submissionResult, solutions, sendErr := r.submitPreparedApplication(*prep.Prepared)
@@ -459,6 +462,20 @@ func (r *HHAIResponder) ApplyVacancies() error {
 	return nil
 }
 
+func preflightFinalReasonCode(reason string) string {
+	value := strings.ToLower(reason)
+	switch {
+	case strings.Contains(value, "already responded"):
+		return "ALREADY_RESPONDED"
+	case strings.Contains(value, "archived"):
+		return "VACANCY_ARCHIVED"
+	case strings.Contains(value, "can apply") || strings.Contains(value, "application"):
+		return "APPLICATION_UNAVAILABLE"
+	default:
+		return "PREFLIGHT_BLOCKER"
+	}
+}
+
 func routeRequirementsConfirmed(route careeragent.RouteDecision) bool {
 	for _, requirement := range route.HardRequirements {
 		if requirement.Status != "met" {
@@ -477,7 +494,7 @@ func (r *HHAIResponder) writeApplicationReview(value Vacancy, url string, prep a
 		return
 	}
 	evaluation := *prep.Analysis
-	r.writeEvent(VacancyReviewRequiredResult{Type: "vacancy_review_required", VacancyID: value.ID, Name: value.Name, URL: url, Score: evaluation.Score, Apply: evaluation.Apply, Reasons: append(append([]string{}, evaluation.Reasons...), reason), Missing: evaluation.Missing, HardRequirementsUnknown: hardRequirementsUnknown(evaluation), HardRequirements: evaluation.HardRequirements, SearchProfiles: r.vacancySearchSources[value.ID]})
+	r.writeEvent(VacancyReviewRequiredResult{Type: "vacancy_review_required", VacancyID: value.ID, Name: value.Name, URL: url, Score: evaluation.Score, Apply: evaluation.Apply, Recommendation: assessmentRecommendation(evaluation), RecommendationReasons: append([]string(nil), evaluation.RecommendationReasons...), Reasons: append(append([]string{}, evaluation.Reasons...), reason), Missing: evaluation.Missing, HardRequirementsUnknown: hardRequirementsUnknown(evaluation), HardRequirements: evaluation.HardRequirements, SearchProfiles: r.vacancySearchSources[value.ID]})
 }
 
 func (r *HHAIResponder) writeApplicationError(value Vacancy, url string, resume *ResumeItem, err error) {

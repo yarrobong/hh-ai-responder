@@ -139,6 +139,70 @@ func TestServiceDoesNotPromoteUnknownSkillOrHallucinatedRequirement(t *testing.T
 	}
 }
 
+func TestLegacyApplyFieldRemainsBackwardCompatibleAndAdvisory(t *testing.T) {
+	legacy := `{"score":90,"apply":false,"reasons":[],"missing":[],"hard_requirements":[]}`
+	parsed, err := ParseAIResponse(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assessment := buildAssessment(Input{}, parsed)
+	if assessment.Recommendation != RecommendationDoNotApply {
+		t.Fatalf("legacy apply=false was not normalized to advisory recommendation: %+v", assessment)
+	}
+	if assessment.Apply {
+		t.Fatal("legacy apply flag changed during normalization")
+	}
+}
+
+func TestRecommendationReasonsAreBoundedEnums(t *testing.T) {
+	valid := `{"score":80,"apply":true,"recommendation":"DO_NOT_APPLY","recommendation_reasons":["STACK_MISMATCH","OTHER"],"reasons":[],"missing":[],"hard_requirements":[]}`
+	if _, err := ParseAIResponse(valid); err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []string{
+		`{"score":80,"apply":true,"recommendation":"NO","recommendation_reasons":[],"reasons":[],"missing":[],"hard_requirements":[]}`,
+		`{"score":80,"apply":true,"recommendation":"UNCERTAIN","recommendation_reasons":["free text"],"reasons":[],"missing":[],"hard_requirements":[]}`,
+	} {
+		if _, err := ParseAIResponse(raw); err == nil {
+			t.Errorf("invalid recommendation was accepted: %s", raw)
+		}
+	}
+}
+
+func TestRemoteLocationDoesNotBecomeHardRequirement(t *testing.T) {
+	input := Input{
+		Candidate:   CandidateFacts{Location: "Екатеринбург"},
+		Vacancy:     vacancy.Vacancy{Area: vacancy.NamedObject{Name: "Москва"}, WorkSchedule: "Можно удалённо"},
+		Description: "Работа удалённо из любой точки России.",
+	}
+	assessment := buildAssessment(input, AIResponse{Score: 80, Apply: true, Reasons: []string{}, Missing: []string{}, HardRequirements: []HardRequirementCandidate{{Requirement: "Москва", Category: HardRequirementCategoryLocation, VacancyEvidence: "Москва"}}})
+	if len(assessment.HardRequirements) != 0 {
+		t.Fatalf("remote vacancy created location blocker: %+v", assessment.HardRequirements)
+	}
+}
+
+func TestExperienceSemanticsKeepStructuredBandSeparateFromExplicitDuration(t *testing.T) {
+	candidate := CandidateFacts{TotalExperienceMonthsKnown: true, TotalExperienceMonths: 24}
+	for _, test := range []struct {
+		name, requirement, evidence, description, want string
+	}{
+		{name: "one year met", requirement: "от 1 года", evidence: "от 1 года", description: "Опыт от 1 года.", want: HardRequirementStatusMet},
+		{name: "two years met", requirement: "2 года", evidence: "2 года", description: "Опыт 2 года.", want: HardRequirementStatusMet},
+		{name: "three years missing", requirement: "3 года", evidence: "3 года", description: "Опыт 3 года.", want: HardRequirementStatusMissing},
+		{name: "role-specific duration unknown", requirement: "2 года Python", evidence: "2 года Python", description: "Опыт 2 года Python.", want: HardRequirementStatusUnknown},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := DeriveHardRequirements(candidate, vacancy.Vacancy{}, test.description, []HardRequirementCandidate{{Requirement: test.requirement, Category: HardRequirementCategoryExperienceYears, VacancyEvidence: test.evidence}})
+			if len(got) != 1 || got[0].Status != test.want {
+				t.Fatalf("experience=%+v, want %s", got, test.want)
+			}
+		})
+	}
+	if got := DeriveHardRequirements(candidate, vacancy.Vacancy{WorkExperience: "between1And3"}, "", []HardRequirementCandidate{{Requirement: "between1And3", Category: HardRequirementCategoryExperienceYears, VacancyEvidence: "between1And3"}}); len(got) != 0 {
+		t.Fatalf("generic HH experience band became hard requirement: %+v", got)
+	}
+}
+
 func TestServiceKeepsDjangoAndElevenMonthSoftExperience(t *testing.T) {
 	provider := &fakeCompletion{responses: []string{validResponse(86, `[{"requirement":"Django","category":"skill","vacancy_evidence":"Django обязателен"},{"requirement":"от 1 года","category":"experience_years","vacancy_evidence":"от 1 года"}]`, "Django")}}
 	assessment, err := newTestService(provider, 1).Analyze(context.Background(), Input{Candidate: CandidateFacts{Skills: "Django", TotalExperienceMonthsKnown: true, TotalExperienceMonths: 11}, Vacancy: vacancy.Vacancy{Name: "Django developer"}, Description: "Django обязателен. Опыт от 1 года."})

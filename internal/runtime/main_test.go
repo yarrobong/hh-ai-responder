@@ -69,9 +69,9 @@ func TestVacancyDecisionUsesTriStateHardRequirements(t *testing.T) {
 			want:       VacancyReviewRequired,
 		},
 		{
-			name:       "apply false rejects before unknown review",
+			name:       "apply false does not bypass unknown review",
 			evaluation: VacancyEvaluation{Score: 99, Apply: false, HardRequirements: []HardRequirementEvaluation{{Requirement: "location", Category: hardRequirementCategoryLocation, Status: hardRequirementStatusUnknown, VacancyEvidence: "Office location required", CandidateEvidence: "not provided"}}},
-			want:       VacancyReject,
+			want:       VacancyReviewRequired,
 		},
 		{
 			name:       "score below threshold rejects before unknown review",
@@ -79,9 +79,9 @@ func TestVacancyDecisionUsesTriStateHardRequirements(t *testing.T) {
 			want:       VacancyReject,
 		},
 		{
-			name:       "apply false rejects",
+			name:       "apply false alone requires review",
 			evaluation: VacancyEvaluation{Score: 99, Apply: false},
-			want:       VacancyReject,
+			want:       VacancyReviewRequired,
 		},
 		{
 			name:       "score threshold rejects",
@@ -256,7 +256,7 @@ func TestVacancyEvaluationJSONValidation(t *testing.T) {
 	}
 }
 
-func TestFinalApplyDecisionUsesAIFlagAndThreshold(t *testing.T) {
+func TestFinalApplyDecisionUsesLocalPolicyAndAdvisoryAI(t *testing.T) {
 	if !finalApplyDecision(VacancyEvaluation{Score: 65, Apply: true}, 65) {
 		t.Fatal("score at threshold should be accepted")
 	}
@@ -264,7 +264,7 @@ func TestFinalApplyDecisionUsesAIFlagAndThreshold(t *testing.T) {
 		t.Fatal("below-threshold score should be rejected")
 	}
 	if finalApplyDecision(VacancyEvaluation{Score: 99, Apply: false}, 65) {
-		t.Fatal("AI apply=false must reject even a high score")
+		t.Fatal("AI apply=false alone must not match")
 	}
 	if finalApplyDecision(VacancyEvaluation{Score: 95, Apply: true, HardRequirements: []HardRequirementEvaluation{{Requirement: "minimum 3 years commercial Python experience", Category: hardRequirementCategoryExperienceYears, Status: hardRequirementStatusMissing, VacancyEvidence: "3 years required", CandidateEvidence: "Explicitly no such experience"}}}, 65) {
 		t.Fatal("known hard requirement mismatch must reject regardless of score and AI apply flag")
@@ -272,8 +272,8 @@ func TestFinalApplyDecisionUsesAIFlagAndThreshold(t *testing.T) {
 	if !finalApplyDecision(VacancyEvaluation{Score: 70, Apply: true, Missing: []string{"FastAPI"}, HardRequirements: []HardRequirementEvaluation{}}, 65) {
 		t.Fatal("score above threshold with no hard requirement mismatch should match")
 	}
-	if got := vacancyEvaluationRejectReason(VacancyEvaluation{Score: 65, Apply: false}, 65); got != "AI recommended not applying (65/100)" {
-		t.Fatalf("unexpected apply=false diagnostic: %q", got)
+	if got := vacancyEvaluationRejectReason(VacancyEvaluation{Score: 65, Apply: false}, 65); got != "AI advisory recommendation requires review" {
+		t.Fatalf("unexpected advisory diagnostic: %q", got)
 	}
 	if got := vacancyEvaluationRejectReason(VacancyEvaluation{Score: 60, Apply: true}, 65); got != "AI score below threshold (60/100, minimum 65)" {
 		t.Fatalf("unexpected threshold diagnostic: %q", got)
@@ -282,14 +282,39 @@ func TestFinalApplyDecisionUsesAIFlagAndThreshold(t *testing.T) {
 	if got := vacancyEvaluationRejectReason(VacancyEvaluation{Score: 60, Apply: true, HardRequirements: unknown}, 65); got != "AI score below threshold (60/100, minimum 65)" {
 		t.Fatalf("threshold diagnostic did not take precedence over unknown: %q", got)
 	}
-	if got := vacancyEvaluationRejectReason(VacancyEvaluation{Score: 65, Apply: false, HardRequirements: unknown}, 65); got != "AI recommended not applying (65/100)" {
-		t.Fatalf("apply diagnostic did not take precedence over unknown: %q", got)
+	if got := vacancyEvaluationRejectReason(VacancyEvaluation{Score: 65, Apply: false, HardRequirements: unknown}, 65); got != "hard requirements could not be verified: higher education" {
+		t.Fatalf("unknown diagnostic did not take precedence over advisory: %q", got)
 	}
 	if got := vacancyEvaluationRejectReason(VacancyEvaluation{Score: 65, Apply: true, HardRequirements: unknown}, 65); got != "hard requirements could not be verified: higher education" {
 		t.Fatalf("unexpected unknown diagnostic: %q", got)
 	}
 	if got := vacancyEvaluationRejectReason(VacancyEvaluation{Score: 72, Apply: true, HardRequirements: []HardRequirementEvaluation{{Requirement: "minimum 3 years commercial Python experience", Category: hardRequirementCategoryOther, Status: hardRequirementStatusMissing, VacancyEvidence: "3 years required", CandidateEvidence: "Explicitly no such experience"}}}, 65); got != "hard requirements not met: minimum 3 years commercial Python experience" {
 		t.Fatalf("unexpected hard requirement diagnostic: %q", got)
+	}
+}
+
+func TestAIApplyFalseAloneCannotTerminalReject(t *testing.T) {
+	decision, code, reason := vacancyDecisionWithReason(VacancyEvaluation{Score: 95, Apply: false}, 65)
+	if decision != VacancyReviewRequired || code != ReasonAIAdvisoryConcern {
+		t.Fatalf("apply=false alone: decision=%s code=%s reason=%q", decision, code, reason)
+	}
+	if finalApplyDecision(VacancyEvaluation{Score: 95, Apply: false}, 65) {
+		t.Fatal("advisory false recommendation unexpectedly became application")
+	}
+}
+
+func TestLocalDecisionPrecedenceKeepsHardSafety(t *testing.T) {
+	missing := VacancyEvaluation{Score: 99, Apply: false, Recommendation: "APPLY", HardRequirements: []HardRequirementEvaluation{{Requirement: "Kafka", Status: hardRequirementStatusMissing}}}
+	if got, code, _ := vacancyDecisionWithReason(missing, 65); got != VacancyReject || code != ReasonHardMissing {
+		t.Fatalf("missing hard requirement: decision=%s code=%s", got, code)
+	}
+	unknown := VacancyEvaluation{Score: 99, Apply: true, Recommendation: "APPLY", HardRequirements: []HardRequirementEvaluation{{Requirement: "Kafka", Status: hardRequirementStatusUnknown}}}
+	if got, code, _ := vacancyDecisionWithReason(unknown, 65); got != VacancyReviewRequired || code != ReasonHardUnknown {
+		t.Fatalf("unknown hard requirement: decision=%s code=%s", got, code)
+	}
+	match := VacancyEvaluation{Score: 99, Apply: false, Recommendation: "APPLY"}
+	if got, code, _ := vacancyDecisionWithReason(match, 65); got != VacancyMatch || code != ReasonMatchConfirmed {
+		t.Fatalf("high score with local blockers absent should match despite legacy apply=false: decision=%s code=%s", got, code)
 	}
 }
 

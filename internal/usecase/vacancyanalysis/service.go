@@ -109,13 +109,25 @@ func (s *Service) Analyze(ctx context.Context, input Input) (Assessment, error) 
 }
 
 func buildAssessment(input Input, response AIResponse) Assessment {
+	recommendation := response.Recommendation
+	if recommendation == "" {
+		// Old persisted/provider JSON has only apply. Preserve its meaning as an
+		// advisory recommendation, never as a terminal decision.
+		if response.Apply {
+			recommendation = RecommendationApply
+		} else {
+			recommendation = RecommendationDoNotApply
+		}
+	}
 	assessment := Assessment{
-		Score:            response.Score,
-		Apply:            response.Apply,
-		Reasons:          response.Reasons,
-		Missing:          response.Missing,
-		HardRequirements: DeriveHardRequirements(input.Candidate, input.Vacancy, input.Description, response.HardRequirements),
-		StrongMatch:      response.StrongMatch,
+		Score:                 response.Score,
+		Apply:                 response.Apply,
+		Recommendation:        recommendation,
+		RecommendationReasons: append([]string(nil), response.RecommendationReasons...),
+		Reasons:               response.Reasons,
+		Missing:               response.Missing,
+		HardRequirements:      DeriveHardRequirements(input.Candidate, input.Vacancy, input.Description, response.HardRequirements),
+		StrongMatch:           response.StrongMatch,
 	}
 	assessment.Reasons = filterUnsupportedPositiveClaims(input.Candidate, assessment.Reasons, response.HardRequirements)
 	assessment.StrongMatch = filterUnsupportedPositiveClaims(input.Candidate, assessment.StrongMatch, response.HardRequirements)

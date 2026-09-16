@@ -66,9 +66,40 @@ func ValidateAIResponse(value AIResponse) error {
 	if value.Reasons == nil || value.Missing == nil || value.HardRequirements == nil {
 		return errors.New("vacancy evaluation is incomplete: reasons, missing, and hard_requirements are required arrays")
 	}
+	if value.Recommendation != "" && !validRecommendation(value.Recommendation) {
+		return fmt.Errorf("invalid AI recommendation %q", value.Recommendation)
+	}
+	if err := validateRecommendationReasons(value.RecommendationReasons); err != nil {
+		return err
+	}
 	for _, requirement := range value.HardRequirements {
 		if err := validateHardRequirementCandidateShape(requirement); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func validRecommendation(value string) bool {
+	switch value {
+	case RecommendationApply, RecommendationDoNotApply, RecommendationUncertain:
+		return true
+	default:
+		return false
+	}
+}
+
+func validateRecommendationReasons(values []string) error {
+	if len(values) > 3 {
+		return fmt.Errorf("too many AI recommendation reasons: %d", len(values))
+	}
+	for _, value := range values {
+		switch value {
+		case RecommendationReasonRoleMismatch, RecommendationReasonStackMismatch, RecommendationReasonSeniorityGap,
+			RecommendationReasonHardRequirement, RecommendationReasonLowOverallFit, RecommendationReasonLocationConcern,
+			RecommendationReasonOther:
+		default:
+			return fmt.Errorf("invalid AI recommendation reason %q", value)
 		}
 	}
 	return nil
@@ -80,6 +111,12 @@ func ValidateAssessment(value Assessment) error {
 	}
 	if value.Reasons == nil || value.Missing == nil || value.HardRequirements == nil {
 		return errors.New("vacancy evaluation is incomplete: reasons, missing, and hard_requirements are required arrays")
+	}
+	if value.Recommendation != "" && !validRecommendation(value.Recommendation) {
+		return fmt.Errorf("invalid AI recommendation %q", value.Recommendation)
+	}
+	if err := validateRecommendationReasons(value.RecommendationReasons); err != nil {
+		return err
 	}
 	for _, requirement := range value.HardRequirements {
 		if err := validateHardRequirementShape(requirement); err != nil {
@@ -179,6 +216,9 @@ func DeriveHardRequirements(candidate CandidateFacts, value vacancy.Vacancy, des
 		if requirement.Category == HardRequirementCategoryExperienceYears && genericHHExperienceEvidenceOnly(value, description, requirement) {
 			continue
 		}
+		if requirement.Category == HardRequirementCategoryLocation && locationRequirementIsNonBlocking(value, description, requirement) {
+			continue
+		}
 		if !hardRequirementEvidencePresent(value, description, requirement) || isOptionalRequirementCandidate(value, description, requirement) {
 			continue
 		}
@@ -186,6 +226,29 @@ func DeriveHardRequirements(candidate CandidateFacts, value vacancy.Vacancy, des
 		result = append(result, HardRequirementEvaluation{Requirement: strings.TrimSpace(requirement.Requirement), Category: requirement.Category, Status: status, VacancyEvidence: strings.TrimSpace(requirement.VacancyEvidence), CandidateEvidence: evidence, Soft: requirement.Category == HardRequirementCategoryExperienceYears && status == HardRequirementStatusUnknown && genericDescriptionExperienceSoftGap(candidate, requirement)})
 	}
 	return result
+}
+
+// A city in HH's area field is not by itself a relocation or onsite
+// requirement. Only explicit workplace/relocation evidence can enter the hard
+// requirement set; a remote vacancy must not manufacture a city blocker.
+func locationRequirementIsNonBlocking(value vacancy.Vacancy, description string, requirement HardRequirementCandidate) bool {
+	text := strings.ToLower(strings.Join([]string{requirement.Requirement, requirement.VacancyEvidence, value.WorkSchedule, description}, " "))
+	if containsAnyText(text, "релокац", "переезд", "relocat") {
+		return false
+	}
+	if containsAnyText(text, "удалён", "удален", "remote", "дистанцион") && !containsAnyText(text, "офис", "office", "onsite", "on-site", "на месте") {
+		return true
+	}
+	return !containsAnyText(requirement.Requirement+" "+requirement.VacancyEvidence, "офис", "office", "onsite", "on-site", "на месте")
+}
+
+func containsAnyText(value string, needles ...string) bool {
+	for _, needle := range needles {
+		if strings.Contains(value, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func DeriveHardRequirementStatus(candidate CandidateFacts, requirement HardRequirementCandidate) (string, string) {

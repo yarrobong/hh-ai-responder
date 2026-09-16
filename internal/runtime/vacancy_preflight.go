@@ -448,7 +448,9 @@ func localStructuredHardRequirements(preflight VacancyPreflight, candidate Legac
 
 func isRemoteWorkSchedule(value string) bool {
 	text := strings.ToLower(strings.TrimSpace(value))
-	return containsAny(text, "удалён", "удален", "remote", "дистанцион") && !isHybridWorkSchedule(text)
+	// “Гибрид/можно удалённо” has a remote path and therefore does not create
+	// a mandatory city blocker. Hybrid without a remote option remains review.
+	return containsAny(text, "удалён", "удален", "remote", "дистанцион") && !containsAny(text, "офис", "office", "onsite", "on-site", "на месте")
 }
 
 func isOnsiteWorkSchedule(value string) bool {

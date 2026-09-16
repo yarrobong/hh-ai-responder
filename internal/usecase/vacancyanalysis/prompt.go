@@ -19,6 +19,8 @@ func BuildPrompt(input Input) (string, string) {
 		"Hard requirement — обязательное требование вакансии: минимальный коммерческий опыт N лет; конкретная технология, если явно написано «обязательно»; обязательное образование; обязательный язык с конкретным уровнем; обязательная локация или офисный формат, если кандидат явно ему не соответствует; обязательная лицензия, допуск или гражданство, только если это явно написано.",
 		"В hard_requirements включай только обязательные требования. Желательные требования («будет плюсом», «желательно», «будет преимуществом») не включай туда: они могут быть только в missing или reasons и сами по себе не могут привести к отказу.",
 		"Каждый hard requirement опиши объектом только с полями requirement, category и vacancy_evidence. Не добавляй status или candidate_evidence.",
+		"recommendation — только advisory assessment: APPLY, DO_NOT_APPLY или UNCERTAIN. Оно не является разрешением или запретом на отклик.",
+		"recommendation_reasons — не более трёх кодов: ROLE_MISMATCH, STACK_MISMATCH, SENIORITY_GAP, HARD_REQUIREMENT, LOW_OVERALL_FIT, LOCATION_CONCERN или OTHER.",
 		"category может быть только education, location, experience_years, skill, language, license, citizenship или other.",
 		"vacancy_evidence — короткий точный фрагмент из описания вакансии или структурированного поля HH, без перефразирования. Не объявляй требование hard без такого подтверждения.",
 		"Для location используй точный фрагмент из Area.Name или WorkSchedule; для experience_years — из WorkExperience. Для остальных категорий используй точный фрагмент из описания.",
@@ -48,7 +50,7 @@ func BuildPrompt(input Input) (string, string) {
 		"reasons и strong_match должны содержать только подтвержденные факты.",
 		"Не округляй и не подменяй числовую длительность опыта: не пиши «1 год», «2 года» или «3 года» как факт, если такая длительность явно не указана в LegacyCandidateContext.",
 		"Верни только валидный JSON без Markdown и любого текста вне JSON.",
-		`Формат: {"score":82,"apply":true,"reasons":["..."],"missing":["..."],"hard_requirements":[{"requirement":"FastAPI","category":"skill","vacancy_evidence":"FastAPI обязателен"}],"strong_match":["..."]}`,
+		`Формат: {"score":82,"apply":true,"recommendation":"APPLY","recommendation_reasons":[],"reasons":["..."],"missing":["..."],"hard_requirements":[{"requirement":"FastAPI","category":"skill","vacancy_evidence":"FastAPI обязателен"}],"strong_match":["..."]}`,
 	}, "\n")
 
 	includeKeywords := strings.Join(input.IncludeKeywords, ", ")

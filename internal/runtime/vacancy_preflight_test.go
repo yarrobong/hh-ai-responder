@@ -116,6 +116,11 @@ func TestLocalStructuredHardRequirements(t *testing.T) {
 			wantStatus:       hardRequirementStatusUnknown,
 			wantLocationHard: true,
 		},
+		{
+			name:      "hybrid with remote option has no city blocker",
+			preflight: VacancyPreflight{AreaKnown: true, Area: "Ташкент", WorkScheduleKnown: true, WorkSchedule: "Гибрид / можно удалённо"},
+			wantCount: 0,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

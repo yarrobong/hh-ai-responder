@@ -21,10 +21,16 @@ func mustSchemaJSON() json.RawMessage {
 	value := map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
-		"required":             []string{"score", "apply", "reasons", "missing", "hard_requirements"},
+		"required":             []string{"score", "apply", "recommendation", "recommendation_reasons", "reasons", "missing", "hard_requirements"},
 		"properties": map[string]any{
-			"score":   map[string]any{"type": "integer", "minimum": 0, "maximum": 100},
-			"apply":   map[string]any{"type": "boolean"},
+			"score":          map[string]any{"type": "integer", "minimum": 0, "maximum": 100},
+			"apply":          map[string]any{"type": "boolean"},
+			"recommendation": map[string]any{"type": "string", "enum": []string{RecommendationApply, RecommendationDoNotApply, RecommendationUncertain}},
+			"recommendation_reasons": map[string]any{"type": "array", "maxItems": 3, "items": map[string]any{"type": "string", "enum": []string{
+				RecommendationReasonRoleMismatch, RecommendationReasonStackMismatch, RecommendationReasonSeniorityGap,
+				RecommendationReasonHardRequirement, RecommendationReasonLowOverallFit, RecommendationReasonLocationConcern,
+				RecommendationReasonOther,
+			}}},
 			"reasons": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 			"missing": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 			"hard_requirements": map[string]any{

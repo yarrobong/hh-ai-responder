@@ -153,10 +153,10 @@ func TestAIDecisionBreakdownKeepsPrimarySafetyReason(t *testing.T) {
 		trace := CareerAgentVacancyResult{}
 		recordAIDecisionBreakdown(&summary, &trace, evaluation, 65)
 	}
-	if summary.AIApplyTrue != 3 || summary.AIApplyFalse != 1 || summary.AIHardMissing != 1 || summary.AIHardUnknown != 1 || summary.AIMatched != 1 || summary.AIRejected != 2 || summary.AIReviewed != 1 {
+	if summary.AIApplyTrue != 3 || summary.AIApplyFalse != 1 || summary.AIHardMissing != 1 || summary.AIHardUnknown != 1 || summary.AIMatched != 1 || summary.AIRejected != 2 || summary.AIReviewed != 1 || summary.AIAdvisoryOnlyConcerns != 0 {
 		t.Fatalf("unexpected AI breakdown: %+v", summary)
 	}
-	if summary.AIReasonCounts[AIReasonHardMissing] != 1 || summary.AIReasonCounts[AIReasonHardUnknown] != 1 || summary.AIReasonCounts[AIReasonApplyFalse] != 1 || summary.AIReasonCounts[AIReasonMatch] != 1 {
+	if summary.AIReasonCounts[ReasonHardMissing] != 1 || summary.AIReasonCounts[ReasonHardUnknown] != 1 || summary.AIReasonCounts[ReasonScoreBelowThreshold] != 1 || summary.AIReasonCounts[ReasonMatchConfirmed] != 1 {
 		t.Fatalf("primary AI reason counts are wrong: %+v", summary.AIReasonCounts)
 	}
 }

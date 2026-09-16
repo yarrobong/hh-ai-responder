@@ -160,14 +160,14 @@ func (p rootApplicationPolicy) DescriptionReject(value vacancy.Vacancy, descript
 }
 
 func (p rootApplicationPolicy) Decide(assessment vacancyanalysis.Assessment) (applicationprocessing.Decision, string) {
-	decision := vacancyDecision(assessment, p.responder.minMatchScore)
+	decision, _, reason := vacancyDecisionWithReason(assessment, p.responder.minMatchScore)
 	switch decision {
 	case VacancyMatch:
 		return applicationprocessing.DecisionMatch, ""
 	case VacancyReviewRequired:
-		return applicationprocessing.DecisionReviewRequired, vacancyEvaluationRejectReason(assessment, p.responder.minMatchScore)
+		return applicationprocessing.DecisionReviewRequired, reason
 	default:
-		return applicationprocessing.DecisionReject, vacancyEvaluationRejectReason(assessment, p.responder.minMatchScore)
+		return applicationprocessing.DecisionReject, reason
 	}
 }
 
@@ -200,8 +200,8 @@ func (p rootApplicationPolicy) ReconcileApplicability(value vacancy.Vacancy, app
 	if err := validateHardRequirements(legacy, structured, assessment); err != nil {
 		return assessment, applicationprocessing.DecisionReviewRequired, "structured preflight requirements could not be validated: " + err.Error(), nil
 	}
-	decision = vacancyDecision(assessment, p.responder.minMatchScore)
-	return assessment, mapVacancyDecision(decision), vacancyEvaluationRejectReason(assessment, p.responder.minMatchScore), nil
+	decision, _, reason = vacancyDecisionWithReason(assessment, p.responder.minMatchScore)
+	return assessment, mapVacancyDecision(decision), reason, nil
 }
 
 func mapVacancyDecision(value VacancyDecision) applicationprocessing.Decision {
