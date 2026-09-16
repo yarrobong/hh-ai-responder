@@ -2671,7 +2671,37 @@ func (r *HHAIResponder) fetchVacancyPageContext(ctx context.Context, searchParam
 }
 
 func (r *HHAIResponder) fetchVacanciesFromSearchProfiles(summary *RunSummaryResult) ([]Vacancy, error) {
-	profiles := r.searchProfiles
+	r.vacancySearchSources = map[int][]string{}
+	r.careerAgentSearchSources = map[int][]careeragent.SearchProfileEvidence{}
+	return r.fetchVacanciesFromSearchProfilesWithLimit(summary, r.searchProfiles, 0, nil)
+}
+
+func parsePositiveInt(value string) int {
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || parsed <= 0 {
+		return 0
+	}
+	return parsed
+}
+
+// fetchVacanciesFromSearchProfilesWithLimit performs sequential, deterministic
+// discovery. maxUnique limits unique vacancy IDs considered by the caller;
+// zero preserves the historical unbounded behavior used by normal runs.
+// seenIDs is supplied by the pilot when it expands its search window so an ID
+// found in the recent window is not counted again in the fallback window.
+func (r *HHAIResponder) fetchVacanciesFromSearchProfilesWithLimit(summary *RunSummaryResult, profiles []vacancySearchProfile, maxUnique int, seenIDs map[int]struct{}) ([]Vacancy, error) {
+	if summary == nil {
+		summary = &RunSummaryResult{}
+	}
+	if maxUnique < 0 {
+		return nil, errors.New("vacancy search unique limit must not be negative")
+	}
+	if seenIDs == nil {
+		seenIDs = make(map[int]struct{})
+	}
+	if profiles == nil {
+		profiles = r.searchProfiles
+	}
 	if len(profiles) == 0 {
 		profiles = []vacancySearchProfile{{
 			Name:    "Default search",
@@ -2682,18 +2712,39 @@ func (r *HHAIResponder) fetchVacanciesFromSearchProfiles(summary *RunSummaryResu
 	}
 
 	uniqueVacancies := make([]Vacancy, 0)
-	seenIDs := make(map[int]struct{})
-	r.vacancySearchSources = map[int][]string{}
-	r.careerAgentSearchSources = map[int][]careeragent.SearchProfileEvidence{}
-	summary.SearchProfiles = make([]SearchProfileSummary, 0, len(profiles))
+	if r.vacancySearchSources == nil {
+		r.vacancySearchSources = map[int][]string{}
+	}
+	if r.careerAgentSearchSources == nil {
+		r.careerAgentSearchSources = map[int][]careeragent.SearchProfileEvidence{}
+	}
 	for _, profile := range profiles {
+		if maxUnique > 0 && len(seenIDs) >= maxUnique {
+			break
+		}
 		profileSummary := SearchProfileSummary{Name: profile.Name, URL: profile.URL}
 		for page := 0; ; page++ {
-			if err := r.ctx.Err(); err != nil {
+			if err := ctxOrBackground(r.ctx).Err(); err != nil {
 				return nil, err
 			}
+			pageProfile := profile
+			if maxUnique > 0 {
+				remaining := maxUnique - len(seenIDs)
+				if remaining <= 0 {
+					break
+				}
+				pageProfile.Params = cloneValues(profile.Params)
+				pageSize := 50
+				if configured := parsePositiveInt(pageProfile.Params.Get("items_on_page")); configured > 0 && configured < pageSize {
+					pageSize = configured
+				}
+				if remaining < pageSize {
+					pageSize = remaining
+				}
+				pageProfile.Params.Set("items_on_page", fmt.Sprint(pageSize))
+			}
 
-			vacancies, err := r.fetchVacancyPageForProfile(profile, page)
+			vacancies, err := r.fetchVacancyPageForProfile(pageProfile, page)
 			if err != nil {
 				summary.SearchProfiles = append(summary.SearchProfiles, profileSummary)
 				summary.VacanciesAfterDedup = len(uniqueVacancies)
@@ -2719,11 +2770,17 @@ func (r *HHAIResponder) fetchVacanciesFromSearchProfiles(summary *RunSummaryResu
 				}
 				seenIDs[vacancy.ID] = struct{}{}
 				uniqueVacancies = append(uniqueVacancies, vacancy)
+				if maxUnique > 0 && len(seenIDs) >= maxUnique {
+					break
+				}
+			}
+			if maxUnique > 0 && len(seenIDs) >= maxUnique {
+				break
 			}
 		}
 		summary.SearchProfiles = append(summary.SearchProfiles, profileSummary)
 	}
-	summary.VacanciesAfterDedup = len(uniqueVacancies)
+	summary.VacanciesAfterDedup = len(seenIDs)
 	return uniqueVacancies, nil
 }
 

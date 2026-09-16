@@ -74,6 +74,18 @@ go build ./cmd/hh-ai-responder
 явных `HH_DRY_RUN=false` и `HH_WRITE_ENABLED=true`; по умолчанию команда всегда
 работает в shadow mode.
 
+Для контролируемого application pilot используется read-only поиск. `--max-scan`
+ограничивает число unique вакансий, проверенных дешёвыми стадиями, а
+`--max-candidates` — число новых вакансий, допущенных до detail/router/AI:
+
+```sh
+HH_DRY_RUN=true HH_WRITE_ENABLED=false STORAGE_BACKEND=json \
+  ./hh-ai-responder career-agent pilot --search --max-scan 100 --max-candidates 20
+```
+
+Уже подтверждённые отклики пропускаются до detail и AI; при готовом результате
+команда останавливается на `PILOT: READY_FOR_EXPLICIT_SEND` и не выполняет POST.
+
 Перед Shadow или любым другим HH read-path проверьте доступ без discovery:
 
 ```sh
