@@ -12,13 +12,14 @@ import (
 
 func knownVacancyPreflight() VacancyPreflight {
 	return VacancyPreflight{
-		VacancyID:             1,
-		ArchivedKnown:         true,
-		AlreadyRespondedKnown: true,
-		TestPresentKnown:      true,
-		LetterRequiredKnown:   true,
-		CanApplyKnown:         true,
-		CanApply:              true,
+		VacancyID:                1,
+		ArchivedKnown:            true,
+		AlreadyRespondedKnown:    true,
+		AlreadyRespondedEvidence: AlreadyRespondedEvidence{Value: AlreadyRespondedNo, EvidenceCode: EvidenceExplicitNotResponded},
+		TestPresentKnown:         true,
+		LetterRequiredKnown:      true,
+		CanApplyKnown:            true,
+		CanApply:                 true,
 	}
 }
 
@@ -31,10 +32,12 @@ func TestVacancyPreflightDecisionFailsClosed(t *testing.T) {
 	}{
 		{name: "all safe known values", want: VacancyMatch, wantReason: ""},
 		{name: "archived=true", mutate: func(p *VacancyPreflight) { p.Archived = true }, want: VacancyReject, wantReason: "vacancy is archived"},
-		{name: "already responded", mutate: func(p *VacancyPreflight) { p.AlreadyResponded = true }, want: VacancyReject, wantReason: "already responded according to vacancy detail"},
+		{name: "already responded", mutate: func(p *VacancyPreflight) {
+			setAlreadyRespondedEvidence(p, AlreadyRespondedYes, EvidenceExplicitRespondedMarker)
+		}, want: VacancyReject, wantReason: "already responded according to vacancy detail"},
 		{name: "archived unknown + already responded", mutate: func(p *VacancyPreflight) {
 			p.ArchivedKnown = false
-			p.AlreadyResponded = true
+			setAlreadyRespondedEvidence(p, AlreadyRespondedYes, EvidenceExplicitRespondedMarker)
 		}, want: VacancyReject, wantReason: "already responded according to vacancy detail"},
 		{name: "archived unknown + cannot apply", mutate: func(p *VacancyPreflight) {
 			p.ArchivedKnown = false
@@ -43,7 +46,9 @@ func TestVacancyPreflightDecisionFailsClosed(t *testing.T) {
 		{name: "archived unknown without known blocker", mutate: func(p *VacancyPreflight) {
 			p.ArchivedKnown = false
 		}, want: VacancyReviewRequired, wantReason: "archived state is unknown"},
-		{name: "already responded unknown", mutate: func(p *VacancyPreflight) { p.AlreadyRespondedKnown = false }, want: VacancyReviewRequired, wantReason: "already-responded state is unknown"},
+		{name: "already responded unknown", mutate: func(p *VacancyPreflight) {
+			setAlreadyRespondedEvidence(p, AlreadyRespondedUnknown, EvidenceAmbiguousPage)
+		}, want: VacancyReviewRequired, wantReason: "already-responded state is unknown"},
 		{name: "test present", mutate: func(p *VacancyPreflight) { p.TestPresent = true }, want: VacancyReviewRequired, wantReason: "vacancy has a test; safe live test flow is not enabled"},
 		{name: "test unknown", mutate: func(p *VacancyPreflight) { p.TestPresentKnown = false }, want: VacancyReviewRequired, wantReason: "test state is unknown"},
 		{name: "letter unknown", mutate: func(p *VacancyPreflight) { p.LetterRequiredKnown = false }, want: VacancyReviewRequired, wantReason: "cover-letter requirement is unknown"},
@@ -62,6 +67,117 @@ func TestVacancyPreflightDecisionFailsClosed(t *testing.T) {
 			}
 			if reason != test.wantReason {
 				t.Fatalf("reason: got %q, want %q", reason, test.wantReason)
+			}
+		})
+	}
+}
+
+func TestAlreadyRespondedEvidenceIsFailClosed(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want AlreadyRespondedValue
+		code AlreadyRespondedEvidenceCode
+	}{
+		{
+			name: "explicit responded marker",
+			body: `{"redirectConfig":{"alreadyResponded":true}}`,
+			want: AlreadyRespondedYes, code: EvidenceExplicitRespondedMarker,
+		},
+		{
+			name: "apply available",
+			body: `{"redirectConfig":{"canApply":true}}`,
+			want: AlreadyRespondedNo, code: EvidenceApplyActionAvailable,
+		},
+		{
+			name: "cannot apply without response evidence",
+			body: `{"redirectConfig":{"canApply":false}}`,
+			want: AlreadyRespondedUnknown, code: EvidenceAmbiguousPage,
+		},
+		{
+			name: "disabled action conflicts with apply signal",
+			body: `{"redirectConfig":{"canApply":true}}<button data-qa="vacancy-response-link" disabled="disabled">Откликнуться</button>`,
+			want: AlreadyRespondedUnknown, code: EvidenceAmbiguousPage,
+		},
+		{
+			name: "test required without response evidence",
+			body: `{"redirectConfig":{"testPresent":true}}`,
+			want: AlreadyRespondedUnknown, code: EvidenceAmbiguousPage,
+		},
+		{
+			name: "inactive without response evidence",
+			body: `{"redirectConfig":{"archived":true}}`,
+			want: AlreadyRespondedUnknown, code: EvidenceAmbiguousPage,
+		},
+		{
+			name: "login page",
+			body: `<html><body><a href="/account/login">Войти</a></body></html>`,
+			want: AlreadyRespondedUnknown, code: EvidenceAuthFailure,
+		},
+		{
+			name: "challenge page",
+			body: `<div class="captcha-container">challenge</div>`,
+			want: AlreadyRespondedUnknown, code: EvidenceAuthFailure,
+		},
+		{
+			name: "generic response wording",
+			body: `<html><body>Количество откликов на вакансию видно работодателю</body></html>`,
+			want: AlreadyRespondedUnknown, code: EvidenceAmbiguousPage,
+		},
+		{
+			name: "response for another vacancy does not match",
+			body: `{"redirectConfig":{"vacancyId":99,"alreadyResponded":true}}`,
+			want: AlreadyRespondedUnknown, code: EvidenceAmbiguousPage,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if (test.name == "login page" || test.name == "challenge page") && !looksLikeAuthFailure([]byte(test.body)) {
+				t.Fatalf("auth marker was not recognized in %q", test.body)
+			}
+			preflight, err := parseVacancyPreflight([]byte(test.body), Vacancy{ID: 42}, "https://example.test/applicant/vacancy_response?vacancyId=42")
+			if err != nil {
+				t.Fatal(err)
+			}
+			evidence := preflight.alreadyRespondedEvidence()
+			if evidence.Value != test.want || evidence.EvidenceCode != test.code {
+				t.Fatalf("evidence=%+v, want %s/%s", evidence, test.want, test.code)
+			}
+		})
+	}
+}
+
+func TestKnownNegotiationForSameVacancyIsPositiveEvidence(t *testing.T) {
+	preflight := VacancyPreflight{VacancyID: 42, AlreadyRespondedEvidence: AlreadyRespondedEvidence{Value: AlreadyRespondedUnknown, EvidenceCode: EvidenceAmbiguousPage}}
+	applyApplicationHistoryEvidence(&preflight, []HHApplicationRecord{{VacancyID: 41, ExternalID: "other"}, {VacancyID: 42, ExternalID: "negotiation-42"}})
+	evidence := preflight.alreadyRespondedEvidence()
+	if evidence.Value != AlreadyRespondedYes || evidence.EvidenceCode != EvidenceNegotiationIDFound {
+		t.Fatalf("same-vacancy negotiation evidence=%+v", evidence)
+	}
+}
+
+func TestResponseBelongingToAnotherVacancyDoesNotProduceYes(t *testing.T) {
+	preflight := VacancyPreflight{VacancyID: 42, AlreadyRespondedEvidence: AlreadyRespondedEvidence{Value: AlreadyRespondedUnknown, EvidenceCode: EvidenceAmbiguousPage}}
+	applyApplicationHistoryEvidence(&preflight, []HHApplicationRecord{{VacancyID: 41, ExternalID: "negotiation-41"}})
+	if evidence := preflight.alreadyRespondedEvidence(); evidence.Value == AlreadyRespondedYes {
+		t.Fatalf("other-vacancy response produced YES: %+v", evidence)
+	}
+}
+
+func TestAlreadyRespondedEvidenceDoesNotFollowIndependentBlockers(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*VacancyPreflight)
+	}{
+		{name: "can apply false", mutate: func(p *VacancyPreflight) { p.CanApply, p.CanApplyKnown = false, true }},
+		{name: "test required", mutate: func(p *VacancyPreflight) { p.TestPresent, p.TestPresentKnown = true, true }},
+		{name: "inactive", mutate: func(p *VacancyPreflight) { p.Archived, p.ArchivedKnown = true, true }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			preflight := VacancyPreflight{VacancyID: 42}
+			test.mutate(&preflight)
+			if got := preflight.alreadyRespondedEvidence(); got.Value != AlreadyRespondedUnknown {
+				t.Fatalf("independent blocker manufactured response: %+v", got)
 			}
 		})
 	}
@@ -213,7 +329,7 @@ func TestBlockedLiveApplicationDoesNotPOST(t *testing.T) {
 		preflightCache: map[int]VacancyPreflight{
 			1: func() VacancyPreflight {
 				p := knownVacancyPreflight()
-				p.AlreadyResponded = true
+				setAlreadyRespondedEvidence(&p, AlreadyRespondedYes, EvidenceExplicitRespondedMarker)
 				return p
 			}(),
 		},

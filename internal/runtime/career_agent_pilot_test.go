@@ -87,12 +87,12 @@ func TestPilotPreflightBlockReasonFailsClosed(t *testing.T) {
 		state  VacancyPreflight
 		reason string
 	}{
-		{"already responded", VacancyPreflight{AlreadyResponded: true, AlreadyRespondedKnown: true}, "ALREADY_RESPONDED"},
+		{"already responded", VacancyPreflight{AlreadyResponded: true, AlreadyRespondedKnown: true, AlreadyRespondedEvidence: AlreadyRespondedEvidence{Value: AlreadyRespondedYes, EvidenceCode: EvidenceExplicitRespondedMarker}}, "ALREADY_RESPONDED"},
 		{"response unknown", VacancyPreflight{}, "ALREADY_RESPONDED_UNKNOWN"},
-		{"cannot apply", VacancyPreflight{AlreadyRespondedKnown: true, CanApplyKnown: true}, "CAN_APPLY_FALSE"},
-		{"active unknown", VacancyPreflight{AlreadyRespondedKnown: true, CanApply: true, CanApplyKnown: true}, "VACANCY_ACTIVE_UNKNOWN"},
-		{"inactive", VacancyPreflight{AlreadyRespondedKnown: true, CanApply: true, CanApplyKnown: true, Archived: true, ArchivedKnown: true}, "VACANCY_INACTIVE"},
-		{"test required", VacancyPreflight{AlreadyRespondedKnown: true, CanApply: true, CanApplyKnown: true, ArchivedKnown: true, TestPresent: true, TestPresentKnown: true}, "TEST_REQUIRED_UNSUPPORTED"},
+		{"cannot apply", VacancyPreflight{AlreadyRespondedKnown: true, AlreadyRespondedEvidence: AlreadyRespondedEvidence{Value: AlreadyRespondedNo, EvidenceCode: EvidenceExplicitNotResponded}, CanApplyKnown: true}, "CAN_APPLY_FALSE"},
+		{"active unknown", VacancyPreflight{AlreadyRespondedKnown: true, AlreadyRespondedEvidence: AlreadyRespondedEvidence{Value: AlreadyRespondedNo, EvidenceCode: EvidenceExplicitNotResponded}, CanApply: true, CanApplyKnown: true}, "VACANCY_ACTIVE_UNKNOWN"},
+		{"inactive", VacancyPreflight{AlreadyRespondedKnown: true, AlreadyRespondedEvidence: AlreadyRespondedEvidence{Value: AlreadyRespondedNo, EvidenceCode: EvidenceExplicitNotResponded}, CanApply: true, CanApplyKnown: true, Archived: true, ArchivedKnown: true}, "VACANCY_INACTIVE"},
+		{"test required", VacancyPreflight{AlreadyRespondedKnown: true, AlreadyRespondedEvidence: AlreadyRespondedEvidence{Value: AlreadyRespondedNo, EvidenceCode: EvidenceExplicitNotResponded}, CanApply: true, CanApplyKnown: true, ArchivedKnown: true, TestPresent: true, TestPresentKnown: true}, "TEST_REQUIRED_UNSUPPORTED"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -101,7 +101,7 @@ func TestPilotPreflightBlockReasonFailsClosed(t *testing.T) {
 			}
 		})
 	}
-	if got := pilotPreflightBlockReason(VacancyPreflight{AlreadyResponded: responded, AlreadyRespondedKnown: true, CanApply: canApply, CanApplyKnown: true, ArchivedKnown: true, TestPresent: testRequired, TestPresentKnown: true, LetterRequired: letterRequired, LetterRequiredKnown: true}); got != "" {
+	if got := pilotPreflightBlockReason(VacancyPreflight{AlreadyResponded: responded, AlreadyRespondedKnown: true, AlreadyRespondedEvidence: AlreadyRespondedEvidence{Value: AlreadyRespondedNo, EvidenceCode: EvidenceExplicitNotResponded}, CanApply: canApply, CanApplyKnown: true, ArchivedKnown: true, TestPresent: testRequired, TestPresentKnown: true, LetterRequired: letterRequired, LetterRequiredKnown: true}); got != "" {
 		t.Fatalf("eligible preflight reason=%q", got)
 	}
 }

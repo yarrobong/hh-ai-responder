@@ -19,64 +19,135 @@ import (
 // before an application. Known flags are deliberately separate from bool
 // values: false and "not observed" have different safety implications.
 type VacancyPreflight struct {
-	VacancyID             int
-	Available             bool
-	Archived              bool
-	ArchivedKnown         bool
-	AlreadyResponded      bool
-	AlreadyRespondedKnown bool
-	TestPresent           bool
-	TestPresentKnown      bool
-	LetterRequired        bool
-	LetterRequiredKnown   bool
-	Area                  string
-	AreaKnown             bool
-	WorkSchedule          string
-	WorkScheduleKnown     bool
-	WorkExperience        string
-	WorkExperienceKnown   bool
-	CanApply              bool
-	CanApplyKnown         bool
-	ResponseURL           string
+	VacancyID                    int
+	Available                    bool
+	Archived                     bool
+	ArchivedKnown                bool
+	AlreadyResponded             bool
+	AlreadyRespondedKnown        bool
+	AlreadyRespondedEvidence     AlreadyRespondedEvidence
+	TestPresent                  bool
+	TestPresentKnown             bool
+	LetterRequired               bool
+	LetterRequiredKnown          bool
+	Area                         string
+	AreaKnown                    bool
+	WorkSchedule                 string
+	WorkScheduleKnown            bool
+	WorkExperience               string
+	WorkExperienceKnown          bool
+	CanApply                     bool
+	CanApplyKnown                bool
+	ResponseURL                  string
+	ResponseIdentifierPresent    bool
+	NegotiationIdentifierPresent bool
+}
+
+// AlreadyRespondedValue is the bounded, provider-evidence-backed state used
+// for the response decision. The legacy bool/known pair remains in the public
+// compatibility projection, but it must not be used to manufacture YES.
+type AlreadyRespondedValue string
+
+const (
+	AlreadyRespondedYes     AlreadyRespondedValue = "YES"
+	AlreadyRespondedNo      AlreadyRespondedValue = "NO"
+	AlreadyRespondedUnknown AlreadyRespondedValue = "UNKNOWN"
+)
+
+type AlreadyRespondedEvidenceCode string
+
+const (
+	EvidenceExplicitRespondedMarker AlreadyRespondedEvidenceCode = "EXPLICIT_RESPONDED_MARKER"
+	EvidenceNegotiationIDFound      AlreadyRespondedEvidenceCode = "NEGOTIATION_ID_FOUND"
+	EvidenceApplicationHistoryMatch AlreadyRespondedEvidenceCode = "APPLICATION_HISTORY_MATCH"
+	EvidenceApplyActionAvailable    AlreadyRespondedEvidenceCode = "APPLY_ACTION_AVAILABLE"
+	EvidenceExplicitNotResponded    AlreadyRespondedEvidenceCode = "EXPLICIT_NOT_RESPONDED"
+	EvidenceAmbiguousPage           AlreadyRespondedEvidenceCode = "AMBIGUOUS_PAGE"
+	EvidenceAuthFailure             AlreadyRespondedEvidenceCode = "AUTH_FAILURE"
+)
+
+// AlreadyRespondedEvidence is deliberately bounded: it records only the
+// classification and the name of the provider signal, never raw HTML,
+// cookies, or a private response body.
+type AlreadyRespondedEvidence struct {
+	Value        AlreadyRespondedValue        `json:"value"`
+	EvidenceCode AlreadyRespondedEvidenceCode `json:"evidence_code"`
 }
 
 type VacancyPreflightResult struct {
-	Type                  string `json:"type"`
-	VacancyID             int    `json:"vacancy_id"`
-	ResponseURL           string `json:"response_url,omitempty"`
-	Archived              *bool  `json:"archived"`
-	ArchivedKnown         bool   `json:"archived_known"`
-	AlreadyResponded      *bool  `json:"already_responded"`
-	AlreadyRespondedKnown bool   `json:"already_responded_known"`
-	TestPresent           *bool  `json:"test_present"`
-	TestPresentKnown      bool   `json:"test_present_known"`
-	LetterRequired        *bool  `json:"letter_required"`
-	LetterRequiredKnown   bool   `json:"letter_required_known"`
-	CanApply              *bool  `json:"can_apply"`
-	CanApplyKnown         bool   `json:"can_apply_known"`
-	Area                  string `json:"area,omitempty"`
-	WorkSchedule          string `json:"work_schedule,omitempty"`
-	WorkExperience        string `json:"work_experience,omitempty"`
+	Type                         string                   `json:"type"`
+	VacancyID                    int                      `json:"vacancy_id"`
+	ResponseURL                  string                   `json:"response_url,omitempty"`
+	Archived                     *bool                    `json:"archived"`
+	ArchivedKnown                bool                     `json:"archived_known"`
+	AlreadyResponded             *bool                    `json:"already_responded"`
+	AlreadyRespondedKnown        bool                     `json:"already_responded_known"`
+	AlreadyRespondedValue        string                   `json:"already_responded_value"`
+	AlreadyRespondedEvidenceCode string                   `json:"already_responded_evidence_code"`
+	AlreadyRespondedEvidence     AlreadyRespondedEvidence `json:"already_responded_evidence"`
+	TestPresent                  *bool                    `json:"test_present"`
+	TestPresentKnown             bool                     `json:"test_present_known"`
+	LetterRequired               *bool                    `json:"letter_required"`
+	LetterRequiredKnown          bool                     `json:"letter_required_known"`
+	CanApply                     *bool                    `json:"can_apply"`
+	CanApplyKnown                bool                     `json:"can_apply_known"`
+	Area                         string                   `json:"area,omitempty"`
+	WorkSchedule                 string                   `json:"work_schedule,omitempty"`
+	WorkExperience               string                   `json:"work_experience,omitempty"`
 }
 
 func (p VacancyPreflight) event() VacancyPreflightResult {
+	evidence := p.alreadyRespondedEvidence()
 	return VacancyPreflightResult{
-		Type:                  "vacancy_preflight",
-		VacancyID:             p.VacancyID,
-		ResponseURL:           p.ResponseURL,
-		Archived:              knownBoolPointer(p.Archived, p.ArchivedKnown),
-		ArchivedKnown:         p.ArchivedKnown,
-		AlreadyResponded:      knownBoolPointer(p.AlreadyResponded, p.AlreadyRespondedKnown),
-		AlreadyRespondedKnown: p.AlreadyRespondedKnown,
-		TestPresent:           knownBoolPointer(p.TestPresent, p.TestPresentKnown),
-		TestPresentKnown:      p.TestPresentKnown,
-		LetterRequired:        knownBoolPointer(p.LetterRequired, p.LetterRequiredKnown),
-		LetterRequiredKnown:   p.LetterRequiredKnown,
-		CanApply:              knownBoolPointer(p.CanApply, p.CanApplyKnown),
-		CanApplyKnown:         p.CanApplyKnown,
-		Area:                  p.Area,
-		WorkSchedule:          p.WorkSchedule,
-		WorkExperience:        p.WorkExperience,
+		Type:                         "vacancy_preflight",
+		VacancyID:                    p.VacancyID,
+		ResponseURL:                  p.ResponseURL,
+		Archived:                     knownBoolPointer(p.Archived, p.ArchivedKnown),
+		ArchivedKnown:                p.ArchivedKnown,
+		AlreadyResponded:             knownBoolPointer(evidence.Value == AlreadyRespondedYes, evidence.Value != AlreadyRespondedUnknown),
+		AlreadyRespondedKnown:        evidence.Value != AlreadyRespondedUnknown,
+		AlreadyRespondedValue:        string(evidence.Value),
+		AlreadyRespondedEvidenceCode: string(evidence.EvidenceCode),
+		AlreadyRespondedEvidence:     evidence,
+		TestPresent:                  knownBoolPointer(p.TestPresent, p.TestPresentKnown),
+		TestPresentKnown:             p.TestPresentKnown,
+		LetterRequired:               knownBoolPointer(p.LetterRequired, p.LetterRequiredKnown),
+		LetterRequiredKnown:          p.LetterRequiredKnown,
+		CanApply:                     knownBoolPointer(p.CanApply, p.CanApplyKnown),
+		CanApplyKnown:                p.CanApplyKnown,
+		Area:                         p.Area,
+		WorkSchedule:                 p.WorkSchedule,
+		WorkExperience:               p.WorkExperience,
+	}
+}
+
+func (p VacancyPreflight) alreadyRespondedEvidence() AlreadyRespondedEvidence {
+	if (p.AlreadyRespondedEvidence.Value == AlreadyRespondedYes || p.AlreadyRespondedEvidence.Value == AlreadyRespondedNo || p.AlreadyRespondedEvidence.Value == AlreadyRespondedUnknown) && p.AlreadyRespondedEvidence.EvidenceCode != "" {
+		return p.AlreadyRespondedEvidence
+	}
+	return AlreadyRespondedEvidence{Value: AlreadyRespondedUnknown, EvidenceCode: EvidenceAmbiguousPage}
+}
+
+func setAlreadyRespondedEvidence(preflight *VacancyPreflight, value AlreadyRespondedValue, code AlreadyRespondedEvidenceCode) {
+	preflight.AlreadyRespondedEvidence = AlreadyRespondedEvidence{Value: value, EvidenceCode: code}
+	preflight.AlreadyRespondedKnown = value != AlreadyRespondedUnknown
+	preflight.AlreadyResponded = value == AlreadyRespondedYes
+}
+
+// applyApplicationHistoryEvidence is an independent read-only reconciliation
+// step. It is intentionally separate from the vacancy response-page parser:
+// a negotiation is positive only when its provider vacancy identity matches
+// the requested vacancy and it carries a provider identifier.
+func applyApplicationHistoryEvidence(preflight *VacancyPreflight, applications []HHApplicationRecord) {
+	if preflight == nil || preflight.VacancyID <= 0 {
+		return
+	}
+	for _, application := range applications {
+		if application.VacancyID != preflight.VacancyID || strings.TrimSpace(application.ExternalID) == "" {
+			continue
+		}
+		setAlreadyRespondedEvidence(preflight, AlreadyRespondedYes, EvidenceNegotiationIDFound)
+		return
 	}
 }
 
@@ -108,6 +179,9 @@ func (r *HHAIResponder) getVacancyPreflightContext(ctx context.Context, vacancy 
 		return VacancyPreflight{}, err
 	}
 	if resp.Status != http.StatusOK {
+		if resp.Status == http.StatusUnauthorized || resp.Status == http.StatusForbidden {
+			return VacancyPreflight{VacancyID: vacancy.ID, ResponseURL: responseURL, AlreadyRespondedEvidence: AlreadyRespondedEvidence{Value: AlreadyRespondedUnknown, EvidenceCode: EvidenceAuthFailure}}, nil
+		}
 		return VacancyPreflight{}, unexpectedHTTPStatus(resp.Status)
 	}
 
@@ -158,7 +232,7 @@ func (r *HHAIResponder) requireLiveApplicationPreflight(vacancyID int) error {
 }
 
 func parseVacancyPreflight(data []byte, vacancy Vacancy, responseURL string) (VacancyPreflight, error) {
-	preflight := VacancyPreflight{VacancyID: vacancy.ID, ResponseURL: responseURL}
+	preflight := VacancyPreflight{VacancyID: vacancy.ID, ResponseURL: responseURL, ResponseIdentifierPresent: strings.TrimSpace(responseURL) != ""}
 	state, stateErr := embeddedVacancyState(data)
 	if stateErr == nil {
 		populateVacancyPreflightFromState(&preflight, state, vacancy.ID)
@@ -192,8 +266,15 @@ func parseVacancyPreflight(data []byte, vacancy Vacancy, responseURL string) (Va
 		preflight.LetterRequiredKnown = true
 	}
 
-	if stateErr != nil && !preflight.hasAnyReliableState() {
-		return VacancyPreflight{}, fmt.Errorf("parse vacancy preflight state: %w", stateErr)
+	if preflight.AlreadyRespondedEvidence.EvidenceCode == "" {
+		if looksLikeAuthFailure(data) {
+			setAlreadyRespondedEvidence(&preflight, AlreadyRespondedUnknown, EvidenceAuthFailure)
+		} else {
+			setAlreadyRespondedEvidence(&preflight, AlreadyRespondedUnknown, EvidenceAmbiguousPage)
+		}
+	}
+	if preflight.AlreadyRespondedEvidence.EvidenceCode == "" {
+		setAlreadyRespondedEvidence(&preflight, AlreadyRespondedUnknown, EvidenceAmbiguousPage)
 	}
 	return preflight, nil
 }
@@ -233,10 +314,20 @@ func populateVacancyPreflightFromState(preflight *VacancyPreflight, state map[st
 			preflight.Archived, preflight.ArchivedKnown = parsed, true
 		}
 	}
-	if value, ok := findStateValue(state, "alreadyResponded", "responseAlreadySent", "hasResponse", "responseExists", "responded"); ok {
+	// Only explicit response-state fields from the provider's response-state
+	// projection are authoritative. Do not recursively interpret generic
+	// response-shaped fields from unrelated page models.
+	if value, ok := scopedResponseStateValue(state, vacancyID, "alreadyResponded", "responseAlreadySent"); ok {
 		if parsed, parsedOK := stateBool(value); parsedOK {
-			preflight.AlreadyResponded, preflight.AlreadyRespondedKnown = parsed, true
+			if parsed {
+				setAlreadyRespondedEvidence(preflight, AlreadyRespondedYes, EvidenceExplicitRespondedMarker)
+			} else {
+				setAlreadyRespondedEvidence(preflight, AlreadyRespondedNo, EvidenceExplicitNotResponded)
+			}
 		}
+	}
+	if _, ok := scopedResponseStateValue(state, vacancyID, "responseId", "response_id", "negotiationId", "negotiation_id"); ok {
+		preflight.NegotiationIdentifierPresent = true
 	}
 	if value, ok := findStateValue(state, "canApply", "canRespond", "responseAllowed", "isResponseAllowed", "applyAvailable"); ok {
 		if parsed, parsedOK := stateBool(value); parsedOK {
@@ -269,6 +360,9 @@ func populateVacancyPreflightFromState(preflight *VacancyPreflight, state map[st
 	preflight.Area, preflight.AreaKnown = stateStringField(state, "area", "areaName", "location")
 	preflight.WorkSchedule, preflight.WorkScheduleKnown = stateStringField(state, "workSchedule", "@workSchedule", "workFormat", "workFormats")
 	preflight.WorkExperience, preflight.WorkExperienceKnown = stateStringField(state, "workExperience", "experience", "@workExperience")
+	if preflight.AlreadyRespondedEvidence.EvidenceCode == "" && preflight.CanApplyKnown && preflight.CanApply {
+		setAlreadyRespondedEvidence(preflight, AlreadyRespondedNo, EvidenceApplyActionAvailable)
+	}
 }
 
 func populateVacancyPreflightFromHTML(preflight *VacancyPreflight, data []byte) {
@@ -285,12 +379,15 @@ func populateVacancyPreflightFromHTML(preflight *VacancyPreflight, data []byte) 
 			preflight.CanApply = false
 			preflight.CanApplyKnown = true
 			preflight.Available = false
+			if preflight.AlreadyRespondedEvidence.EvidenceCode == EvidenceApplyActionAvailable {
+				setAlreadyRespondedEvidence(preflight, AlreadyRespondedUnknown, EvidenceAmbiguousPage)
+			}
 			break
 		}
 	}
 	text := strings.ToLower(normalizeHTMLText(htmlNodeText(document)))
-	if !preflight.AlreadyRespondedKnown && containsAny(text, "вы уже откликались", "отклик уже отправлен", "отклик отправлен") {
-		preflight.AlreadyResponded, preflight.AlreadyRespondedKnown = true, true
+	if preflight.AlreadyRespondedEvidence.EvidenceCode == "" && containsAny(text, "вы уже откликались", "отклик уже отправлен") {
+		setAlreadyRespondedEvidence(preflight, AlreadyRespondedYes, EvidenceExplicitRespondedMarker)
 	}
 	if !preflight.ArchivedKnown && containsAny(text, "вакансия в архиве", "вакансия закрыта") {
 		preflight.Archived, preflight.ArchivedKnown = true, true
@@ -298,7 +395,73 @@ func populateVacancyPreflightFromHTML(preflight *VacancyPreflight, data []byte) 
 	if !preflight.CanApplyKnown && containsAny(text, "откликнуться", "отправить отклик") {
 		preflight.CanApply, preflight.CanApplyKnown = true, true
 		preflight.Available = true
+		if preflight.AlreadyRespondedEvidence.EvidenceCode == "" {
+			setAlreadyRespondedEvidence(preflight, AlreadyRespondedNo, EvidenceApplyActionAvailable)
+		}
 	}
+}
+
+func scopedResponseStateValue(state map[string]any, vacancyID int, keys ...string) (any, bool) {
+	for _, containerKey := range []string{"redirectConfig", "vacancyResponse", "response"} {
+		container, ok := state[containerKey]
+		if !ok {
+			for key, value := range state {
+				if strings.EqualFold(key, containerKey) {
+					container, ok = value, true
+					break
+				}
+			}
+		}
+		if !ok {
+			continue
+		}
+		if !responseStateMatchesVacancy(container, vacancyID) {
+			continue
+		}
+		if object, ok := container.(map[string]any); ok {
+			if value, found := directStateValue(object, keys...); found {
+				return value, true
+			}
+		}
+	}
+	if !responseStateMatchesVacancy(state, vacancyID) {
+		return nil, false
+	}
+	return directStateValue(state, keys...)
+}
+
+func responseStateMatchesVacancy(value any, vacancyID int) bool {
+	object, ok := value.(map[string]any)
+	if !ok || vacancyID <= 0 {
+		return true
+	}
+	for _, key := range []string{"vacancyId", "vacancy_id"} {
+		if raw, found := directStateValue(object, key); found {
+			if text, ok := raw.(string); ok {
+				return parseInt64(text) == int64(vacancyID)
+			}
+			if number, ok := raw.(float64); ok {
+				return int(number) == vacancyID
+			}
+		}
+	}
+	return true
+}
+
+func directStateValue(state map[string]any, keys ...string) (any, bool) {
+	for _, wanted := range keys {
+		for key, value := range state {
+			if strings.EqualFold(key, wanted) {
+				return value, true
+			}
+		}
+	}
+	return nil, false
+}
+
+func looksLikeAuthFailure(data []byte) bool {
+	text := strings.ToLower(string(data))
+	return containsAny(text, "/account/login", "supernova-login-wrapper", "forbiddenpage", "captcha-container", "cf-chl-", "cloudflare challenge", "ddos-guard challenge", "access denied")
 }
 
 func hasHTMLAttr(node *xhtml.Node, key string) bool {
@@ -490,9 +653,10 @@ func mergeHardRequirements(local, ai []HardRequirementEvaluation) []HardRequirem
 }
 
 func vacancyPreflightDecision(preflight VacancyPreflight) (VacancyDecision, string) {
+	evidence := preflight.alreadyRespondedEvidence()
 	reader := vacancyPreflightStateReader{state: hhwritepreflight.VacancyResponseState{
 		VacancyID: preflight.VacancyID, Archived: preflight.Archived, ArchivedKnown: preflight.ArchivedKnown,
-		AlreadyResponded: preflight.AlreadyResponded, AlreadyRespondedKnown: preflight.AlreadyRespondedKnown,
+		AlreadyResponded: evidence.Value == AlreadyRespondedYes, AlreadyRespondedKnown: evidence.Value != AlreadyRespondedUnknown,
 		CanApply: preflight.CanApply, CanApplyKnown: preflight.CanApplyKnown,
 		TestPresent: preflight.TestPresent, TestPresentKnown: preflight.TestPresentKnown,
 		LetterRequired: preflight.LetterRequired, LetterRequiredKnown: preflight.LetterRequiredKnown,

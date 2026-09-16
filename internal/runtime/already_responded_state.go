@@ -91,7 +91,7 @@ func (r *HHAIResponder) rememberConfirmedAlreadyResponded(vacancyID int) {
 }
 
 func (r *HHAIResponder) rememberConfirmedPreflight(preflight VacancyPreflight) {
-	if preflight.AlreadyRespondedKnown && preflight.AlreadyResponded {
+	if preflight.alreadyRespondedEvidence().Value == AlreadyRespondedYes {
 		r.rememberConfirmedAlreadyResponded(preflight.VacancyID)
 	}
 }

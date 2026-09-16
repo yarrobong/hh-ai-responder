@@ -36,7 +36,7 @@ func (r rootApplicationReader) ReadApplicability(ctx context.Context, value vaca
 	}
 	return applicationprocessing.Applicability{
 		Available: preflight.Available, Archived: preflight.Archived, ArchivedKnown: preflight.ArchivedKnown,
-		AlreadyResponded: preflight.AlreadyResponded, AlreadyRespondedKnown: preflight.AlreadyRespondedKnown,
+		AlreadyResponded: preflight.AlreadyResponded, AlreadyRespondedKnown: preflight.AlreadyRespondedKnown, AlreadyRespondedValue: string(preflight.alreadyRespondedEvidence().Value), AlreadyRespondedEvidenceCode: string(preflight.alreadyRespondedEvidence().EvidenceCode),
 		TestPresent: preflight.TestPresent, TestPresentKnown: preflight.TestPresentKnown,
 		LetterRequired: preflight.LetterRequired, LetterRequiredKnown: preflight.LetterRequiredKnown,
 		CanApply: preflight.CanApply, CanApplyKnown: preflight.CanApplyKnown,
@@ -174,7 +174,7 @@ func (p rootApplicationPolicy) Decide(assessment vacancyanalysis.Assessment) (ap
 func (p rootApplicationPolicy) ReconcileApplicability(value vacancy.Vacancy, app applicationprocessing.Applicability, candidateFacts vacancyanalysis.CandidateFacts, assessment vacancyanalysis.Assessment) (vacancyanalysis.Assessment, applicationprocessing.Decision, string, error) {
 	preflight := VacancyPreflight{
 		VacancyID: value.ID, Available: app.Available, Archived: app.Archived, ArchivedKnown: app.ArchivedKnown,
-		AlreadyResponded: app.AlreadyResponded, AlreadyRespondedKnown: app.AlreadyRespondedKnown,
+		AlreadyResponded: app.AlreadyResponded, AlreadyRespondedKnown: app.AlreadyRespondedKnown, AlreadyRespondedEvidence: AlreadyRespondedEvidence{Value: AlreadyRespondedValue(app.AlreadyRespondedValue), EvidenceCode: AlreadyRespondedEvidenceCode(app.AlreadyRespondedEvidenceCode)},
 		TestPresent: app.TestPresent, TestPresentKnown: app.TestPresentKnown,
 		LetterRequired: app.LetterRequired, LetterRequiredKnown: app.LetterRequiredKnown,
 		CanApply: app.CanApply, CanApplyKnown: app.CanApplyKnown, ResponseURL: app.ResponseURL,

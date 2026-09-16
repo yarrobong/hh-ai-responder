@@ -34,24 +34,26 @@ const (
 // choices, but it is not an authorization to submit and is never a durable
 // write grant.
 type Applicability struct {
-	Available             bool
-	Archived              bool
-	ArchivedKnown         bool
-	AlreadyResponded      bool
-	AlreadyRespondedKnown bool
-	TestPresent           bool
-	TestPresentKnown      bool
-	LetterRequired        bool
-	LetterRequiredKnown   bool
-	CanApply              bool
-	CanApplyKnown         bool
-	Area                  string
-	AreaKnown             bool
-	WorkSchedule          string
-	WorkScheduleKnown     bool
-	WorkExperience        string
-	WorkExperienceKnown   bool
-	ResponseURL           string
+	Available                    bool
+	Archived                     bool
+	ArchivedKnown                bool
+	AlreadyResponded             bool
+	AlreadyRespondedKnown        bool
+	AlreadyRespondedValue        string
+	AlreadyRespondedEvidenceCode string
+	TestPresent                  bool
+	TestPresentKnown             bool
+	LetterRequired               bool
+	LetterRequiredKnown          bool
+	CanApply                     bool
+	CanApplyKnown                bool
+	Area                         string
+	AreaKnown                    bool
+	WorkSchedule                 string
+	WorkScheduleKnown            bool
+	WorkExperience               string
+	WorkExperienceKnown          bool
+	ResponseURL                  string
 }
 
 type TestMetadata struct {

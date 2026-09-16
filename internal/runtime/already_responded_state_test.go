@@ -23,7 +23,7 @@ func TestConfirmedAlreadyRespondedStateSavedAndFalseOrUnknownIgnored(t *testing.
 	dir := t.TempDir()
 	confirmedPath := filepath.Join(dir, "confirmed.json")
 	r := &HHAIResponder{alreadyRespondedStatePath: confirmedPath}
-	r.rememberConfirmedPreflight(VacancyPreflight{VacancyID: 42, AlreadyRespondedKnown: true, AlreadyResponded: true})
+	r.rememberConfirmedPreflight(VacancyPreflight{VacancyID: 42, AlreadyRespondedKnown: true, AlreadyResponded: true, AlreadyRespondedEvidence: AlreadyRespondedEvidence{Value: AlreadyRespondedYes, EvidenceCode: EvidenceExplicitRespondedMarker}})
 
 	data, err := os.ReadFile(confirmedPath)
 	if err != nil {

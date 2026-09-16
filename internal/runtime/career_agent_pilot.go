@@ -73,17 +73,19 @@ type PilotArtifact struct {
 }
 
 type PilotPreflightSnapshot struct {
-	ObservedAt          time.Time `json:"observed_at"`
-	Active              *bool     `json:"active"`
-	AlreadyResponded    *bool     `json:"already_responded"`
-	CanApply            *bool     `json:"can_apply"`
-	TestRequired        *bool     `json:"test_required"`
-	CoverLetterRequired *bool     `json:"cover_letter_required"`
-	CoverLetterAllowed  *bool     `json:"cover_letter_allowed"`
-	ResponseURL         string    `json:"response_url,omitempty"`
-	Area                string    `json:"area,omitempty"`
-	WorkSchedule        string    `json:"work_schedule,omitempty"`
-	WorkExperience      string    `json:"work_experience,omitempty"`
+	ObservedAt                   time.Time `json:"observed_at"`
+	Active                       *bool     `json:"active"`
+	AlreadyResponded             *bool     `json:"already_responded"`
+	AlreadyRespondedValue        string    `json:"already_responded_value"`
+	AlreadyRespondedEvidenceCode string    `json:"already_responded_evidence_code"`
+	CanApply                     *bool     `json:"can_apply"`
+	TestRequired                 *bool     `json:"test_required"`
+	CoverLetterRequired          *bool     `json:"cover_letter_required"`
+	CoverLetterAllowed           *bool     `json:"cover_letter_allowed"`
+	ResponseURL                  string    `json:"response_url,omitempty"`
+	Area                         string    `json:"area,omitempty"`
+	WorkSchedule                 string    `json:"work_schedule,omitempty"`
+	WorkExperience               string    `json:"work_experience,omitempty"`
 }
 
 type PilotPreview struct {
@@ -102,15 +104,31 @@ type PilotBlockedCandidate struct {
 }
 
 type PilotSearchStats struct {
-	Scanned                      int            `json:"scanned"`
-	KnownRespondedSkipped        int            `json:"known_responded_skipped"`
-	FreshAlreadyRespondedSkipped int            `json:"fresh_already_responded_skipped"`
-	UnrespondedFound             int            `json:"unresponded_found"`
-	UnrespondedEvaluated         int            `json:"unresponded_evaluated"`
-	DetailReads                  int            `json:"detail_reads"`
-	AIEvaluations                int            `json:"ai_evaluations"`
-	UnresolvedAttemptSkipped     int            `json:"unresolved_attempt_skipped"`
-	BlockedReasonCounts          map[string]int `json:"blocked_reason_counts,omitempty"`
+	Scanned                        int                   `json:"scanned"`
+	KnownRespondedSkipped          int                   `json:"known_responded_skipped"`
+	FreshAlreadyRespondedSkipped   int                   `json:"fresh_already_responded_skipped"`
+	UnrespondedFound               int                   `json:"unresponded_found"`
+	UnrespondedEvaluated           int                   `json:"unresponded_evaluated"`
+	DetailReads                    int                   `json:"detail_reads"`
+	AIEvaluations                  int                   `json:"ai_evaluations"`
+	UnresolvedAttemptSkipped       int                   `json:"unresolved_attempt_skipped"`
+	PreflightUnknown               int                   `json:"preflight_unknown"`
+	FreshUnresponded               int                   `json:"fresh_unresponded"`
+	AlreadyRespondedEvidenceCounts map[string]int        `json:"already_responded_evidence_counts,omitempty"`
+	PreflightAudits                []PilotPreflightAudit `json:"preflight_audits,omitempty"`
+	BlockedReasonCounts            map[string]int        `json:"blocked_reason_counts,omitempty"`
+}
+
+type PilotPreflightAudit struct {
+	VacancyID                    int    `json:"vacancy_id"`
+	Title                        string `json:"title"`
+	AlreadyResponded             string `json:"already_responded"`
+	AlreadyRespondedEvidenceCode string `json:"already_responded_evidence_code"`
+	CanApply                     *bool  `json:"can_apply"`
+	TestRequired                 *bool  `json:"test_required"`
+	Active                       *bool  `json:"active"`
+	ResponseIdentifierPresent    bool   `json:"response_identifier_present"`
+	NegotiationIdentifierPresent bool   `json:"negotiation_identifier_present"`
 }
 
 const pilotManualReviewStatus = "MANUAL_REVIEW_BEFORE_SEND"
@@ -220,7 +238,7 @@ func (r *HHAIResponder) findFirstCareerAgentPilotCandidate(maxScan, maxCandidate
 	attempted := r.pilotAttemptedVacancies(ctxOrBackground(r.ctx))
 	r.vacancySearchSources = map[int][]string{}
 	r.careerAgentSearchSources = map[int][]careeragent.SearchProfileEvidence{}
-	stats := PilotSearchStats{BlockedReasonCounts: map[string]int{}}
+	stats := PilotSearchStats{BlockedReasonCounts: map[string]int{}, AlreadyRespondedEvidenceCounts: map[string]int{}}
 	blockedCandidates := []PilotBlockedCandidate{}
 	seenIDs := map[int]struct{}{}
 	var manualReview *PilotPreview
@@ -257,10 +275,26 @@ func (r *HHAIResponder) findFirstCareerAgentPilotCandidate(maxScan, maxCandidate
 			block(candidate, "PREFLIGHT_READ_FAILED")
 			return nil, false, nil
 		}
-		if preflight.AlreadyRespondedKnown && preflight.AlreadyResponded {
+		evidence := preflight.alreadyRespondedEvidence()
+		stats.AlreadyRespondedEvidenceCounts[string(evidence.EvidenceCode)]++
+		stats.PreflightAudits = append(stats.PreflightAudits, PilotPreflightAudit{
+			VacancyID: candidate.ID, Title: firstNonEmpty(candidate.Title, candidate.Name),
+			AlreadyResponded: string(evidence.Value), AlreadyRespondedEvidenceCode: string(evidence.EvidenceCode),
+			CanApply:                     knownBoolPointer(preflight.CanApply, preflight.CanApplyKnown),
+			TestRequired:                 knownBoolPointer(preflight.TestPresent, preflight.TestPresentKnown),
+			Active:                       knownBoolPointer(!preflight.Archived, preflight.ArchivedKnown),
+			ResponseIdentifierPresent:    preflight.ResponseIdentifierPresent || strings.TrimSpace(preflight.ResponseURL) != "",
+			NegotiationIdentifierPresent: preflight.NegotiationIdentifierPresent,
+		})
+		if evidence.Value == AlreadyRespondedYes {
 			stats.FreshAlreadyRespondedSkipped++
 			block(candidate, "ALREADY_RESPONDED")
 			return nil, false, nil
+		}
+		if evidence.Value == AlreadyRespondedUnknown {
+			stats.PreflightUnknown++
+		} else if evidence.Value == AlreadyRespondedNo {
+			stats.FreshUnresponded++
 		}
 		if reason := pilotPreflightBlockReason(preflight); reason != "" {
 			block(candidate, reason)
@@ -472,7 +506,7 @@ func pilotApplicationHasResponseEvidence(value JobApplication) bool {
 
 func pilotOtherBlockedCount(stats PilotSearchStats) int {
 	known := map[string]struct{}{
-		"LOCAL_ALREADY_RESPONDED": {}, "ALREADY_RESPONDED": {},
+		"LOCAL_ALREADY_RESPONDED": {}, "ALREADY_RESPONDED": {}, "ALREADY_RESPONDED_UNKNOWN": {}, "PREFLIGHT_READ_FAILED": {},
 		"CAN_APPLY_FALSE": {}, "ROUTE_AMBIGUOUS": {},
 		"HARD_REQUIREMENT_MISSING": {}, "HARD_REQUIREMENT_UNKNOWN": {},
 		"SCORE_BELOW_THRESHOLD": {}, "TEST_REQUIRED_UNSUPPORTED": {},
@@ -485,6 +519,19 @@ func pilotOtherBlockedCount(stats PilotSearchStats) int {
 		}
 	}
 	return other
+}
+
+func formatPilotEvidenceCounts(values map[string]int) string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, key+"="+fmt.Sprint(values[key]))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (r *HHAIResponder) buildCareerAgentPilotPreviewFromState(value Vacancy, preflight VacancyPreflight) (PilotPreview, error) {
@@ -536,7 +583,8 @@ func (r *HHAIResponder) buildCareerAgentPilotPreviewFromState(value Vacancy, pre
 
 	// The fresh preflight above is authoritative for the pilot snapshot; the AI
 	// assessment remains advisory and cannot override it.
-	app := applicationprocessing.Applicability{Available: preflight.Available, Archived: preflight.Archived, ArchivedKnown: preflight.ArchivedKnown, AlreadyResponded: preflight.AlreadyResponded, AlreadyRespondedKnown: preflight.AlreadyRespondedKnown, TestPresent: preflight.TestPresent, TestPresentKnown: preflight.TestPresentKnown, LetterRequired: preflight.LetterRequired, LetterRequiredKnown: preflight.LetterRequiredKnown, CanApply: preflight.CanApply, CanApplyKnown: preflight.CanApplyKnown, Area: preflight.Area, AreaKnown: preflight.AreaKnown, WorkSchedule: preflight.WorkSchedule, WorkScheduleKnown: preflight.WorkScheduleKnown, WorkExperience: preflight.WorkExperience, WorkExperienceKnown: preflight.WorkExperienceKnown, ResponseURL: preflight.ResponseURL}
+	respondedEvidence := preflight.alreadyRespondedEvidence()
+	app := applicationprocessing.Applicability{Available: preflight.Available, Archived: preflight.Archived, ArchivedKnown: preflight.ArchivedKnown, AlreadyResponded: respondedEvidence.Value == AlreadyRespondedYes, AlreadyRespondedKnown: respondedEvidence.Value != AlreadyRespondedUnknown, AlreadyRespondedValue: string(respondedEvidence.Value), AlreadyRespondedEvidenceCode: string(respondedEvidence.EvidenceCode), TestPresent: preflight.TestPresent, TestPresentKnown: preflight.TestPresentKnown, LetterRequired: preflight.LetterRequired, LetterRequiredKnown: preflight.LetterRequiredKnown, CanApply: preflight.CanApply, CanApplyKnown: preflight.CanApplyKnown, Area: preflight.Area, AreaKnown: preflight.AreaKnown, WorkSchedule: preflight.WorkSchedule, WorkScheduleKnown: preflight.WorkScheduleKnown, WorkExperience: preflight.WorkExperience, WorkExperienceKnown: preflight.WorkExperienceKnown, ResponseURL: preflight.ResponseURL}
 	candidateFacts := vacancyanalysis.CandidateFacts{FullName: candidate.FullName, ResumeTitle: selectedResume.Title, Salary: candidate.Salary, Experience: candidate.Experience, Skills: candidate.Skills, Location: candidate.Location, EducationKnown: candidate.EducationKnown, EducationLevel: candidate.EducationLevel, EducationDetails: candidate.EducationDetails, TotalExperienceMonthsKnown: candidate.TotalExperienceMonthsKnown, TotalExperienceMonths: candidate.TotalExperienceMonths, Profile: candidate.Profile, SafeContext: candidate.SafeContext}
 	assessment, decision, reason, err := (rootApplicationPolicy{responder: r}).ReconcileApplicability(value, app, candidateFacts, assessment)
 	if err != nil {
@@ -570,7 +618,7 @@ func (r *HHAIResponder) buildCareerAgentPilotPreviewFromState(value Vacancy, pre
 	if preflight.ArchivedKnown && preflight.Archived {
 		preview.Reasons = append(preview.Reasons, "vacancy is archived")
 	}
-	if preflight.AlreadyRespondedKnown && preflight.AlreadyResponded {
+	if preflight.alreadyRespondedEvidence().Value == AlreadyRespondedYes {
 		preview.Reasons = append(preview.Reasons, "already responded")
 	}
 	if preflight.CanApplyKnown && !preflight.CanApply {
@@ -586,7 +634,7 @@ func (r *HHAIResponder) buildCareerAgentPilotPreviewFromState(value Vacancy, pre
 		preview.Reasons = append(preview.Reasons, "hard requirement missing: "+strings.Join(artifact.HardMissing, "; "))
 	}
 
-	if pilotReadyForExplicitSend(assessment, decision, r.minMatchScore) && len(artifact.HardMissing) == 0 && len(artifact.HardUnknown) == 0 && preflight.ArchivedKnown && !preflight.Archived && preflight.AlreadyRespondedKnown && !preflight.AlreadyResponded && preflight.CanApplyKnown && preflight.CanApply && preflight.TestPresentKnown && !preflight.TestPresent && preflight.LetterRequiredKnown && artifact.ContentHash != "" {
+	if pilotReadyForExplicitSend(assessment, decision, r.minMatchScore) && len(artifact.HardMissing) == 0 && len(artifact.HardUnknown) == 0 && preflight.ArchivedKnown && !preflight.Archived && respondedEvidence.Value == AlreadyRespondedNo && preflight.CanApplyKnown && preflight.CanApply && preflight.TestPresentKnown && !preflight.TestPresent && preflight.LetterRequiredKnown && artifact.ContentHash != "" {
 		artifact.Nonce, err = generateUUIDv4()
 		if err != nil {
 			return PilotPreview{}, fmt.Errorf("pilot nonce generation failed: %w", err)
@@ -624,10 +672,10 @@ func pilotManualReviewEligible(assessment VacancyEvaluation, decision applicatio
 }
 
 func pilotPreflightBlockReason(preflight VacancyPreflight) string {
-	if preflight.AlreadyRespondedKnown && preflight.AlreadyResponded {
+	if preflight.alreadyRespondedEvidence().Value == AlreadyRespondedYes {
 		return "ALREADY_RESPONDED"
 	}
-	if !preflight.AlreadyRespondedKnown {
+	if preflight.alreadyRespondedEvidence().Value == AlreadyRespondedUnknown {
 		return "ALREADY_RESPONDED_UNKNOWN"
 	}
 	if preflight.CanApplyKnown && !preflight.CanApply {
@@ -704,7 +752,8 @@ func pilotPreviewBlockedReason(preview PilotPreview, minScore int) string {
 }
 
 func pilotPreflightSnapshot(value VacancyPreflight) PilotPreflightSnapshot {
-	return PilotPreflightSnapshot{ObservedAt: time.Now().UTC(), Active: knownBoolPointer(!value.Archived, value.ArchivedKnown), AlreadyResponded: knownBoolPointer(value.AlreadyResponded, value.AlreadyRespondedKnown), CanApply: knownBoolPointer(value.CanApply, value.CanApplyKnown), TestRequired: knownBoolPointer(value.TestPresent, value.TestPresentKnown), CoverLetterRequired: knownBoolPointer(value.LetterRequired, value.LetterRequiredKnown), CoverLetterAllowed: knownBoolPointer(value.CanApply, value.CanApplyKnown && value.CanApply), ResponseURL: value.ResponseURL, Area: value.Area, WorkSchedule: value.WorkSchedule, WorkExperience: value.WorkExperience}
+	evidence := value.alreadyRespondedEvidence()
+	return PilotPreflightSnapshot{ObservedAt: time.Now().UTC(), Active: knownBoolPointer(!value.Archived, value.ArchivedKnown), AlreadyResponded: knownBoolPointer(evidence.Value == AlreadyRespondedYes, evidence.Value != AlreadyRespondedUnknown), AlreadyRespondedValue: string(evidence.Value), AlreadyRespondedEvidenceCode: string(evidence.EvidenceCode), CanApply: knownBoolPointer(value.CanApply, value.CanApplyKnown), TestRequired: knownBoolPointer(value.TestPresent, value.TestPresentKnown), CoverLetterRequired: knownBoolPointer(value.LetterRequired, value.LetterRequiredKnown), CoverLetterAllowed: knownBoolPointer(value.CanApply, value.CanApplyKnown && value.CanApply), ResponseURL: value.ResponseURL, Area: value.Area, WorkSchedule: value.WorkSchedule, WorkExperience: value.WorkExperience}
 }
 
 func validatePilotCoverLetter(letter string) error {
@@ -750,7 +799,7 @@ func renderCareerAgentPilotPreview(preview PilotPreview) string {
 	a := preview.Artifact
 	if preview.Status != pilotReadyStatus && a.VacancyID == 0 {
 		stats := preview.SearchStats
-		lines := []string{"PILOT: NO_ELIGIBLE_CANDIDATE", fmt.Sprintf("Scanned: %d", stats.Scanned), fmt.Sprintf("Known responded: %d", stats.KnownRespondedSkipped), fmt.Sprintf("Fresh AlreadyResponded: %d", stats.FreshAlreadyRespondedSkipped), fmt.Sprintf("CanApply false: %d", stats.BlockedReasonCounts["CAN_APPLY_FALSE"]), fmt.Sprintf("Route ambiguous: %d", stats.BlockedReasonCounts["ROUTE_AMBIGUOUS"]), fmt.Sprintf("Hard missing: %d", stats.BlockedReasonCounts["HARD_REQUIREMENT_MISSING"]), fmt.Sprintf("Hard unknown: %d", stats.BlockedReasonCounts["HARD_REQUIREMENT_UNKNOWN"]), fmt.Sprintf("Score below threshold: %d", stats.BlockedReasonCounts["SCORE_BELOW_THRESHOLD"]), fmt.Sprintf("Unsupported test: %d", stats.BlockedReasonCounts["TEST_REQUIRED_UNSUPPORTED"]), fmt.Sprintf("Inactive: %d", stats.BlockedReasonCounts["VACANCY_INACTIVE"]), fmt.Sprintf("Other: %d", pilotOtherBlockedCount(stats)), fmt.Sprintf("Unresponded candidates actually evaluated: %d", stats.UnrespondedEvaluated), fmt.Sprintf("Detail reads: %d", stats.DetailReads), fmt.Sprintf("AI evaluations: %d", stats.AIEvaluations)}
+		lines := []string{"PILOT: NO_ELIGIBLE_CANDIDATE", fmt.Sprintf("Scanned: %d", stats.Scanned), fmt.Sprintf("Known responded: %d", stats.KnownRespondedSkipped), fmt.Sprintf("Fresh AlreadyResponded: %d", stats.FreshAlreadyRespondedSkipped), fmt.Sprintf("Preflight unknown: %d", stats.PreflightUnknown), fmt.Sprintf("Fresh unresponded: %d", stats.FreshUnresponded), fmt.Sprintf("Evidence distribution: %s", formatPilotEvidenceCounts(stats.AlreadyRespondedEvidenceCounts)), fmt.Sprintf("CanApply false: %d", stats.BlockedReasonCounts["CAN_APPLY_FALSE"]), fmt.Sprintf("Route ambiguous: %d", stats.BlockedReasonCounts["ROUTE_AMBIGUOUS"]), fmt.Sprintf("Hard missing: %d", stats.BlockedReasonCounts["HARD_REQUIREMENT_MISSING"]), fmt.Sprintf("Hard unknown: %d", stats.BlockedReasonCounts["HARD_REQUIREMENT_UNKNOWN"]), fmt.Sprintf("Score below threshold: %d", stats.BlockedReasonCounts["SCORE_BELOW_THRESHOLD"]), fmt.Sprintf("Unsupported test: %d", stats.BlockedReasonCounts["TEST_REQUIRED_UNSUPPORTED"]), fmt.Sprintf("Inactive: %d", stats.BlockedReasonCounts["VACANCY_INACTIVE"]), fmt.Sprintf("Other: %d", pilotOtherBlockedCount(stats)), fmt.Sprintf("Unresponded candidates actually evaluated: %d", stats.UnrespondedEvaluated), fmt.Sprintf("Detail reads: %d", stats.DetailReads), fmt.Sprintf("AI evaluations: %d", stats.AIEvaluations)}
 		if len(preview.BlockedCandidates) > 0 {
 			lines = append(lines, "Blocked candidates:")
 			for _, candidate := range preview.BlockedCandidates {
@@ -975,7 +1024,7 @@ func (r *HHAIResponder) buildCareerAgentPilotIdentity(vacancyID int, contentHash
 	if err != nil {
 		return applicationpilot.CurrentIdentity{}, err
 	}
-	if preflight.ArchivedKnown && preflight.Archived || preflight.AlreadyRespondedKnown && preflight.AlreadyResponded || preflight.CanApplyKnown && !preflight.CanApply || preflight.TestPresentKnown && preflight.TestPresent {
+	if preflight.ArchivedKnown && preflight.Archived || preflight.alreadyRespondedEvidence().Value != AlreadyRespondedNo || preflight.CanApplyKnown && !preflight.CanApply || preflight.TestPresentKnown && preflight.TestPresent {
 		return applicationpilot.CurrentIdentity{}, errors.New("fresh pilot preflight blocks the approved application")
 	}
 	return applicationpilot.CurrentIdentity{VacancyID: value.ID, ResumeID: selectedHash, ContentHash: contentHash}, nil
