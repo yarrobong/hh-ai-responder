@@ -146,7 +146,7 @@ func validateCommandArgs(command CommandKind, args []string) error {
 			return fmt.Errorf("unknown storage command %q", args[0])
 		}
 	case CommandCareerAgent:
-		if !known(args[0], "shadow", "canary", "feedback", "resumes", "resume", "pilot") {
+		if !known(args[0], "shadow", "canary", "feedback", "resumes", "resume", "pilot", "web-trace") {
 			return fmt.Errorf("unknown career-agent command %q", args[0])
 		}
 		if args[0] == "pilot" && len(args) > 1 && !strings.HasPrefix(args[1], "-") && args[1] != "send" {

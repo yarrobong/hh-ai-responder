@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -257,10 +256,9 @@ func parseVacancyPreflight(data []byte, vacancy Vacancy, responseURL string) (Va
 		preflight.Archived = true
 		preflight.ArchivedKnown = true
 	}
-	if !preflight.TestPresentKnown && vacancy.UserTestPresent {
-		preflight.TestPresent = true
-		preflight.TestPresentKnown = true
-	}
+	// UserTestPresent from a search/detail projection is not sufficient for
+	// this fresh web preflight. Only a vacancy-scoped response/form marker may
+	// establish a mandatory test.
 	if !preflight.LetterRequiredKnown && vacancy.ResponseLetterRequired {
 		preflight.LetterRequired = true
 		preflight.LetterRequiredKnown = true
@@ -309,7 +307,12 @@ func embeddedVacancyState(data []byte) (map[string]any, error) {
 }
 
 func populateVacancyPreflightFromState(preflight *VacancyPreflight, state map[string]any, vacancyID int) {
-	if value, ok := findStateValue(state, "archived", "isArchived"); ok {
+	responseState, responseStateOK := directResponseState(state, vacancyID)
+	archivedValue, archivedOK := directStateValue(state, "archived", "isArchived")
+	if !archivedOK {
+		archivedValue, archivedOK = directResponseStateValue(responseState, responseStateOK, "archived", "isArchived")
+	}
+	if value, ok := archivedValue, archivedOK; ok {
 		if parsed, parsedOK := stateBool(value); parsedOK {
 			preflight.Archived, preflight.ArchivedKnown = parsed, true
 		}
@@ -317,7 +320,7 @@ func populateVacancyPreflightFromState(preflight *VacancyPreflight, state map[st
 	// Only explicit response-state fields from the provider's response-state
 	// projection are authoritative. Do not recursively interpret generic
 	// response-shaped fields from unrelated page models.
-	if value, ok := scopedResponseStateValue(state, vacancyID, "alreadyResponded", "responseAlreadySent"); ok {
+	if value, ok := directResponseStateValue(responseState, responseStateOK, "alreadyResponded", "responseAlreadySent"); ok {
 		if parsed, parsedOK := stateBool(value); parsedOK {
 			if parsed {
 				setAlreadyRespondedEvidence(preflight, AlreadyRespondedYes, EvidenceExplicitRespondedMarker)
@@ -326,16 +329,16 @@ func populateVacancyPreflightFromState(preflight *VacancyPreflight, state map[st
 			}
 		}
 	}
-	if _, ok := scopedResponseStateValue(state, vacancyID, "responseId", "response_id", "negotiationId", "negotiation_id"); ok {
+	if _, ok := directResponseStateValue(responseState, responseStateOK, "responseId", "response_id", "negotiationId", "negotiation_id"); ok {
 		preflight.NegotiationIdentifierPresent = true
 	}
-	if value, ok := findStateValue(state, "canApply", "canRespond", "responseAllowed", "isResponseAllowed", "applyAvailable"); ok {
+	if value, ok := directResponseStateValue(responseState, responseStateOK, "canApply", "canRespond", "responseAllowed", "isResponseAllowed", "applyAvailable"); ok {
 		if parsed, parsedOK := stateBool(value); parsedOK {
 			preflight.CanApply, preflight.CanApplyKnown = parsed, true
 			preflight.Available = parsed
 		}
 	}
-	if value, ok := findStateValue(state, "available", "isAvailable"); ok {
+	if value, ok := directResponseStateValue(responseState, responseStateOK, "available", "isAvailable"); ok {
 		if parsed, parsedOK := stateBool(value); parsedOK {
 			preflight.Available = parsed
 			if !preflight.CanApplyKnown {
@@ -343,56 +346,50 @@ func populateVacancyPreflightFromState(preflight *VacancyPreflight, state map[st
 			}
 		}
 	}
-	if value, ok := findStateValue(state, "responseLetterRequired", "@responseLetterRequired", "letterRequired", "isResponseLetterRequired"); ok {
+	if value, ok := directResponseStateValue(responseState, responseStateOK, "responseLetterRequired", "@responseLetterRequired", "letterRequired", "isResponseLetterRequired"); ok {
 		if parsed, parsedOK := stateBool(value); parsedOK {
 			preflight.LetterRequired, preflight.LetterRequiredKnown = parsed, true
 		}
 	}
-	if value, ok := findStateValue(state, "userTestPresent", "testPresent", "hasTest", "testRequired"); ok {
+	if value, ok := directResponseStateValue(responseState, responseStateOK, "userTestPresent", "testPresent", "hasTest", "testRequired"); ok {
 		if parsed, parsedOK := stateBool(value); parsedOK {
 			preflight.TestPresent, preflight.TestPresentKnown = parsed, true
 		}
 	}
-	if value, ok := findStateValue(state, "vacancyTests"); ok {
-		preflight.TestPresent, preflight.TestPresentKnown = stateHasVacancyTest(value, vacancyID), true
+	if value, ok := directResponseStateValue(responseState, responseStateOK, "vacancyTests"); ok {
+		preflight.TestPresent, preflight.TestPresentKnown = stateHasVacancyTest(value, vacancyID)
 	}
 
-	preflight.Area, preflight.AreaKnown = stateStringField(state, "area", "areaName", "location")
-	preflight.WorkSchedule, preflight.WorkScheduleKnown = stateStringField(state, "workSchedule", "@workSchedule", "workFormat", "workFormats")
-	preflight.WorkExperience, preflight.WorkExperienceKnown = stateStringField(state, "workExperience", "experience", "@workExperience")
+	preflight.Area, preflight.AreaKnown = directStateStringField(responseState, responseStateOK, "area", "areaName", "location")
+	preflight.WorkSchedule, preflight.WorkScheduleKnown = directStateStringField(responseState, responseStateOK, "workSchedule", "@workSchedule", "workFormat", "workFormats")
+	preflight.WorkExperience, preflight.WorkExperienceKnown = directStateStringField(responseState, responseStateOK, "workExperience", "experience", "@workExperience")
 	if preflight.AlreadyRespondedEvidence.EvidenceCode == "" && preflight.CanApplyKnown && preflight.CanApply {
 		setAlreadyRespondedEvidence(preflight, AlreadyRespondedNo, EvidenceApplyActionAvailable)
 	}
 }
 
 func populateVacancyPreflightFromHTML(preflight *VacancyPreflight, data []byte) {
-	document, err := xhtml.Parse(bytes.NewReader(data))
-	if err != nil {
-		return
-	}
-	for _, node := range findHTMLNodes(document, func(node *xhtml.Node) bool {
-		dataQA := strings.ToLower(htmlAttr(node, "data-qa"))
-		return strings.Contains(dataQA, "response") && (node.Data == "button" || node.Data == "a")
-	}) {
-		ariaDisabled := strings.EqualFold(strings.TrimSpace(htmlAttr(node, "aria-disabled")), "true")
-		if hasHTMLAttr(node, "disabled") || ariaDisabled {
-			preflight.CanApply = false
-			preflight.CanApplyKnown = true
-			preflight.Available = false
-			if preflight.AlreadyRespondedEvidence.EvidenceCode == EvidenceApplyActionAvailable {
-				setAlreadyRespondedEvidence(preflight, AlreadyRespondedUnknown, EvidenceAmbiguousPage)
-			}
-			break
+	inspection := inspectHHWebPage(data, preflight.VacancyID, webTraceResponse)
+	if inspection.DisabledApplyAction && preflight.CanApplyKnown {
+		// A disabled control is not proof of a provider-level NO. In
+		// particular, it can be a disabled generic component on a response
+		// page, so it invalidates a contradictory positive signal instead.
+		preflight.CanApply, preflight.CanApplyKnown, preflight.Available = false, false, false
+		if preflight.AlreadyRespondedEvidence.EvidenceCode == EvidenceApplyActionAvailable {
+			setAlreadyRespondedEvidence(preflight, AlreadyRespondedUnknown, EvidenceAmbiguousPage)
 		}
 	}
-	text := strings.ToLower(normalizeHTMLText(htmlNodeText(document)))
-	if preflight.AlreadyRespondedEvidence.EvidenceCode == "" && containsAny(text, "вы уже откликались", "отклик уже отправлен") {
+	if preflight.AlreadyRespondedEvidence.EvidenceCode == "" && inspection.ExplicitRespondedMarker {
 		setAlreadyRespondedEvidence(preflight, AlreadyRespondedYes, EvidenceExplicitRespondedMarker)
 	}
-	if !preflight.ArchivedKnown && containsAny(text, "вакансия в архиве", "вакансия закрыта") {
+	if !preflight.ArchivedKnown && inspection.Class == WebPageVacancyArchived {
 		preflight.Archived, preflight.ArchivedKnown = true, true
 	}
-	if !preflight.CanApplyKnown && containsAny(text, "откликнуться", "отправить отклик") {
+	if inspection.ApplicationFormPresent && inspection.FormVacancyIDMatches {
+		preflight.CanApply, preflight.CanApplyKnown = true, true
+		preflight.Available = true
+		setAlreadyRespondedEvidence(preflight, AlreadyRespondedNo, EvidenceApplyActionAvailable)
+	} else if inspection.ExplicitApplyAction {
 		preflight.CanApply, preflight.CanApplyKnown = true, true
 		preflight.Available = true
 		if preflight.AlreadyRespondedEvidence.EvidenceCode == "" {
@@ -401,33 +398,40 @@ func populateVacancyPreflightFromHTML(preflight *VacancyPreflight, data []byte) 
 	}
 }
 
-func scopedResponseStateValue(state map[string]any, vacancyID int, keys ...string) (any, bool) {
-	for _, containerKey := range []string{"redirectConfig", "vacancyResponse", "response"} {
-		container, ok := state[containerKey]
-		if !ok {
-			for key, value := range state {
-				if strings.EqualFold(key, containerKey) {
-					container, ok = value, true
-					break
-				}
-			}
-		}
+func directResponseState(state map[string]any, vacancyID int) (map[string]any, bool) {
+	for _, key := range []string{"redirectConfig", "vacancyResponse", "response"} {
+		value, ok := directStateValue(state, key)
 		if !ok {
 			continue
 		}
-		if !responseStateMatchesVacancy(container, vacancyID) {
+		object, ok := value.(map[string]any)
+		if !ok || !responseStateMatchesVacancy(object, vacancyID) {
 			continue
 		}
-		if object, ok := container.(map[string]any); ok {
-			if value, found := directStateValue(object, keys...); found {
-				return value, true
-			}
-		}
+		return object, true
 	}
-	if !responseStateMatchesVacancy(state, vacancyID) {
+	// A bare JSON object is not a response-state container. Treating its
+	// arbitrary nested component state as provider response state was the
+	// source of the old generic-recursion false positives.
+	return nil, false
+}
+
+func directResponseStateValue(state map[string]any, stateOK bool, keys ...string) (any, bool) {
+	if !stateOK {
 		return nil, false
 	}
 	return directStateValue(state, keys...)
+}
+
+func directStateStringField(state map[string]any, stateOK bool, keys ...string) (string, bool) {
+	if !stateOK {
+		return "", false
+	}
+	value, ok := directStateValue(state, keys...)
+	if !ok {
+		return "", false
+	}
+	return stateStringValue(value)
 }
 
 func responseStateMatchesVacancy(value any, vacancyID int) bool {
@@ -482,37 +486,6 @@ func containsAny(text string, values ...string) bool {
 	return false
 }
 
-func findStateValue(value any, keys ...string) (any, bool) {
-	wanted := make(map[string]struct{}, len(keys))
-	for _, key := range keys {
-		wanted[strings.ToLower(key)] = struct{}{}
-	}
-	var visit func(any) (any, bool)
-	visit = func(current any) (any, bool) {
-		switch typed := current.(type) {
-		case map[string]any:
-			for key, item := range typed {
-				if _, ok := wanted[strings.ToLower(key)]; ok {
-					return item, true
-				}
-			}
-			for _, item := range typed {
-				if found, ok := visit(item); ok {
-					return found, true
-				}
-			}
-		case []any:
-			for _, item := range typed {
-				if found, ok := visit(item); ok {
-					return found, true
-				}
-			}
-		}
-		return nil, false
-	}
-	return visit(value)
-}
-
 func stateBool(value any) (bool, bool) {
 	switch typed := value.(type) {
 	case bool:
@@ -528,11 +501,7 @@ func stateBool(value any) (bool, bool) {
 	return false, false
 }
 
-func stateStringField(state map[string]any, keys ...string) (string, bool) {
-	value, ok := findStateValue(state, keys...)
-	if !ok {
-		return "", false
-	}
+func stateStringValue(value any) (string, bool) {
 	if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
 		return strings.TrimSpace(text), true
 	}
@@ -557,17 +526,24 @@ func stateStringField(state map[string]any, keys ...string) (string, bool) {
 	return "", false
 }
 
-func stateHasVacancyTest(value any, vacancyID int) bool {
+func stateHasVacancyTest(value any, vacancyID int) (bool, bool) {
 	switch typed := value.(type) {
 	case map[string]any:
-		_, exists := typed[strconv.Itoa(vacancyID)]
-		return exists
+		if item, exists := typed[strconv.Itoa(vacancyID)]; exists {
+			return item != nil, true
+		}
+		return false, false
 	case []any:
-		return len(typed) > 0
+		for _, item := range typed {
+			if object, ok := item.(map[string]any); ok && responseStateMatchesVacancy(object, vacancyID) {
+				return true, true
+			}
+		}
+		return false, false
 	case bool:
-		return typed
+		return typed, true
 	default:
-		return value != nil
+		return false, false
 	}
 }
 

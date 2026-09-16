@@ -99,6 +99,19 @@ authenticated `GET /applicant/my_resumes`. Он показывает безоп�
 При недоступном authenticated read `career-agent --shadow` останавливается до
 discovery и не выполняет HH writes.
 
+Для безопасной диагностики web preflight можно проверить две локально
+подтверждённые вакансии и выбранные UNKNOWN-вакансии. Команда выполняет
+только GET через существующий cookie jar и печатает только metadata страниц:
+
+```sh
+HH_DRY_RUN=true HH_WRITE_ENABLED=false STORAGE_BACKEND=json \
+  ./hh-ai-responder career-agent web-trace \
+  --known 123,456 --unknown 789,790,791,792,793
+```
+
+Значения `--known` и `--unknown` нужно подставить явно; команда не угадывает
+состояние отклика по отсутствию кнопки.
+
 Используйте флаг `-h` для справки.
 
 По умолчанию приложение использует модель `llama3:8b`, запущенную на `http://localhost:11434` (например через **Ollama**).
