@@ -39,6 +39,7 @@ func parseVacancyDetail(data []byte, baseURL *url.URL, requestedID int) (hhread.
 	value.Title = firstRawString(sources, "name", "title")
 	value.Company = firstNestedString(sources, []string{"company", "employer"}, "name", "visibleName")
 	value.Description = firstRawString(sources, "description", "snippet")
+	value.Requirements = namedValues(firstRaw(sources, "requirements", "requirement", "hardRequirements", "hard_requirements"))
 	value.AreaName = firstNestedString(sources, []string{"area", "region"}, "name", "title")
 	value.Address = addressString(firstRaw(sources, "address"))
 	value.Location = firstRawString(sources, "location")

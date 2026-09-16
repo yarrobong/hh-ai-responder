@@ -202,20 +202,38 @@ func PlanSearches(resumes []ResumeProfile, signals CandidateSignals, constraints
 }
 
 type VacancyInput struct {
-	ID             int
-	Title          string
-	Description    string
-	RequiredSkills []string
-	Location       string
-	WorkFormat     string
+	ID                int
+	Title             string
+	Description       string
+	RequiredSkills    []string
+	KeySkills         []string
+	ProfessionalRoles []string
+	Experience        string
+	Employment        string
+	Schedule          string
+	Salary            string
+	Location          string
+	WorkFormat        string
+	SearchProfiles    []SearchProfileEvidence
+	DetailAvailable   bool
+}
+
+// SearchProfileEvidence is intentionally weak routing evidence. A vacancy
+// found by a resume-specific search is not thereby assigned to that resume.
+type SearchProfileEvidence struct {
+	ID       string `json:"id,omitempty"`
+	ResumeID string `json:"resume_id,omitempty"`
+	Label    string `json:"label,omitempty"`
 }
 
 type ResumeScore struct {
-	ResumeID     string   `json:"resume_id"`
-	Title        string   `json:"title"`
-	Score        int      `json:"score"`
-	Reasons      []string `json:"reasons,omitempty"`
-	HardBlockers []string `json:"hard_blockers,omitempty"`
+	ResumeID        string   `json:"resume_id"`
+	Title           string   `json:"title"`
+	Score           int      `json:"score"`
+	FitScore        int      `json:"fit_score,omitempty"`
+	ProvenanceScore int      `json:"provenance_score,omitempty"`
+	Reasons         []string `json:"reasons,omitempty"`
+	HardBlockers    []string `json:"hard_blockers,omitempty"`
 }
 
 type RouteDecision struct {
@@ -229,7 +247,29 @@ type RouteDecision struct {
 	Confidence          string             `json:"confidence"`
 	HardRequirements    []RequirementState `json:"hard_requirements,omitempty"`
 	HardBlockers        []string           `json:"hard_blockers,omitempty"`
+	ReasonCode          string             `json:"reason_code,omitempty"`
 }
+
+type PreliminaryRouteDecision struct {
+	VacancyID       int           `json:"vacancy_id"`
+	Status          string        `json:"status"`
+	ReasonCode      string        `json:"reason_code"`
+	Reasons         []string      `json:"reasons,omitempty"`
+	TopCandidates   []ResumeScore `json:"top_candidates,omitempty"`
+	DetailAvailable bool          `json:"detail_available"`
+}
+
+const (
+	PreliminaryClearRoute    = "CLEAR_ROUTE"
+	PreliminaryNeedsDetail   = "NEEDS_DETAIL"
+	PreliminaryObviousReject = "OBVIOUS_REJECT"
+	PreliminaryNoResume      = "NO_ENABLED_RESUME"
+	RouteReasonNeedsDetail   = "ROUTE_NEEDS_DETAIL"
+	RouteReasonAmbiguous     = "ROUTE_AMBIGUOUS_AFTER_DETAIL"
+	RouteReasonUnknownHard   = "UNKNOWN_HARD_REQUIREMENT"
+	RouteReasonNoStrong      = "NO_STRONG_RESUME_AFTER_DETAIL"
+	RouteReasonSelected      = "ROUTE_SELECTED"
+)
 
 const (
 	RouteSelected       = "SELECTED"
@@ -246,7 +286,7 @@ type RequirementState struct {
 }
 
 func RouteResume(vacancy VacancyInput, resumes []ResumeProfile) RouteDecision {
-	decision := RouteDecision{VacancyID: vacancy.ID, Status: RouteNoResume, Confidence: ConfidenceLow, Reasons: []string{}}
+	decision := RouteDecision{VacancyID: vacancy.ID, Status: RouteNoResume, Confidence: ConfidenceLow, Reasons: []string{}, ReasonCode: RouteReasonNoStrong}
 	candidates := make([]ResumeScore, 0)
 	for _, resume := range resumes {
 		if resume.Enabled {
@@ -255,6 +295,7 @@ func RouteResume(vacancy VacancyInput, resumes []ResumeProfile) RouteDecision {
 	}
 	if len(candidates) == 0 {
 		decision.Reasons = []string{"no enabled resume is available"}
+		decision.ReasonCode = RouteReasonNoStrong
 		return decision
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
@@ -276,6 +317,7 @@ func RouteResume(vacancy VacancyInput, resumes []ResumeProfile) RouteDecision {
 			decision.Reasons = append(decision.Reasons, candidate.Title+": "+strings.Join(candidate.HardBlockers, ", "))
 		}
 		decision.HardBlockers = append([]string(nil), candidates[0].HardBlockers...)
+		decision.ReasonCode = RouteReasonNoStrong
 		return decision
 	}
 	candidates = compatible
@@ -289,17 +331,22 @@ func RouteResume(vacancy VacancyInput, resumes []ResumeProfile) RouteDecision {
 			decision.Reasons = append(decision.Reasons, "hard requirement remains unknown: "+requirement.Requirement)
 		}
 	}
-	if len(candidates) > 1 && candidates[0].Score-candidates[1].Score < 8 {
-		decision.Status, decision.Confidence = RouteReviewRequired, ConfidenceLow
+	// Provenance is a bounded tie-break signal, never enough to resolve a
+	// genuinely close fit. Compare fit-only scores for the ambiguity gate.
+	if len(candidates) > 1 && candidates[0].FitScore-candidates[1].FitScore < 8 {
+		decision.Status, decision.Confidence, decision.ReasonCode = RouteReviewRequired, ConfidenceLow, RouteReasonAmbiguous
+		decision.SelectedResumeID, decision.SelectedResumeTitle = "", ""
 		decision.Reasons = append(decision.Reasons, "top resume scores are too close for deterministic selection")
 		return decision
 	}
 	if decision.Score < 12 {
-		decision.Status, decision.Confidence = RouteReviewRequired, ConfidenceLow
+		decision.Status, decision.Confidence, decision.ReasonCode = RouteReviewRequired, ConfidenceLow, RouteReasonNoStrong
+		decision.SelectedResumeID, decision.SelectedResumeTitle = "", ""
 		decision.Reasons = append(decision.Reasons, "no strong resume signal was found")
 		return decision
 	}
 	decision.Status = RouteSelected
+	decision.ReasonCode = RouteReasonSelected
 	decision.Reasons = append(decision.Reasons, "selected by deterministic title/skill overlap")
 	if decision.Score >= 60 && (len(decision.HardRequirements) == 0 || allRequirementsMet(decision.HardRequirements)) {
 		decision.Confidence = ConfidenceHigh
@@ -308,6 +355,52 @@ func RouteResume(vacancy VacancyInput, resumes []ResumeProfile) RouteDecision {
 	} else {
 		decision.Confidence = ConfidenceLow
 	}
+	return decision
+}
+
+// PreliminaryRouteResume is deliberately non-terminal for incomplete search
+// cards. It only rejects an obvious mismatch when the card itself contains a
+// reliable hard blocker, or when a caller has supplied no provenance and no
+// relevance signal at all. Otherwise the caller must obtain provider detail
+// and call RouteResume again.
+func PreliminaryRouteResume(vacancy VacancyInput, resumes []ResumeProfile) PreliminaryRouteDecision {
+	decision := PreliminaryRouteDecision{VacancyID: vacancy.ID, Status: PreliminaryNeedsDetail, ReasonCode: RouteReasonNeedsDetail, DetailAvailable: vacancy.DetailAvailable}
+	final := RouteResume(vacancy, resumes)
+	decision.TopCandidates = append([]ResumeScore(nil), final.AlternativeScores...)
+	if len(final.AlternativeScores) > 0 && len(final.AlternativeScores[0].HardBlockers) > 0 {
+		allBlocked := true
+		for _, candidate := range final.AlternativeScores {
+			if len(candidate.HardBlockers) == 0 {
+				allBlocked = false
+				break
+			}
+		}
+		if allBlocked {
+			decision.Status, decision.ReasonCode = PreliminaryObviousReject, RouteReasonNoStrong
+			decision.Reasons = append(decision.Reasons, "all enabled resumes have explicit hard incompatibilities")
+			return decision
+		}
+	}
+	if final.Status == RouteNoResume {
+		decision.Status, decision.ReasonCode = PreliminaryNoResume, RouteReasonNoStrong
+		decision.Reasons = append(decision.Reasons, final.Reasons...)
+		return decision
+	}
+	if !vacancy.DetailAvailable {
+		decision.Reasons = []string{"search card is incomplete; full vacancy detail is required"}
+		return decision
+	}
+	if final.Status == RouteSelected && final.Confidence != ConfidenceLow {
+		decision.Status, decision.ReasonCode = PreliminaryClearRoute, RouteReasonSelected
+		decision.Reasons = append(decision.Reasons, "search card contains strong deterministic evidence")
+		return decision
+	}
+	if final.Status == RouteReviewRequired && len(vacancy.SearchProfiles) == 0 && final.Score == 0 {
+		decision.Status, decision.ReasonCode = PreliminaryObviousReject, RouteReasonNoStrong
+		decision.Reasons = append(decision.Reasons, "no relevance signal in an unassociated search card")
+		return decision
+	}
+	decision.Reasons = append(decision.Reasons, "preliminary evidence is insufficient for final resume selection")
 	return decision
 }
 
@@ -518,17 +611,44 @@ func stableSearchID(resumeID, query string) string {
 }
 func tokens(value string) map[string]bool {
 	result := map[string]bool{}
-	for _, token := range strings.Fields(normalizeText(value)) {
+	value = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(value), "ё", "е"))
+	value = strings.NewReplacer("/", " ", "|", " ", ",", " ", ";", " ", "–", " ", "—", " ", "-", " ", "(", " ", ")", " ", ":", " ").Replace(value)
+	for _, raw := range strings.Fields(value) {
+		token := canonicalToken(raw)
 		if len([]rune(token)) >= 2 {
 			result[token] = true
 		}
 	}
 	return result
 }
+
+// canonicalToken is intentionally a small, reviewable vocabulary for the
+// candidate's target roles. It handles common RU/EN inflections and aliases;
+// it is not intended to be a general Russian stemmer or thesaurus.
+func canonicalToken(value string) string {
+	value = strings.Trim(strings.ToLower(strings.ReplaceAll(value, "ё", "е")), ".!?\"'`")
+	aliases := map[string]string{
+		"автоматизация": "automation", "автоматизации": "automation", "автоматизацию": "automation", "автоматизировать": "automation", "automation": "automation", "automations": "automation",
+		"интеграция": "integration", "интеграции": "integration", "интеграциям": "integration", "интеграциями": "integration", "integration": "integration", "integrations": "integration",
+		"поддержка": "support", "поддержки": "support", "поддержку": "support", "поддержкой": "support", "support": "support",
+		"внедрение": "implementation", "внедрения": "implementation", "внедрению": "implementation", "внедрении": "implementation", "implementation": "implementation",
+		"разработчик": "developer", "разработчика": "developer", "разработчики": "developer", "разработка": "developer", "разработке": "developer", "developer": "developer", "developers": "developer",
+		"бэкенд": "backend", "бекенд": "backend", "бэкенда": "backend", "бекенда": "backend", "backend": "backend", "back-end": "backend",
+		"технический": "technical", "техническая": "technical", "техническое": "technical", "technical": "technical",
+		"специалист": "specialist", "специалиста": "specialist", "специалисты": "specialist", "specialist": "specialist",
+		"инженер": "engineer", "инженера": "engineer", "инженеры": "engineer", "engineer": "engineer",
+		"разработчикa": "developer",
+		"rest":         "api", "restful": "api", "api": "api", "apis": "api",
+	}
+	if canonical, ok := aliases[value]; ok {
+		return canonical
+	}
+	return value
+}
 func scoreResume(v VacancyInput, resume ResumeProfile) ResumeScore {
-	score := 0
+	fitScore := 0
 	reasons := []string{}
-	vacancyText := v.Title + " " + v.Description
+	vacancyText := strings.Join([]string{v.Title, v.Description, strings.Join(v.RequiredSkills, " "), strings.Join(v.KeySkills, " "), strings.Join(v.ProfessionalRoles, " "), v.Experience, v.Employment, v.Schedule, v.Location, v.WorkFormat, v.Salary}, " ")
 	vacancyTokens := tokens(vacancyText)
 	hardBlockers := []string{}
 	for _, keyword := range resume.ExcludeKeywords {
@@ -536,9 +656,12 @@ func scoreResume(v VacancyInput, resume ResumeProfile) ResumeScore {
 			hardBlockers = append(hardBlockers, "excluded keyword: "+keyword)
 		}
 	}
+	matchedSkills := map[string]bool{}
 	for _, skill := range resume.Skills {
-		if hasTokenOverlap(tokens(skill), vacancyTokens) {
-			score += 18
+		matchedToken := overlappingToken(tokens(skill), vacancyTokens)
+		if matchedToken != "" && !matchedSkills[matchedToken] {
+			matchedSkills[matchedToken] = true
+			fitScore += 18
 			reasons = append(reasons, "skill: "+skill)
 		}
 	}
@@ -548,11 +671,20 @@ func scoreResume(v VacancyInput, resume ResumeProfile) ResumeScore {
 			overlap++
 		}
 	}
-	score += overlap * 12
+	fitScore += overlap * 12
 	if overlap > 0 {
 		reasons = append(reasons, "role/title overlap")
 	}
-	return ResumeScore{ResumeID: resume.ID, Title: resume.Title, Score: minInt(score, 100), Reasons: reasons, HardBlockers: hardBlockers}
+	provenanceScore := 0
+	for _, source := range v.SearchProfiles {
+		if source.ResumeID != "" && (source.ResumeID == resume.ID || source.ResumeID == resume.Hash) {
+			provenanceScore = 4
+			reasons = append(reasons, "source search profile for this resume (+4 soft signal)")
+			break
+		}
+	}
+	score := minInt(fitScore+provenanceScore, 100)
+	return ResumeScore{ResumeID: resume.ID, Title: resume.Title, Score: score, FitScore: minInt(fitScore, 100), ProvenanceScore: provenanceScore, Reasons: reasons, HardBlockers: hardBlockers}
 }
 
 func requirementStates(v VacancyInput, selected ResumeScore, resumes []ResumeProfile) []RequirementState {
@@ -565,17 +697,29 @@ func requirementStates(v VacancyInput, selected ResumeScore, resumes []ResumePro
 	}
 	skills := tokens(strings.Join(profile.Skills, " "))
 	result := []RequirementState{}
+	seen := map[string]bool{}
 	for _, requirement := range v.RequiredSkills {
 		requirement = strings.TrimSpace(requirement)
-		if requirement == "" {
+		key := strings.Join(sortedTokenNames(tokens(requirement)), " ")
+		if requirement == "" || seen[key] {
 			continue
 		}
+		seen[key] = true
 		status := "unknown"
 		if hasTokenOverlap(tokens(requirement), skills) {
 			status = "met"
 		}
 		result = append(result, RequirementState{Requirement: requirement, Status: status})
 	}
+	return result
+}
+
+func sortedTokenNames(values map[string]bool) []string {
+	result := make([]string, 0, len(values))
+	for value := range values {
+		result = append(result, value)
+	}
+	sort.Strings(result)
 	return result
 }
 func allRequirementsMet(values []RequirementState) bool {
@@ -587,12 +731,16 @@ func allRequirementsMet(values []RequirementState) bool {
 	return true
 }
 func hasTokenOverlap(left, right map[string]bool) bool {
+	return overlappingToken(left, right) != ""
+}
+
+func overlappingToken(left, right map[string]bool) string {
 	for token := range left {
 		if right[token] {
-			return true
+			return token
 		}
 	}
-	return false
+	return ""
 }
 func appendUnique(values []string, value string) []string {
 	for _, existing := range values {

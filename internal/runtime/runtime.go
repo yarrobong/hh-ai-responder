@@ -1160,6 +1160,8 @@ type HHAIResponder struct {
 	careerAgentProfiles          []careeragent.SearchProfile
 	careerAgentResumes           []careeragent.ResumeProfile
 	careerAgentRoutes            map[int]careeragent.RouteDecision
+	careerAgentSearchSources     map[int][]careeragent.SearchProfileEvidence
+	careerAgentDetailCache       map[int]Vacancy
 	careerAgentWriteCount        int
 	resumeFactsByHash            map[string]ResumeFacts
 	vacancySearchSources         map[int][]string
@@ -1180,10 +1182,12 @@ type HHAIResponder struct {
 }
 
 type vacancySearchProfile struct {
-	Name    string
-	URL     string
-	BaseURL *url.URL
-	Params  url.Values
+	Name     string
+	ID       string
+	ResumeID string
+	URL      string
+	BaseURL  *url.URL
+	Params   url.Values
 }
 
 type HHRequester struct {
@@ -1709,7 +1713,7 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 	if len(responder.searchProfiles) == 0 {
 		responder.searchParams = make(url.Values)
 		responder.searchParams.Set("resume", responder.resumeHash)
-		responder.searchProfiles = []vacancySearchProfile{{Name: "Default search", BaseURL: responder.baseURL, Params: cloneValues(responder.searchParams), URL: searchProfileURL(responder.baseURL, responder.searchParams)}}
+		responder.searchProfiles = []vacancySearchProfile{{ID: "default-search", ResumeID: responder.resumeProfileID(responder.resumeHash), Name: "Default search", BaseURL: responder.baseURL, Params: cloneValues(responder.searchParams), URL: searchProfileURL(responder.baseURL, responder.searchParams)}}
 	}
 	resourcesReady = true
 
@@ -1751,10 +1755,12 @@ func buildVacancySearchProfilesWithOptions(searchURLs []string, searchPeriodDays
 		params.Set("items_on_page", "50")
 
 		profiles = append(profiles, vacancySearchProfile{
-			Name:    vacancySearchProfileName(index),
-			URL:     searchProfileURL(base, params),
-			BaseURL: base,
-			Params:  params,
+			ID:       fmt.Sprintf("manual-search-%d", index+1),
+			ResumeID: "",
+			Name:     vacancySearchProfileName(index),
+			URL:      searchProfileURL(base, params),
+			BaseURL:  base,
+			Params:   params,
 		})
 	}
 
@@ -2644,6 +2650,7 @@ func (r *HHAIResponder) fetchVacanciesFromSearchProfiles(summary *RunSummaryResu
 	uniqueVacancies := make([]Vacancy, 0)
 	seenIDs := make(map[int]struct{})
 	r.vacancySearchSources = map[int][]string{}
+	r.careerAgentSearchSources = map[int][]careeragent.SearchProfileEvidence{}
 	summary.SearchProfiles = make([]SearchProfileSummary, 0, len(profiles))
 	for _, profile := range profiles {
 		profileSummary := SearchProfileSummary{Name: profile.Name, URL: profile.URL}
@@ -2667,6 +2674,11 @@ func (r *HHAIResponder) fetchVacanciesFromSearchProfiles(summary *RunSummaryResu
 
 			for _, vacancy := range vacancies {
 				r.vacancySearchSources[vacancy.ID] = appendUniqueString(r.vacancySearchSources[vacancy.ID], profile.Name)
+				resumeID := profile.ResumeID
+				if resumeID == "" {
+					resumeID = r.resumeProfileID(profile.Params.Get("resume"))
+				}
+				r.careerAgentSearchSources[vacancy.ID] = appendCareerAgentSearchSource(r.careerAgentSearchSources[vacancy.ID], careeragent.SearchProfileEvidence{ID: profile.ID, ResumeID: resumeID, Label: profile.Name})
 				if _, exists := seenIDs[vacancy.ID]; exists {
 					summary.DuplicatesSkipped++
 					continue

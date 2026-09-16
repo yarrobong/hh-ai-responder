@@ -2,6 +2,7 @@ package careeragent
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -142,6 +143,80 @@ func TestRouteResumeDoesNotInferRelocationIncompatibilityFromResumeCity(t *testi
 	decision := RouteResume(VacancyInput{ID: 101, Title: "Python backend", Location: "Москва"}, []ResumeProfile{{ID: "r", Title: "Python backend", Location: "Екатеринбург", Skills: []string{"Python"}, Enabled: true}})
 	if decision.Status != RouteSelected {
 		t.Fatalf("resume city was incorrectly treated as a hard blocker: %+v", decision)
+	}
+}
+
+func TestPreliminaryRouteDefersIncompleteCardWithoutTerminalReview(t *testing.T) {
+	decision := PreliminaryRouteResume(VacancyInput{
+		ID: 201, Title: "Инженер по автоматизации интеграций", SearchProfiles: []SearchProfileEvidence{{ResumeID: "automation"}},
+	}, []ResumeProfile{{ID: "automation", Title: "Automation / Integration specialist", Skills: []string{"API"}, Enabled: true}})
+	if decision.Status != PreliminaryNeedsDetail || decision.ReasonCode != RouteReasonNeedsDetail {
+		t.Fatalf("incomplete card was not deferred: %+v", decision)
+	}
+}
+
+func TestPreliminaryRouteAllowsClearRouteOnlyWithCompleteStrongEvidence(t *testing.T) {
+	decision := PreliminaryRouteResume(VacancyInput{
+		ID: 202, Title: "Python backend developer", Description: "Python Django backend REST API developer", KeySkills: []string{"Python", "Django", "REST API"}, DetailAvailable: true,
+	}, []ResumeProfile{{ID: "python", Title: "Python backend developer", Skills: []string{"Python", "Django", "REST API"}, Enabled: true}, {ID: "support", Title: "Technical support", Skills: []string{"SQL"}, Enabled: true}})
+	if decision.Status != PreliminaryClearRoute {
+		t.Fatalf("strong complete card was not clear-routed: %+v", decision)
+	}
+}
+
+func TestAmbiguousCardBecomesClearOnlyAfterDetailEnrichment(t *testing.T) {
+	resumes := []ResumeProfile{
+		{ID: "python", Title: "Python backend", Skills: []string{"Python"}, Enabled: true},
+		{ID: "support", Title: "Technical support", Skills: []string{"SQL"}, Enabled: true},
+	}
+	card := VacancyInput{ID: 205, Title: "Backend specialist"}
+	if got := PreliminaryRouteResume(card, resumes); got.Status != PreliminaryNeedsDetail {
+		t.Fatalf("card should defer to detail: %+v", got)
+	}
+	detail := card
+	detail.Description = "Python backend service development"
+	detail.KeySkills = []string{"Python"}
+	detail.DetailAvailable = true
+	if got := RouteResume(detail, resumes); got.Status != RouteSelected || got.SelectedResumeID != "python" {
+		t.Fatalf("detail did not clear route: %+v", got)
+	}
+}
+
+func TestDetailStillAmbiguousRemainsReviewRequired(t *testing.T) {
+	resumes := []ResumeProfile{
+		{ID: "a", Title: "Python backend", Skills: []string{"Python"}, Enabled: true},
+		{ID: "b", Title: "Python backend", Skills: []string{"Python"}, Enabled: true},
+	}
+	got := RouteResume(VacancyInput{ID: 206, Title: "Python backend", Description: "Python backend API", DetailAvailable: true}, resumes)
+	if got.Status != RouteReviewRequired || got.ReasonCode != RouteReasonAmbiguous {
+		t.Fatalf("genuine close fit was not kept for review: %+v", got)
+	}
+}
+
+func TestRussianEnglishCanonicalGroupsProduceExplainableScore(t *testing.T) {
+	decision := RouteResume(VacancyInput{ID: 203, Title: "Разработчик бэкенда", Description: "Автоматизация и интеграция REST API"}, []ResumeProfile{{ID: "python", Title: "Python developer backend", Skills: []string{"automation", "integration", "API"}, Enabled: true}})
+	if decision.Status != RouteSelected || decision.Score < 12 {
+		t.Fatalf("canonical RU/EN route failed: %+v", decision)
+	}
+	joined := strings.Join(decision.AlternativeScores[0].Reasons, " ")
+	for _, expected := range []string{"skill:", "role/title overlap"} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("score explanation lacks %q: %+v", expected, decision.AlternativeScores[0])
+		}
+	}
+}
+
+func TestSearchProfileProvenanceIsSoftOnly(t *testing.T) {
+	decision := RouteResume(VacancyInput{ID: 204, Title: "Unrelated role", SearchProfiles: []SearchProfileEvidence{{ResumeID: "python"}}}, []ResumeProfile{{ID: "python", Title: "Python developer", Enabled: true}, {ID: "support", Title: "Support", Enabled: true}})
+	if decision.Status != RouteReviewRequired || decision.ReasonCode != RouteReasonAmbiguous || decision.SelectedResumeID != "" {
+		t.Fatalf("provenance selected a resume without fit evidence: %+v", decision)
+	}
+}
+
+func TestObviousHardBlockedCardDoesNotNeedDetail(t *testing.T) {
+	decision := PreliminaryRouteResume(VacancyInput{ID: 207, Title: "PHP developer"}, []ResumeProfile{{ID: "python", Title: "Python developer", ExcludeKeywords: []string{"PHP"}, Enabled: true}})
+	if decision.Status != PreliminaryObviousReject {
+		t.Fatalf("hard-blocked card requested detail: %+v", decision)
 	}
 }
 

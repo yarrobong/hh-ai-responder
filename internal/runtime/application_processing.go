@@ -46,6 +46,9 @@ func (r *HHAIResponder) ApplyVacancies() error {
 		trace.Type = "career_agent_vacancy"
 		trace.TerminalOutcome = outcome
 		trace.BlockedReason = firstNonEmpty(trace.BlockedReason, reason)
+		if r.careerAgentMode != "" && !trace.AIEvaluated && strings.TrimSpace(trace.AICallReason) == "" {
+			trace.AICallReason = "not called: terminal path " + outcome
+		}
 		if trace.CheapFilterResult == "REJECT" && len(trace.CheapFilterReasons) == 0 && strings.TrimSpace(reason) != "" {
 			trace.CheapFilterReasons = []string{reason}
 		}
@@ -94,7 +97,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 	}
 
 	for _, value := range vacancies {
-		trace := CareerAgentVacancyResult{VacancyID: value.ID, Title: firstNonEmpty(value.Title, value.Name), Company: value.Company.Name, URL: value.Links["desktop"], FoundByProfiles: append([]string(nil), r.vacancySearchSources[value.ID]...), CheapFilterResult: "PASS", DetailFetchStatus: "NOT_STARTED"}
+		trace := CareerAgentVacancyResult{VacancyID: value.ID, Title: firstNonEmpty(value.Title, value.Name), Company: value.Company.Name, URL: value.Links["desktop"], FoundByProfiles: append([]string(nil), r.vacancySearchSources[value.ID]...), SearchCardEvidence: careerAgentEvidence(value), CheapFilterResult: "PASS", DetailFetchStatus: "NOT_STARTED"}
 		summary.VacanciesProcessed++
 		if err := r.ctx.Err(); err != nil {
 			summary.Errors++
@@ -190,20 +193,89 @@ func (r *HHAIResponder) ApplyVacancies() error {
 		selectedResume := *resume
 		selectedCandidate, selectedResolver := baseCandidate, resolver
 		if r.careerAgentMode != "" {
+			preliminary := r.preliminaryRouteForVacancy(value)
+			trace.PreliminaryRoute, trace.PreliminaryReasonCode = preliminary.Status, preliminary.ReasonCode
+			trace.PreliminaryCandidates = append([]careeragent.ResumeScore(nil), preliminary.TopCandidates...)
+			r.writeEvent(careerAgentPreliminaryRouteEvent(preliminary))
+			switch preliminary.Status {
+			case careeragent.PreliminaryObviousReject:
+				recordStage(stageStats, "preliminary_routing", preliminary.ReasonCode, true, true)
+				summary.PreliminaryObviousRejects++
+				summary.DeterministicSkipped++
+				summary.Rejected++
+				trace.CheapFilterResult, trace.DetailFetchStatus = "REJECT", "NOT_REQUIRED"
+				reason := strings.Join(preliminary.Reasons, "; ")
+				r.skipVacancy(value, vacancyURL, reason, nil)
+				finish(trace, TerminalDeterministicReject, reason)
+				continue
+			case careeragent.PreliminaryNoResume:
+				recordStage(stageStats, "preliminary_routing", preliminary.ReasonCode, true, true)
+				summary.ReviewRequired++
+				summary.ReviewBeforeDetail++
+				reason := "no enabled resume is available"
+				trace.AICallReason = "not called: " + reason
+				r.skipVacancy(value, vacancyURL, reason, nil)
+				trace.FinalDecision = string(VacancyReviewRequired)
+				finish(trace, TerminalReviewRequired, reason)
+				continue
+			}
+			if preliminary.Status == careeragent.PreliminaryClearRoute {
+				summary.PreliminaryClearRoute++
+			} else {
+				summary.PreliminaryNeedsDetail++
+			}
+			recordStage(stageStats, "preliminary_routing", preliminary.ReasonCode, true, true)
+			needsDetail := !preliminary.DetailAvailable || preliminary.Status == careeragent.PreliminaryNeedsDetail
+			if needsDetail {
+				summary.DetailRequested++
+				recordStage(stageStats, "detail_fetch", "requested", true, false)
+				enriched, detailErr := r.fetchCareerAgentDetail(ctxOrBackground(r.ctx), value)
+				if detailErr != nil {
+					summary.DetailFailed++
+					recordStage(stageStats, "detail_fetch", "failed", false, true)
+					trace.DetailFetchStatus = "FAILED"
+					trace.AICallReason = "not called: vacancy detail fetch failed"
+					r.skipVacancy(value, vacancyURL, "vacancy detail fetch failed: "+detailErr.Error(), nil)
+					trace.FinalDecision = string(VacancyReviewRequired)
+					finish(trace, TerminalDetailFetchFailed, "vacancy detail fetch failed: "+detailErr.Error())
+					continue
+				}
+				value = enriched
+				vacancyURL = value.Links["desktop"]
+				trace.DetailEvidence = careerAgentEvidence(value)
+				summary.DetailSucceeded++
+				recordStage(stageStats, "detail_fetch", "succeeded", false, true)
+				trace.DetailFetchStatus = "OK"
+			} else {
+				trace.DetailFetchStatus = "AVAILABLE"
+				if r.careerAgentDetailCache == nil {
+					r.careerAgentDetailCache = map[int]Vacancy{}
+				}
+				r.careerAgentDetailCache[value.ID] = value
+				trace.DetailEvidence = careerAgentEvidence(value)
+			}
+
 			recordStage(stageStats, "resume_routing", "entered", true, false)
 			route := r.routeResumeForVacancy(value)
 			r.writeEvent(careerAgentRouteEvent(route))
 			trace.ResumeCandidates = append([]careeragent.ResumeScore(nil), route.AlternativeScores...)
 			trace.SelectedResume, trace.ResumeConfidence = route.SelectedResumeID, route.Confidence
+			trace.FinalRouteReasonCode = route.ReasonCode
 			if route.Status != careeragent.RouteSelected || route.Confidence == careeragent.ConfidenceLow || (r.careerAgentMode == "canary" && (route.Confidence != careeragent.ConfidenceHigh || !routeRequirementsConfirmed(route))) {
 				recordStage(stageStats, "resume_routing", strings.Join(route.Reasons, "; "), false, true)
 				summary.ReviewRequired++
+				summary.ReviewAfterDetail++
+				if route.ReasonCode == careeragent.RouteReasonAmbiguous {
+					summary.FinalAmbiguous++
+				}
+				trace.AICallReason = "not called: final resume route requires review (" + route.ReasonCode + ")"
 				r.skipVacancy(value, vacancyURL, "resume routing requires review: "+strings.Join(careerAgentReasonList(route), "; "), nil)
 				trace.FinalDecision = string(VacancyReviewRequired)
 				finish(trace, TerminalReviewRequired, "resume routing requires review: "+strings.Join(careerAgentReasonList(route), "; "))
 				continue
 			}
 			summary.ResumeRouted++
+			summary.FinalRouted++
 			recordStage(stageStats, "resume_routing", "selected", false, true)
 			hash := r.resumeHashForProfile(route.SelectedResumeID)
 			if hash == "" {
@@ -214,6 +286,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 				selectedResume, selectedCandidate, selectedResolver, activateErr = r.activateResume(hash)
 				if activateErr != nil {
 					summary.ReviewRequired++
+					summary.ReviewAfterDetail++
 					r.skipVacancy(value, vacancyURL, "selected resume facts could not be verified: "+activateErr.Error(), nil)
 					trace.FinalDecision = string(VacancyReviewRequired)
 					finish(trace, TerminalReviewRequired, "selected resume facts could not be verified: "+activateErr.Error())
@@ -222,28 +295,44 @@ func (r *HHAIResponder) ApplyVacancies() error {
 			}
 		}
 
-		recordStage(stageStats, "detail_fetch", "entered", true, false)
+		if r.careerAgentMode == "" {
+			recordStage(stageStats, "detail_fetch", "entered", true, false)
+		}
 		prep, prepErr := r.prepareApplication(value, selectedResume, selectedCandidate, selectedResolver, applicationCount)
 		if prepErr != nil {
-			recordStage(stageStats, "detail_fetch", "failed", false, true)
+			if r.careerAgentMode == "" {
+				recordStage(stageStats, "detail_fetch", "failed", false, true)
+			}
 			summary.Errors++
+			trace.AICallReason = "not called: application preparation failed"
 			r.skipVacancy(value, vacancyURL, prepErr.Error(), nil)
-			trace.DetailFetchStatus = "FAILED"
 			trace.FinalDecision = string(VacancyReviewRequired)
-			finish(trace, TerminalDetailFetchFailed, prepErr.Error())
+			if r.careerAgentMode == "" || (trace.DetailFetchStatus != "OK" && trace.DetailFetchStatus != "AVAILABLE") {
+				trace.DetailFetchStatus = "FAILED"
+				finish(trace, TerminalDetailFetchFailed, prepErr.Error())
+			} else {
+				trace.AICallReason = "called or prepared after detail; preparation failed"
+				finish(trace, TerminalError, prepErr.Error())
+			}
 			logger.Warn("Could not prepare vacancy %d: %v", value.ID, prepErr)
 			continue
 		}
-		trace.DetailFetchStatus = "OK"
-		recordStage(stageStats, "detail_fetch", "ok", false, true)
+		if r.careerAgentMode == "" {
+			trace.DetailFetchStatus = "OK"
+			recordStage(stageStats, "detail_fetch", "ok", false, true)
+		}
 		if prep.Analysis != nil {
 			recordStage(stageStats, "ai_evaluation", "entered", true, false)
 			summary.AIEvaluated++
 			trace.AIEvaluated = true
+			trace.AICallReason = "called: selected resume and provider vacancy detail available"
 			score := prep.Analysis.Score
 			trace.AIScore = &score
 			trace.AIReasons = append([]string(nil), prep.Analysis.Reasons...)
 			recordStage(stageStats, "ai_evaluation", "completed", false, true)
+		}
+		if r.careerAgentMode != "" && prep.Analysis == nil && trace.AICallReason == "" {
+			trace.AICallReason = "not called: deterministic preparation path ended before AI"
 		}
 		if prep.Applicability != nil {
 			preflight := applicationPreflight(value.ID, *prep.Applicability)
@@ -255,6 +344,9 @@ func (r *HHAIResponder) ApplyVacancies() error {
 		case applicationprocessing.OutcomeNeedsCandidateInput:
 			trace.FinalDecision = string(VacancyReviewRequired)
 			trace.SelectedResume = firstNonEmpty(trace.SelectedResume, selectedResume.Hash)
+			if prep.Analysis != nil && len(hardRequirementsUnknown(*prep.Analysis)) > 0 {
+				trace.FinalRouteReasonCode = careeragent.RouteReasonUnknownHard
+			}
 			summary.ReviewRequired++
 			r.writeApplicationReview(value, vacancyURL, prep, prep.Reason)
 			finish(trace, TerminalReviewRequired, prep.Reason)

@@ -90,6 +90,8 @@ type RunSummaryResult struct {
 	Matched                    int                    `json:"matched"`
 	Rejected                   int                    `json:"rejected"`
 	ReviewRequired             int                    `json:"review_required"`
+	ReviewBeforeDetail         int                    `json:"review_before_detail"`
+	ReviewAfterDetail          int                    `json:"review_after_detail"`
 	WouldApply                 int                    `json:"would_apply"`
 	Applied                    int                    `json:"applied"`
 	Errors                     int                    `json:"errors"`
@@ -104,6 +106,14 @@ type RunSummaryResult struct {
 	AccountingPass             bool                   `json:"accounting_pass"`
 	ShadowWriteCount           int                    `json:"shadow_write_count"`
 	ResumeRouted               int                    `json:"resume_routed,omitempty"`
+	PreliminaryObviousRejects  int                    `json:"preliminary_obvious_rejects,omitempty"`
+	PreliminaryClearRoute      int                    `json:"preliminary_clear_route,omitempty"`
+	PreliminaryNeedsDetail     int                    `json:"preliminary_needs_detail,omitempty"`
+	DetailRequested            int                    `json:"detail_requested,omitempty"`
+	DetailSucceeded            int                    `json:"detail_succeeded,omitempty"`
+	DetailFailed               int                    `json:"detail_failed,omitempty"`
+	FinalRouted                int                    `json:"final_routed,omitempty"`
+	FinalAmbiguous             int                    `json:"final_ambiguous,omitempty"`
 	StageStats                 map[string]StageStats  `json:"stage_stats,omitempty"`
 }
 
@@ -114,27 +124,34 @@ type StageStats struct {
 }
 
 type CareerAgentVacancyResult struct {
-	Type                 string                    `json:"type"`
-	VacancyID            int                       `json:"vacancy_id"`
-	Title                string                    `json:"title"`
-	Company              string                    `json:"company,omitempty"`
-	URL                  string                    `json:"url,omitempty"`
-	FoundByProfiles      []string                  `json:"found_by_profiles,omitempty"`
-	CheapFilterResult    string                    `json:"cheap_filter_result,omitempty"`
-	CheapFilterReasons   []string                  `json:"cheap_filter_reasons,omitempty"`
-	DetailFetchStatus    string                    `json:"detail_fetch_status,omitempty"`
-	AIEvaluated          bool                      `json:"ai_evaluated"`
-	AIScore              *int                      `json:"ai_score,omitempty"`
-	AIReasons            []string                  `json:"ai_reasons,omitempty"`
-	ResumeCandidates     []careeragent.ResumeScore `json:"resume_candidates,omitempty"`
-	SelectedResume       string                    `json:"selected_resume,omitempty"`
-	ResumeConfidence     string                    `json:"resume_confidence,omitempty"`
-	FinalDecision        string                    `json:"final_decision"`
-	WouldApply           bool                      `json:"would_apply"`
-	BlockedReason        string                    `json:"blocked_reason,omitempty"`
-	CoverLetterGenerated bool                      `json:"cover_letter_generated"`
-	TerminalOutcome      string                    `json:"terminal_outcome"`
-	ProcessedAt          time.Time                 `json:"processed_at"`
+	Type                  string                    `json:"type"`
+	VacancyID             int                       `json:"vacancy_id"`
+	Title                 string                    `json:"title"`
+	Company               string                    `json:"company,omitempty"`
+	URL                   string                    `json:"url,omitempty"`
+	FoundByProfiles       []string                  `json:"found_by_profiles,omitempty"`
+	SearchCardEvidence    []string                  `json:"search_card_evidence,omitempty"`
+	CheapFilterResult     string                    `json:"cheap_filter_result,omitempty"`
+	CheapFilterReasons    []string                  `json:"cheap_filter_reasons,omitempty"`
+	PreliminaryRoute      string                    `json:"preliminary_route,omitempty"`
+	PreliminaryReasonCode string                    `json:"preliminary_reason_code,omitempty"`
+	DetailFetchStatus     string                    `json:"detail_fetch_status,omitempty"`
+	DetailEvidence        []string                  `json:"detail_evidence,omitempty"`
+	AIEvaluated           bool                      `json:"ai_evaluated"`
+	AIScore               *int                      `json:"ai_score,omitempty"`
+	AIReasons             []string                  `json:"ai_reasons,omitempty"`
+	AICallReason          string                    `json:"ai_call_reason,omitempty"`
+	ResumeCandidates      []careeragent.ResumeScore `json:"resume_candidates,omitempty"`
+	PreliminaryCandidates []careeragent.ResumeScore `json:"preliminary_candidates,omitempty"`
+	SelectedResume        string                    `json:"selected_resume,omitempty"`
+	ResumeConfidence      string                    `json:"resume_confidence,omitempty"`
+	FinalRouteReasonCode  string                    `json:"final_route_reason_code,omitempty"`
+	FinalDecision         string                    `json:"final_decision"`
+	WouldApply            bool                      `json:"would_apply"`
+	BlockedReason         string                    `json:"blocked_reason,omitempty"`
+	CoverLetterGenerated  bool                      `json:"cover_letter_generated"`
+	TerminalOutcome       string                    `json:"terminal_outcome"`
+	ProcessedAt           time.Time                 `json:"processed_at"`
 }
 
 const (

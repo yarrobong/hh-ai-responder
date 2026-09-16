@@ -977,6 +977,18 @@ func TestDryRunVacancyAboveThresholdProducesPreviewWithoutWrite(t *testing.T) {
 		!strings.Contains(events.String(), "\"vacancies_seen\":1") {
 		t.Fatalf("dry-run summary is incomplete: %s", events.String())
 	}
+	var summary RunSummaryResult
+	for _, line := range strings.Split(strings.TrimSpace(events.String()), "\n") {
+		var kind struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal([]byte(line), &kind) == nil && kind.Type == "run_summary" {
+			_ = json.Unmarshal([]byte(line), &summary)
+		}
+	}
+	if summary.PreliminaryNeedsDetail != 1 || summary.DetailRequested != 1 || summary.DetailSucceeded != 1 || summary.FinalRouted != 1 || summary.ReviewBeforeDetail != 0 || summary.ReviewAfterDetail != 0 {
+		t.Fatalf("career-agent stage accounting is incomplete: %+v", summary)
+	}
 	if strings.Contains(events.String(), "responses_count") {
 		t.Fatalf("dry-run fabricated unknown response count: %s", events.String())
 	}

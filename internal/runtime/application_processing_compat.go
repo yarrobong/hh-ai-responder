@@ -19,6 +19,9 @@ func (r rootApplicationReader) ReadDescription(ctx context.Context, id int) (str
 	if r.responder == nil {
 		return "", errors.New("HH responder is not configured")
 	}
+	if cached, ok := r.responder.careerAgentDetailCache[id]; ok && cached.Description != "" {
+		return cached.Description, nil
+	}
 	return r.responder.getVacancyDescriptionContext(ctx, id)
 }
 
