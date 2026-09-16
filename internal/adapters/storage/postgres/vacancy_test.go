@@ -8,6 +8,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+
+	"hh-ai-responder/internal/vacancy"
 )
 
 type vacancyScannerFixture struct {
@@ -54,7 +56,7 @@ func TestScanPreservesResponseCountKnownAndJSONBValues(t *testing.T) {
 	createdAt := time.Date(2026, 9, 8, 12, 0, 0, 123456789, time.UTC)
 	updatedAt := createdAt.Add(time.Hour)
 	base := []interface{}{
-		42, "hh-42", "Example", "Python", "Integrate APIs", []byte(`["Python"]`), []byte(`["Django"]`),
+		42, "hh-42", "Example", "Python", "Integrate APIs", []byte(`["Python"]`), []byte(`["Django"]`), nil,
 		"150000", "RUB", "Екатеринбург", "remote", "full", "hh",
 		pgtype.Timestamptz{}, pgtype.Timestamptz{}, []byte(`{"area_id":"1002"}`),
 		pgtype.Timestamptz{Time: createdAt, Valid: true}, pgtype.Timestamptz{Time: updatedAt, Valid: true},
@@ -80,12 +82,20 @@ func TestScanPreservesResponseCountKnownAndJSONBValues(t *testing.T) {
 	}
 
 	unknownValues := append([]interface{}{}, base...)
-	unknownValues[38] = false
+	unknownValues[39] = false
 	unknown, err := scanPostgresVacancy(vacancyScannerFixture{values: unknownValues})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if unknown.TotalResponsesCountKnown || unknown.TotalResponsesCount != 0 {
 		t.Fatalf("unknown response count collapsed into known zero: %+v", unknown)
+	}
+}
+
+func TestMergeObservedVacancyPreservesDetailFieldsFromPartialSearch(t *testing.T) {
+	old := Vacancy{ExternalID: "42", Description: "full detail", Skills: []string{"Python"}, ProfessionalRoles: []string{"96"}, Area: vacancy.NamedObject{Name: "Екатеринбург"}, WorkFormat: "remote", WorkExperience: "between1And3", HHUpdatedAt: time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC)}
+	got := mergeObservedVacancy(old, Vacancy{ExternalID: "42", Title: "same title"})
+	if got.Description != old.Description || len(got.Skills) != 1 || len(got.ProfessionalRoles) != 1 || got.Area.Name != old.Area.Name || got.WorkFormat != old.WorkFormat || got.WorkExperience != old.WorkExperience || !got.HHUpdatedAt.Equal(old.HHUpdatedAt) {
+		t.Fatalf("partial observation downgraded rich state: %+v", got)
 	}
 }

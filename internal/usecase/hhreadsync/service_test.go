@@ -14,6 +14,30 @@ import (
 
 type vacancyMemory struct{ values []vacancy.Vacancy }
 
+type observingVacancyMemory struct {
+	*vacancyMemory
+	observed []struct {
+		value vacancy.Vacancy
+		at    time.Time
+	}
+}
+
+func (m *observingVacancyMemory) ObserveVacancy(_ context.Context, value vacancy.Vacancy, at time.Time) (vacancy.ObservationResult, error) {
+	m.observed = append(m.observed, struct {
+		value vacancy.Vacancy
+		at    time.Time
+	}{value: value, at: at})
+	if _, err := m.GetByExternalID(context.Background(), value.ExternalID); err == nil {
+		return vacancy.ObservationResult{}, nil
+	}
+	if _, err := m.Create(context.Background(), value); err != nil {
+		return vacancy.ObservationResult{}, err
+	}
+	return vacancy.ObservationResult{Created: true}, nil
+}
+
+var _ ports.VacancyObserver = (*observingVacancyMemory)(nil)
+
 func (m *vacancyMemory) Get(_ context.Context, id int) (vacancy.Vacancy, error) {
 	for _, value := range m.values {
 		if value.ID == id {
@@ -63,6 +87,16 @@ func (readSource) ReadApplications(context.Context, string) (hhread.ApplicationP
 }
 func (readSource) ReadConversations(context.Context, string) (hhread.ConversationPage, error) {
 	return hhread.ConversationPage{}, nil
+}
+
+type vacancyDetailReadSource struct {
+	readSource
+	detail hhread.VacancyRecord
+	err    error
+}
+
+func (s vacancyDetailReadSource) ReadVacancyDetail(context.Context, int) (hhread.VacancyRecord, error) {
+	return s.detail, s.err
 }
 
 type boundedConversationSource struct {
@@ -129,6 +163,46 @@ func TestServicePreservesResponseCountKnowledgeAndLocalVacancyState(t *testing.T
 	}
 	if store.values[0].TotalResponsesCountKnown || store.values[0].MatchResult == nil || store.values[0].ApplicationRecommendation == nil || len(store.values[0].ReconciliationEvidence) != 1 {
 		t.Fatalf("local merge or unknown response count lost: %+v", store.values[0])
+	}
+}
+
+func TestServicePassesOneBatchObservationTimestampToFreshnessObserver(t *testing.T) {
+	at := time.Date(2026, 9, 11, 10, 20, 30, 123456789, time.UTC)
+	store := &observingVacancyMemory{vacancyMemory: &vacancyMemory{}}
+	service := NewService(Dependencies{Vacancies: store})
+	result, err := service.ImportBatch(context.Background(), Batch{Vacancies: []hhread.VacancyRecord{{ID: 7, ExternalID: "hh-7", Title: "Support"}}}, ImportOptions{ObservedAt: at})
+	if err != nil || result.Created != 1 || len(store.observed) != 1 || !store.observed[0].at.Equal(at) {
+		t.Fatalf("result=%+v observations=%+v err=%v", result, store.observed, err)
+	}
+}
+
+func TestReadBatchEnrichesVacancyWithBoundedDetailRead(t *testing.T) {
+	source := vacancyDetailReadSource{
+		readSource: readSource{page: hhread.VacancyPage{Items: []hhread.VacancyRecord{{ID: 7, ExternalID: "7", Title: "Partial"}}}},
+		detail:     hhread.VacancyRecord{ID: 7, ExternalID: "7", Description: "full detail", KeySkills: []string{"Python"}, AreaName: "Екатеринбург", WorkFormat: "remote", Experience: "between1And3"},
+	}
+	batch, result, err := NewService(Dependencies{Source: source}).ReadBatch(context.Background(), TargetVacancies, ReadOptions{MaxVacancyDetails: 1})
+	if err != nil || len(batch.Vacancies) != 1 || result.DetailRequested != 1 || result.DetailSucceeded != 1 || result.DetailFieldsEnriched != 5 {
+		t.Fatalf("batch=%+v result=%+v err=%v", batch, result, err)
+	}
+	if batch.Vacancies[0].Description != "full detail" || batch.Vacancies[0].WorkFormat != "remote" || batch.Vacancies[0].AreaName != "Екатеринбург" {
+		t.Fatalf("detail was not merged: %+v", batch.Vacancies[0])
+	}
+}
+
+func TestReadBatchKeepsSearchResultWhenDetailReadFails(t *testing.T) {
+	source := vacancyDetailReadSource{readSource: readSource{page: hhread.VacancyPage{Items: []hhread.VacancyRecord{{ID: 7, ExternalID: "7", Title: "Partial"}}}}, err: errors.New("provider 503")}
+	batch, result, err := NewService(Dependencies{Source: source}).ReadBatch(context.Background(), TargetVacancies, ReadOptions{MaxVacancyDetails: 1})
+	if err != nil || len(batch.Vacancies) != 1 || result.DetailFailed != 1 || len(result.Warnings) != 1 {
+		t.Fatalf("batch=%+v result=%+v err=%v", batch, result, err)
+	}
+}
+
+func TestMergeVacancyPreservesRichFieldsFromPartialSearch(t *testing.T) {
+	old := vacancy.Vacancy{ExternalID: "7", Description: "full", Skills: []string{"Python"}, Area: vacancy.NamedObject{Name: "Екатеринбург"}, WorkFormat: "remote", WorkExperience: "between1And3", ProfessionalRoles: []string{"96"}}
+	got := MergeVacancy(old, vacancy.Vacancy{ExternalID: "7", Title: "Updated title"})
+	if got.Description != old.Description || len(got.Skills) != 1 || got.Area.Name != old.Area.Name || got.WorkFormat != old.WorkFormat || got.WorkExperience != old.WorkExperience || len(got.ProfessionalRoles) != 1 {
+		t.Fatalf("rich fields were downgraded: %+v", got)
 	}
 }
 

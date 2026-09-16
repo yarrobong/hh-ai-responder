@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 )
 
@@ -78,6 +79,30 @@ func (b *ConversationContextBuilder) BuildForReply(conversationID string) (Conve
 	if err != nil {
 		return ConversationContext{}, err
 	}
+	return b.buildForReply(c, timeline)
+}
+
+// BuildForReplySnapshot builds the same context as BuildForReply, but from a
+// caller-owned detached conversation snapshot. It is used by background work
+// that must not reacquire a mutable store or hold DashboardServer.mu while
+// resolving context and performing optional semantic retrieval.
+func (b *ConversationContextBuilder) BuildForReplySnapshot(c EmployerConversation, timeline []ConversationMessage) (ConversationContext, error) {
+	if b == nil || b.resolver == nil {
+		return ConversationContext{}, errors.New("conversation context requires a resolver")
+	}
+	copyConversation, err := cloneKnowledge(c)
+	if err != nil {
+		return ConversationContext{}, err
+	}
+	copyTimeline, err := cloneKnowledge(timeline)
+	if err != nil {
+		return ConversationContext{}, err
+	}
+	sort.SliceStable(copyTimeline, func(i, j int) bool { return copyTimeline[i].Timestamp.Before(copyTimeline[j].Timestamp) })
+	return b.buildForReply(copyConversation, copyTimeline)
+}
+
+func (b *ConversationContextBuilder) buildForReply(c EmployerConversation, timeline []ConversationMessage) (ConversationContext, error) {
 	// Storage retains original text. Refuse unsafe AI context without redacting
 	// or rewriting the original history or leaking a raw body in an error.
 	raw, err := json.Marshal(c)

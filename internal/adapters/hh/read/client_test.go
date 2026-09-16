@@ -81,6 +81,52 @@ func TestReadVacanciesPreservesResponseCountKnowledgeAndHeaders(t *testing.T) {
 	}
 }
 
+func TestReadVacancyDetailMapsRichProviderFields(t *testing.T) {
+	client, server := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/search/vacancy":
+			_, _ = w.Write([]byte(`prefix,"vacancies":[{"vacancyId":7,"name":"Partial","area":{"name":"Екатеринбург"},"links":{"desktop":"https://hh.example/vacancy/7"}}]}`))
+		case "/vacancy/7":
+			_, _ = w.Write([]byte(`{"redirectConfig":{"area":{"name":"Екатеринбург"},"workExperience":"between1And3","workFormats":[{"workFormatsElement":["REMOTE"]}],"publicationTime":"2026-09-09T10:00:00+03:00","lastChangeTime":{"$":"2026-09-10T11:00:00+03:00"},"company":{"id":12,"name":"Fixture"}},"vacancyView":{"description":"<p>Python integration</p>","keySkills":[{"name":"Python"},{"name":"REST API"}],"professional_roles":[{"id":"96","name":"Developer"}],"salary_range":{"from":60000,"currency":"RUR"},"links":{"desktop":"https://hh.example/vacancy/7"}}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	search, err := client.ReadVacancies(context.Background(), "")
+	if err != nil || len(search.Items) != 1 {
+		t.Fatalf("search=%+v err=%v", search, err)
+	}
+	detail, err := client.ReadVacancyDetail(context.Background(), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Description != "<p>Python integration</p>" || len(detail.KeySkills) != 2 || detail.WorkFormat != "remote" || detail.AreaName != "Екатеринбург" || detail.Experience != "between1And3" || detail.Salary != "60000" || detail.Currency != "RUR" || len(detail.ProfessionalRoles) != 1 || detail.PublishedAt.IsZero() || detail.UpdatedAt.IsZero() {
+		t.Fatalf("detail mapping lost provider fields: %+v", detail)
+	}
+}
+
+func TestReadVacancyDetailRejectsUnavailableAndMalformedResponses(t *testing.T) {
+	client, server := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/vacancy/404":
+			w.WriteHeader(http.StatusNotFound)
+		case "/vacancy/500":
+			w.WriteHeader(http.StatusInternalServerError)
+		case "/vacancy/7":
+			_, _ = w.Write([]byte(`{"redirectConfig":{}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	for _, id := range []int{404, 500, 7} {
+		if _, err := client.ReadVacancyDetail(context.Background(), id); err == nil {
+			t.Fatalf("vacancy %d unexpectedly parsed", id)
+		}
+	}
+}
+
 func TestReadApplicationsMapsObservedNegotiations(t *testing.T) {
 	client, server := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/applicant/negotiations" || r.URL.Query().Get("page") != "0" {

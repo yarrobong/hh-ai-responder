@@ -334,11 +334,11 @@ func vacancyRecord(value vacancy.Vacancy, description string) hhread.VacancyReco
 	return hhread.VacancyRecord{
 		ExternalID: value.ExternalID, ID: value.ID, Title: firstNonEmpty(value.Title, value.Name), Company: value.Company.Name,
 		Description: description, Requirements: append([]string(nil), value.Requirements...), KeySkills: append([]string(nil), value.Skills...),
-		Salary: value.Salary, Currency: firstNonEmpty(value.SalaryCurrency, value.Compensation.Currency), Location: firstNonEmpty(value.Location, value.Area.Name),
+		Salary: firstNonEmpty(value.Salary, vacancy.FormatCompensation(&value.Compensation)), Currency: firstNonEmpty(value.SalaryCurrency, value.Compensation.Currency), Location: value.Location, AreaName: value.Area.Name,
 		WorkFormat: value.WorkFormat, Experience: value.WorkExperience, EmploymentType: value.EmploymentType, Schedule: value.WorkSchedule,
 		URL: value.Links["desktop"], PublishedAt: value.PublishedAt, UpdatedAt: value.HHUpdatedAt,
 		TotalResponsesCount: value.TotalResponsesCount, TotalResponsesCountKnown: value.TotalResponsesCountKnown, Archived: value.Archived,
-		ResponseLetterRequired: value.ResponseLetterRequired, UserTestPresent: value.UserTestPresent, ResponseURL: value.ResponseURL,
+		ResponseLetterRequired: value.ResponseLetterRequired, UserTestPresent: value.UserTestPresent, ResponseURL: value.ResponseURL, ProfessionalRoles: append([]string(nil), value.ProfessionalRoles...),
 		Metadata: cloneStringMap(value.HHMetadata),
 	}
 }

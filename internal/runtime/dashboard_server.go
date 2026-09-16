@@ -23,6 +23,8 @@ import (
 	"hh-ai-responder/internal/usecase/inboxrefresh"
 	reliabilityinspection "hh-ai-responder/internal/usecase/reliabilityinspection"
 	reliabilitynotifications "hh-ai-responder/internal/usecase/reliabilitynotifications"
+	"hh-ai-responder/internal/vacancyranking"
+	"hh-ai-responder/internal/vacancyreview"
 )
 
 //go:embed web/index.html web/app.js web/styles.css
@@ -58,6 +60,8 @@ type DashboardDependencies struct {
 	AutoChatReconciliation    *autochatreconciliation.Service
 	ReliabilityNotifications  reliabilitynotifications.Sink
 	ControlledReconciliation  ControlledReconciler
+	RankedQueue               *vacancyranking.QueueService
+	VacancyReviews            vacancyreview.Store
 }
 
 type DashboardServer struct {
@@ -68,13 +72,23 @@ type DashboardServer struct {
 	viewCache         map[string]dashboardViewEntry
 	generation        uint64
 	DashboardDependencies
-	mu                       sync.Mutex // Stores require caller serialization, including reads.
+	// mu serializes refreshes and all mutable dashboard operations. Proven
+	// read projections acquire RLock after the refresh check below; their
+	// inputs are request-local values or independently synchronized stores.
+	mu                       sync.RWMutex
+	cacheMu                  sync.RWMutex
+	refreshMu                sync.Mutex
+	notificationMu           sync.Mutex
+	notificationMetaMu       sync.RWMutex
 	running                  atomic.Bool
 	statusMu                 sync.RWMutex
 	syncState                HHSyncState
 	syncResult               any
 	draftTargets             map[string]bool
 	draftMu                  sync.Mutex
+	draftWorkersActive       atomic.Int64
+	draftWorkersStarted      atomic.Int64
+	draftWorkersMaxActive    atomic.Int64
 	decisions                map[string]AIResponseDecision
 	lastNotificationStats    DailyNotificationStats
 	lastNotificationCreated  map[string]bool
@@ -133,13 +147,21 @@ func NewDashboardServer(d DashboardDependencies) (*DashboardServer, error) {
 	if err := s.refreshLocalFiles(); err != nil {
 		return nil, err
 	}
-	s.Sync.externalCommitMu = &s.mu
+	s.Sync.externalCommitMu = &dashboardTimedLocker{locker: &s.mu}
 	return s, nil
 }
 
 func dashboardJSON(w http.ResponseWriter, code int, value any) {
+	dashboardJSONTimed(w, code, value, "")
+}
+
+func dashboardJSONTimed(w http.ResponseWriter, code int, value any, operation string) {
+	start := time.Now()
 	// Marshal before headers, with the standard encoder's HTML escaping enabled.
 	raw, err := json.Marshal(value)
+	if operation != "" {
+		perfRecord(operation, start, len(raw))
+	}
 	if err != nil {
 		code, raw = 500, []byte(`{"error":"Cannot encode local data"}`)
 	}
@@ -245,11 +267,33 @@ func (s *DashboardServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if method == http.MethodGet && dashboardReadOnlyPath(p) {
+		if err := s.refreshForRead(); err != nil {
+			dashboardError(w, 500, "Cannot reload local data")
+			return
+		}
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		s.serveCachedAPI(w, r, p)
+		return
+	}
 
 	// Queue local store work instead of making the user guess when a previous
 	// operation will finish. HH network work is handled by the sync service's
 	// singleflight calls and global priority limiter.
+	mutexWaitStart := time.Now()
 	s.mu.Lock()
+	perfRecord("dashboard.mutex_wait", mutexWaitStart, 1)
+	if method == http.MethodGet && len(p) > 0 && p[0] == "notifications" {
+		perfRecord("dashboard.notifications.mutex_wait", mutexWaitStart, 1)
+	}
+	mutexHoldStart := time.Now()
+	defer perfRecord("dashboard.mutex_hold", mutexHoldStart, 1)
+	if method == http.MethodGet && len(p) > 0 && p[0] == "notifications" {
+		defer perfRecord("dashboard.notifications.mutex_hold", mutexHoldStart, 1)
+		handlerStart := time.Now()
+		defer perfRecord("dashboard.notifications.handler", handlerStart, 1)
+	}
 	defer s.mu.Unlock()
 	if err := s.refreshLocalFiles(); err != nil {
 		dashboardError(w, 500, "Cannot reload local data")
@@ -268,6 +312,13 @@ func (s *DashboardServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.writeAPI(w, r, p)
 }
 
+func dashboardReadOnlyPath(p []string) bool {
+	if len(p) == 1 {
+		return p[0] == "dashboard"
+	}
+	return len(p) == 2 && (p[0] == "inbox" && p[1] == "overview" || p[0] == "notifications" && p[1] == "overview")
+}
+
 func dashboardRouteMethod(p []string) string {
 	if len(p) == 1 {
 		switch p[0] {
@@ -279,6 +330,14 @@ func dashboardRouteMethod(p []string) string {
 	}
 	if len(p) == 2 {
 		switch p[0] {
+		case "notifications":
+			if p[1] == "overview" {
+				return "GET"
+			}
+		case "inbox":
+			if p[1] == "overview" {
+				return "GET"
+			}
 		case "health":
 			if p[1] == "deep" {
 				return "GET"
@@ -303,6 +362,12 @@ func dashboardRouteMethod(p []string) string {
 				return "POST"
 			}
 		}
+	}
+	if len(p) == 3 && p[0] == "vacancies" && p[1] != "" && p[2] == "ranking" {
+		return "GET"
+	}
+	if len(p) == 4 && p[0] == "vacancies" && p[1] != "" && p[2] == "review" && (p[3] == "seen" || p[3] == "interesting" || p[3] == "dismiss") {
+		return "POST"
 	}
 	if len(p) == 2 && p[0] == "reliability" && (p[1] == "application-attempts" || p[1] == "autochat-attempts") {
 		return "GET"
@@ -425,7 +490,15 @@ func (s *DashboardServer) readAPI(w http.ResponseWriter, r *http.Request, p []st
 		}
 		result, err = s.analytics(period, time.Now())
 	case "vacancies":
-		if len(p) == 2 {
+		if len(p) >= 2 && (p[1] == "ranked" || len(p) == 3 && p[2] == "ranking") && s.RankedQueue == nil {
+			dashboardError(w, 503, "Ranked vacancy queue unavailable")
+			return
+		}
+		if len(p) == 2 && p[1] == "ranked" {
+			result, err = s.rankedQueue(r.URL.Query())
+		} else if len(p) == 3 && p[2] == "ranking" {
+			result, err = s.rankedVacancyDetail(p[1])
+		} else if len(p) == 2 {
 			var id int
 			id, err = strconv.Atoi(p[1])
 			if err != nil {
@@ -468,7 +541,13 @@ func (s *DashboardServer) readAPI(w http.ResponseWriter, r *http.Request, p []st
 	case "diagnostics":
 		result = s.Lifecycle.List(r.URL.Query().Get("action_id"))
 	case "inbox":
-		result, err = s.inbox()
+		if len(p) == 2 && p[1] == "overview" {
+			handlerStart := time.Now()
+			defer perfRecord("dashboard.inbox_overview.handler", handlerStart, 1)
+			result, err = s.inboxOverview()
+		} else {
+			result, err = s.inbox()
+		}
 	case "today":
 		result, err = s.today()
 	case "knowledge":
@@ -477,8 +556,16 @@ func (s *DashboardServer) readAPI(w http.ResponseWriter, r *http.Request, p []st
 		knowledge := s.knowledgeSnapshot()
 		result = map[string]any{"skills": knowledge.Skills, "projects": knowledge.Projects, "achievements": knowledge.Achievements, "unknowns": knowledge.Unknowns, "proposals": knowledge.Proposals, "clarifications": clarifications}
 	case "notifications":
+		refreshStart := time.Now()
 		_ = s.refreshNotifications(time.Now().UTC())
-		result = s.activeNotifications()
+		perfRecord("dashboard.notifications.refresh", refreshStart, 1)
+		projectionStart := time.Now()
+		if len(p) == 2 && p[1] == "overview" {
+			result = s.activeNotificationsOverview()
+		} else {
+			result = s.activeNotifications()
+		}
+		perfRecord("dashboard.notifications.projection", projectionStart, 1)
 	case "quality":
 		result = BuildQualityReport(s.QualityLog.List())
 	case "reliability":
@@ -486,11 +573,23 @@ func (s *DashboardServer) readAPI(w http.ResponseWriter, r *http.Request, p []st
 		return
 	}
 	if err != nil {
+		if errors.Is(err, errRankedQueueUnavailable) {
+			dashboardError(w, 503, "Ranked vacancy queue unavailable")
+			return
+		}
+		if errors.Is(err, errInvalidRankedQueueFilter) {
+			dashboardError(w, 400, "Invalid ranked queue filters")
+			return
+		}
 		if errors.Is(err, ErrApplicationNotFound) || errors.Is(err, ErrConversationNotFound) || errors.Is(err, ErrVacancyNotFound) {
 			dashboardError(w, 404, "Record not found")
 		} else {
 			dashboardError(w, 500, "Cannot read local data")
 		}
+		return
+	}
+	if p[0] == "notifications" {
+		dashboardJSONTimed(w, 200, result, "dashboard.notifications.serialization")
 		return
 	}
 	dashboardJSON(w, 200, result)
@@ -532,6 +631,7 @@ func (s *DashboardServer) writeAPI(w http.ResponseWriter, r *http.Request, p []s
 		Accepted       *bool  `json:"accepted,omitempty"`
 		EditedText     string `json:"edited_text,omitempty"`
 		Reason         string `json:"reason_category,omitempty"`
+		ReviewReason   string `json:"reason,omitempty"`
 	}
 	answerAction := len(p) == 4 && p[3] == "answer"
 	draftEdit := len(p) == 3 && p[0] == "drafts" && p[2] == "edit"
@@ -574,6 +674,10 @@ func (s *DashboardServer) writeAPI(w http.ResponseWriter, r *http.Request, p []s
 		if !decodeDashboardBody(w, r, &body) {
 			return
 		}
+	} else if len(p) == 4 && p[0] == "vacancies" && p[2] == "review" {
+		if !decodeDashboardBody(w, r, &body) {
+			return
+		}
 	} else {
 		if !decodeDashboardBody(w, r, &struct{}{}) {
 			return
@@ -582,6 +686,12 @@ func (s *DashboardServer) writeAPI(w http.ResponseWriter, r *http.Request, p []s
 	var result any = map[string]bool{"ok": true}
 	var err error
 	switch p[0] {
+	case "vacancies":
+		if len(p) != 4 || p[2] != "review" {
+			dashboardError(w, 400, "Invalid vacancy review action")
+			return
+		}
+		result, err = s.recordVacancyReview(r.Context(), p[1], p[3], body.ReviewReason)
 	case "notifications":
 		if s.Notifications == nil {
 			err = errors.New("notifications are not configured")
@@ -983,6 +1093,8 @@ func (s *DashboardServer) healthFast() map[string]any {
 }
 
 func (s *DashboardServer) refreshNotifications(now time.Time) error {
+	s.notificationMu.Lock()
+	defer s.notificationMu.Unlock()
 	if s.Notifications == nil {
 		return nil
 	}
@@ -991,11 +1103,16 @@ func (s *DashboardServer) refreshNotifications(now time.Time) error {
 	for _, notification := range s.Notifications.List() {
 		beforeIDs[notification.ID] = true
 	}
-	s.lastNotificationCreated = map[string]bool{}
+	created := map[string]bool{}
 	before, _ := json.Marshal(s.Notifications.notifications)
-	if _, err := engine.Calculate(s.careerSnapshotLocal(), now); err != nil {
+	snapshotStart := time.Now()
+	snapshot := s.loadNotificationSnapshot()
+	perfRecord("dashboard.notifications.snapshot", snapshotStart, len(snapshot.Conversations))
+	calculationStart := time.Now()
+	if _, err := engine.Calculate(snapshot, now); err != nil {
 		return err
 	}
+	perfRecord("dashboard.notifications.calculate", calculationStart, len(s.Notifications.notifications))
 	s.lastNotificationStats = DailyNotificationStats{Created: engine.LastCreated, Resolved: engine.LastResolved, Deduplicated: engine.LastDeduplicated}
 	if s.WriteGateway != nil && s.WriteGateway.Audit != nil {
 		_ = s.WriteGateway.Audit.Reload()
@@ -1021,22 +1138,75 @@ func (s *DashboardServer) refreshNotifications(now time.Time) error {
 			if beforeIDs[notification.ID] {
 				continue
 			}
-			s.lastNotificationCreated[notification.RelatedConversationID] = true
+			created[notification.RelatedConversationID] = true
 			_ = s.QualityLog.Record(QualityLogEvent{ObservationKey: "notification_created/" + notification.ID, EventType: "notification_created", ConversationID: notification.RelatedConversationID, NotificationID: notification.ID, Timestamp: notification.CreatedAt, NotificationCreated: true, DecisionReasonCodes: []string{"notification_created"}})
 		}
 	}
 	if string(before) == string(after) {
+		s.notificationMetaMu.Lock()
+		s.lastNotificationCreated = created
+		s.notificationMetaMu.Unlock()
 		return nil
 	}
-	return s.Notifications.Save()
+	s.notificationMetaMu.Lock()
+	s.lastNotificationCreated = created
+	s.notificationMetaMu.Unlock()
+	if err := s.Notifications.Save(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *DashboardServer) activeNotifications() map[string]any {
+	return s.activeNotificationsWithLimit(0)
+}
+
+func (s *DashboardServer) activeNotificationsOverview() map[string]any {
+	return s.activeNotificationsWithLimit(notificationOverviewLimit)
+}
+
+func appendNotificationCreationMap(value map[string]bool) map[string]bool {
+	result := make(map[string]bool, len(value))
+	for key, created := range value {
+		result[key] = created
+	}
+	return result
+}
+
+type notificationOverviewItem struct {
+	ID                      string                    `json:"id"`
+	Type                    CandidateNotificationType `json:"type"`
+	RelatedConversationID   string                    `json:"related_conversation_id,omitempty"`
+	RelatedAttemptID        string                    `json:"related_attempt_id,omitempty"`
+	RelatedVacancyID        int                       `json:"related_vacancy_id,omitempty"`
+	RelatedTriggerMessageID string                    `json:"related_trigger_message_id,omitempty"`
+	RelatedActionType       string                    `json:"related_action_type,omitempty"`
+	DetailPath              string                    `json:"detail_path,omitempty"`
+	Message                 string                    `json:"message"`
+	CreatedAt               time.Time                 `json:"created_at"`
+	Priority                NotificationPriority      `json:"priority"`
+	Lifecycle               NotificationLifecycle     `json:"lifecycle"`
+}
+
+func projectNotificationOverview(value CandidateNotification) notificationOverviewItem {
+	return notificationOverviewItem{
+		ID: value.ID, Type: value.Type, RelatedConversationID: value.RelatedConversationID,
+		RelatedAttemptID: value.RelatedAttemptID, RelatedVacancyID: value.RelatedVacancyID,
+		RelatedTriggerMessageID: value.RelatedTriggerMessageID, RelatedActionType: value.RelatedActionType,
+		DetailPath: value.DetailPath, Message: value.Message, CreatedAt: value.CreatedAt,
+		Priority: value.Priority, Lifecycle: value.Lifecycle,
+	}
+}
+
+func (s *DashboardServer) activeNotificationsWithLimit(limit int) map[string]any {
+	s.notificationMu.Lock()
+	defer s.notificationMu.Unlock()
 	if s.Notifications == nil {
 		return map[string]any{"notifications": []CandidateNotification{}, "unread": 0}
 	}
 	now := time.Now().UTC()
 	active := []CandidateNotification{}
+	shownEvents := []QualityLogEvent{}
 	unread := 0
 	for _, notification := range s.Notifications.List() {
 		lifecycle := notification.Lifecycle
@@ -1049,11 +1219,16 @@ func (s *DashboardServer) activeNotifications() map[string]any {
 		if lifecycle == NotificationDismissed || lifecycle == NotificationResolved || notification.AcknowledgedAt != nil || lifecycle == NotificationSnoozed {
 			continue
 		}
-		_ = s.recordNotificationFeedback(notification, "shown")
+		shownEvents = append(shownEvents, notificationFeedbackEvent(notification, "shown"))
 		active = append(active, notification)
 		if lifecycle == NotificationNew {
 			unread++
 		}
+	}
+	if s.QualityLog != nil {
+		feedbackStart := time.Now()
+		_ = s.QualityLog.RecordMany(shownEvents)
+		perfRecord("dashboard.notifications.feedback", feedbackStart, len(shownEvents))
 	}
 	sort.SliceStable(active, func(i, j int) bool {
 		priority := map[NotificationPriority]int{NotificationPriorityCritical: 0, NotificationPriorityHigh: 1, NotificationPriorityMedium: 2, NotificationPriorityLow: 3}
@@ -1062,10 +1237,22 @@ func (s *DashboardServer) activeNotifications() map[string]any {
 		}
 		return active[i].CreatedAt.After(active[j].CreatedAt)
 	})
-	return map[string]any{"notifications": active, "unread": unread}
+	if limit <= 0 {
+		return map[string]any{"notifications": active, "unread": unread}
+	}
+	if len(active) > limit {
+		active = active[:limit]
+	}
+	projected := make([]notificationOverviewItem, 0, len(active))
+	for _, notification := range active {
+		projected = append(projected, projectNotificationOverview(notification))
+	}
+	return map[string]any{"notifications": projected, "unread": unread}
 }
 
 func (s *DashboardServer) notificationByID(id string) (CandidateNotification, error) {
+	s.notificationMu.Lock()
+	defer s.notificationMu.Unlock()
 	if s.Notifications == nil {
 		return CandidateNotification{}, errors.New("notifications are not configured")
 	}
@@ -1116,6 +1303,9 @@ func (s *DashboardServer) recordQualityObservations(inbox CandidateInbox, now ti
 		now = time.Now().UTC()
 	}
 	events := []QualityLogEvent{}
+	s.notificationMetaMu.RLock()
+	notificationCreated := appendNotificationCreationMap(s.lastNotificationCreated)
+	s.notificationMetaMu.RUnlock()
 	draftByConversation := map[string]bool{}
 	if drafts, err := s.Drafts.List(); err == nil {
 		for _, draft := range drafts {
@@ -1131,7 +1321,7 @@ func (s *DashboardServer) recordQualityObservations(inbox CandidateInbox, now ti
 			policy = conversationReplyRequirement(item.Conversation, latest, classifyEmployerMessage(latest.Text))
 		}
 		key := "classification/" + item.Conversation.ID + "/" + item.Workflow.LastEmployerMessageHash + "/" + string(item.Workflow.State)
-		events = append(events, QualityLogEvent{ObservationKey: key, EventType: "classification", ConversationID: item.Conversation.ID, EmployerMessageID: latestEmployerID(item.Conversation), Timestamp: now, WorkflowState: item.Workflow.State, ReplyPolicy: policy, CandidateContextStatus: qualityContextStatus(item), DraftGenerated: draftByConversation[item.Conversation.ID] || len(item.AIDrafts) > 0, NotificationCreated: s.lastNotificationCreated[item.Conversation.ID], FollowUpEligible: item.Workflow.FollowUp != nil && item.Workflow.FollowUp.Eligible, DecisionReasonCodes: workflowQualityReasonCodes(item.Workflow)})
+		events = append(events, QualityLogEvent{ObservationKey: key, EventType: "classification", ConversationID: item.Conversation.ID, EmployerMessageID: latestEmployerID(item.Conversation), Timestamp: now, WorkflowState: item.Workflow.State, ReplyPolicy: policy, CandidateContextStatus: qualityContextStatus(item), DraftGenerated: draftByConversation[item.Conversation.ID] || len(item.AIDrafts) > 0, NotificationCreated: notificationCreated[item.Conversation.ID], FollowUpEligible: item.Workflow.FollowUp != nil && item.Workflow.FollowUp.Eligible, DecisionReasonCodes: workflowQualityReasonCodes(item.Workflow)})
 	}
 	if drafts, err := s.Drafts.List(); err == nil {
 		for _, draft := range drafts {
@@ -1148,7 +1338,11 @@ func (s *DashboardServer) recordNotificationFeedback(notification CandidateNotif
 	if s == nil || s.QualityLog == nil {
 		return nil
 	}
-	return s.QualityLog.Record(QualityLogEvent{ObservationKey: "notification/" + action + "/" + notification.ID, EventType: "notification_feedback", ConversationID: notification.RelatedConversationID, NotificationID: notification.ID, Timestamp: time.Now().UTC(), NotificationEvent: action, DecisionReasonCodes: []string{"user_feedback"}})
+	return s.QualityLog.Record(notificationFeedbackEvent(notification, action))
+}
+
+func notificationFeedbackEvent(notification CandidateNotification, action string) QualityLogEvent {
+	return QualityLogEvent{ObservationKey: "notification/" + action + "/" + notification.ID, EventType: "notification_feedback", ConversationID: notification.RelatedConversationID, NotificationID: notification.ID, Timestamp: time.Now().UTC(), NotificationEvent: action, DecisionReasonCodes: []string{"user_feedback"}}
 }
 
 func (s *DashboardServer) recordClassificationFeedback(id string, correct bool, corrected string) error {

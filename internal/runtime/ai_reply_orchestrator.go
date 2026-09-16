@@ -5,6 +5,7 @@ import (
 	stdcontext "context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"sort"
@@ -434,6 +435,55 @@ func (o *AIReplyOrchestrator) PrepareEmployerReply(conversationID string) (AIRes
 	}
 	result, err := o.employerWorkflow.Prepare(o.aiContext(), employerreplyworkflow.Input{ConversationID: conversationID, Task: "ответ работодателю"})
 	return result.Decision, err
+}
+
+// PrepareEmployerReplyFromContext is the detached preparation half of the
+// Inbox worker flow. The caller owns the snapshot lifetime and persists the
+// decision only after revalidating that snapshot. It deliberately bypasses
+// employerWorkflow.Prepare because that method also persists drafts and
+// clarifications as part of the synchronous compatibility flow.
+func (o *AIReplyOrchestrator) PrepareEmployerReplyFromContext(ctx stdcontext.Context, value ConversationContext) (AIResponseDecision, error) {
+	if o == nil || o.replyService == nil {
+		return AIResponseDecision{}, errors.New("reply orchestrator conversation builder is not configured")
+	}
+	if ctx == nil {
+		return AIResponseDecision{}, errors.New("reply orchestrator context is nil")
+	}
+	return o.replyService.Prepare(ctx, employerReplyInput(value, "ответ работодателю"))
+}
+
+// PersistPreparedEmployerReply is the commit half of the detached Inbox
+// worker flow. It preserves the existing typed clarification and draft-store
+// adapters, but leaves their mutations to the caller's short commit section.
+func (o *AIReplyOrchestrator) PersistPreparedEmployerReply(ctx stdcontext.Context, value ConversationContext, messageHash, knowledgeHash, cacheKey string, decision AIResponseDecision) error {
+	if o == nil {
+		return errors.New("reply orchestrator is nil")
+	}
+	if ctx == nil {
+		return errors.New("reply orchestrator context is nil")
+	}
+	message := latestEmployerMessage(value.RecentMessages)
+	messageID, messageText := "", ""
+	if message != nil {
+		messageID, messageText = message.ID, message.Text
+	}
+	switch decision.Action {
+	case AIActionNeedCandidate:
+		return (rootEmployerClarificationWriter{store: o.clarifications, acquisition: o.acquisition}).Persist(ctx, employerreplyworkflow.ClarificationInput{
+			ConversationID: value.ConversationID, ApplicationID: value.Conversation.ApplicationID,
+			VacancyID: fmt.Sprint(value.VacancyContext.VacancyID), EmployerMessage: messageText,
+			EmployerMessageID: messageID, Reason: decision.Reason, Missing: append([]employerreply.MissingInformation{}, decision.MissingInformation...),
+		})
+	case AIActionDraftReply:
+		return (rootEmployerDraftStore{store: o.drafts, model: o.model}).Save(ctx, employerreplyworkflow.Draft{
+			ConversationID: value.ConversationID, ApplicationID: value.Conversation.ApplicationID,
+			InputMessageID: messageID, InputFingerprint: cacheKey, PromptVersion: dailyWorkflowPromptVersion,
+			EmployerMessageHash: messageHash, RelevantKnowledgeHash: knowledgeHash, Text: decision.Draft,
+			DecisionReason: decision.Reason, UsedFacts: append([]string{}, decision.UsedFacts...),
+		})
+	default:
+		return nil
+	}
 }
 
 func (o *AIReplyOrchestrator) AnalyzeConversation(conversationID string) (AIResponseDecision, error) {

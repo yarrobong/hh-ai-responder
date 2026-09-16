@@ -62,6 +62,25 @@ const statuses = Object.assign(Object.create(null), {
   recommended: ["Recommended for pilot", "green"],
   possible: ["Possible", "amber"],
   not_recommended: ["Not recommended", ""],
+  review_required: ["Нужна проверка", "amber"],
+  ineligible: ["Не подходит", "red"],
+  unavailable: ["Недоступна", ""],
+  compatible: ["Совместима", "green"],
+  stretch: ["Stretch / запас", "amber"],
+  unlikely: ["Слабое совпадение", ""],
+  hard_incompatible: ["Жёсткий конфликт", "red"],
+  high: ["Высокая уверенность", "green"],
+  medium: ["Средняя уверенность", "amber"],
+  low: ["Низкая уверенность", "amber"],
+  complete: ["Данные полнее", "blue"],
+  partial: ["Данные частичные", "amber"],
+  insufficient_evidence: ["Недостаточно данных", "amber"],
+  to_review: ["К просмотру", "blue"],
+  worth_another_look: ["Вернуться позже", "amber"],
+  stretch_manual_review: ["Stretch / ручная проверка", "amber"],
+  closed_excluded: ["Закрыта / исключена", ""],
+  unseen: ["Не просмотрена", "blue"],
+  interesting: ["Интересна", "green"],
 });
 const titles = {
   "/": "Overview",
@@ -193,9 +212,9 @@ function sendFailureMessage(error) {
   const reason = error?.reason || error?.message || "unknown send failure";
   return `${error?.message || "Send failed before HH request"}\nReason: ${reason}`;
 }
-async function updateNotificationIndicator() {
+async function updateNotificationIndicator(dashboardPromise) {
   try {
-    const d = await api("/dashboard");
+    const d = await dashboardPromise;
     const indicator = document.getElementById("inbox-count");
     if (indicator) indicator.textContent = d.metrics?.workflow_important || "";
   } catch {}
@@ -332,10 +351,12 @@ function workflowOverview(m) {
   ];
   return panel("Рабочая очередь", `<div class="workflow-overview">${values.map(([label, value, id]) => `<a href="/inbox#${id}" class="workflow-kpi"><strong>${esc(label)}</strong><b>${value}</b></a>`).join("")}</div>`);
 }
-async function overview() {
-  const d = await api("/dashboard");
-  const inbox = await api("/inbox");
-  const notifications = await api("/notifications");
+async function overview(dashboardPromise) {
+  const d = await dashboardPromise;
+  const [inbox, notifications] = await Promise.all([
+    api("/inbox/overview"),
+    api("/notifications/overview"),
+  ]);
   const m = d.metrics;
   document.getElementById("inbox-count").textContent = m.workflow_important || "";
   return (
@@ -403,24 +424,30 @@ async function applications() {
     panel(`${rows.length} записей`, applicationTable(rows))
   );
 }
+function queueReasons(reasons) {
+  return list(reasons).map((reason) => `<li>${esc(reason.evidence || reason.code)}</li>`).join("") || '<li class="muted">Нет сохранённых пояснений</li>';
+}
+function queueCard(item) {
+  const title = item.title || `Вакансия #${item.vacancy_id}`;
+  const reviewActions = item.application_state === "none" && item.rankable ? `<button data-action="vacancy-review" data-review="seen" data-id="${esc(item.vacancy_id)}">Отметить просмотренной</button><button data-action="vacancy-review" data-review="interesting" data-id="${esc(item.vacancy_id)}">Интересна</button><button data-action="vacancy-review" data-review="dismiss" data-id="${esc(item.vacancy_id)}">Скрыть</button>` : "";
+  return `<article class="question vacancy-queue-card"><div class="queue-card-heading"><div><h3>${link(item.detail_path, title)}</h3><p class="muted">${esc(item.company || "Компания не указана")}</p></div><div class="queue-badges">${badge(item.section)} ${badge(item.eligibility)} ${badge(item.fit_band)}</div></div><div class="queue-meta">${badge(item.confidence)} ${badge(item.analysis_state)} <span class="score">${esc(item.base_rank_score)}<span class="muted"> / 100 · базовый ранг</span></span></div><p class="muted">${esc([item.salary || "Зарплата неизвестна", item.location || "Локация неизвестна", item.work_format || "Формат неизвестен", item.freshness_label].join(" · "))}</p>${item.changed_since_review ? '<p class="callout compact">Обновлено после вашего решения</p>' : ""}<div class="queue-reasons"><div><strong>Почему посмотреть</strong><ul>${queueReasons(item.positive_reasons)}</ul></div><div><strong>Ограничения / неизвестно</strong><ul>${queueReasons([...list(item.concerns), ...list(item.unknowns)])}</ul>${item.unknown_count ? `<span class="muted">Ещё неизвестных полей: ${esc(item.unknown_count)}</span>` : ""}</div></div><div class="actions"><a class="secondary-link" href="${esc(item.detail_path)}">Открыть и проверить</a>${reviewActions}</div></article>`;
+}
+function rankedQueueFilters(q) {
+  return `<form class="filter-bar" data-filter><label>Поиск<input name="search" value="${esc(q.get("search") || "")}" placeholder="Название, компания, локация"></label>${select("section", "Раздел", [["", "Все активные"], ["to_review", "К просмотру"], ["worth_another_look", "Вернуться позже"], ["stretch_manual_review", "Stretch / ручная проверка"], ["closed_excluded", "Закрытые / исключённые"]], q.get("section") || "")} ${select("eligibility", "Состояние пригодности", [["", "Все"], ["eligible", "Известно подходит"], ["review_required", "Нужна проверка"], ["ineligible", "Не подходит"], ["unavailable", "Недоступна"]], q.get("eligibility") || "")}<button type="submit">Применить</button><a href="/vacancies">Сбросить</a></form>`;
+}
 async function vacancies() {
-  const rows = await api(`/vacancies${location.search}`);
-  return (
-    heading(
-      "Vacancies",
-      "Сохранённые вакансии и оценка соответствия вашим подтверждённым навыкам.",
-    ) +
-    filters("vacancies") +
-    panel(
-      `${rows.length} вакансий`,
-      rows.length
-        ? `<div class="table-wrap"><table><thead><tr><th>Вакансия / компания</th><th>Зарплата</th><th>Match</th><th>Recommendation</th><th>Опубликовано</th></tr></thead><tbody>${rows.map((v) => `<tr><td>${link(`/vacancies/${v.id}`, v.title || v.name)}<span class="muted">${esc(v.company?.name)}</span></td><td>${esc([v.salary, v.salary_currency].filter(Boolean).join(" ") || "Не указана")}</td><td>${score(v.match_result)}</td><td>${badge(v.application_recommendation?.decision || v.match_result?.recommendation?.decision)}</td><td>${date(v.published_at)}</td></tr>`).join("")}</tbody></table></div>`
-        : empty(
-            "Вакансии не найдены",
-            "Сохранённые реальные вакансии появятся после HH sync.",
-          ),
-    )
-  );
+  const q = new URLSearchParams(location.search);
+  const legacyPage = (rows) => heading("Vacancies", "Полный legacy-список для диагностики и доступа к исходным фильтрам.", link("/vacancies", "← Ranked queue")) + filters("vacancies") + panel(`${rows.length} вакансий`, rows.length ? `<div class="table-wrap"><table><thead><tr><th>Вакансия / компания</th><th>Зарплата</th><th>Match</th><th>Recommendation</th><th>Опубликовано</th></tr></thead><tbody>${rows.map((v) => `<tr><td>${link(`/vacancies/${v.id}`, v.title || v.name)}<span class="muted">${esc(v.company?.name)}</span></td><td>${esc([v.salary, v.salary_currency].filter(Boolean).join(" ") || "Не указана")}</td><td>${score(v.match_result)}</td><td>${badge(v.application_recommendation?.decision || v.match_result?.recommendation?.decision)}</td><td>${date(v.published_at)}</td></tr>`).join("")}</tbody></table></div>` : empty("Вакансии не найдены", "Сохранённые реальные вакансии появятся после HH sync."));
+  if (q.get("view") === "all") {
+    const rows = await api(`/vacancies${location.search}`);
+    return legacyPage(rows);
+  }
+  let data;
+  try { data = await api(`/vacancies/ranked${location.search}`); } catch (error) { if (error.status !== 503) throw error; const rows = await api(`/vacancies${location.search}`); return legacyPage(rows); }
+  const c = data.counts || {};
+  const tabs = `<div class="tabs"><a class="active" href="/vacancies">Ranked queue</a><a href="/vacancies?view=all">All vacancies</a></div>`;
+  const summary = panel("Снимок очереди", `<div class="panel-body"><div class="queue-summary">${pairs([["К просмотру", c.to_review || 0], ["Вернуться позже", c.worth_another_look || 0], ["Stretch / ручная проверка", c.stretch_manual_review || 0], ["Закрытые / исключённые", c.closed_excluded || 0], ["Нужна проверка", c.review_required || 0], ["Известно подходит", c.eligible || 0]])}</div><p class="muted">Рейтинг помогает выбрать следующий просмотр. Он не разрешает отклик и не заменяет свежую preflight-проверку.</p></div>`);
+  return heading("Vacancies", "Сначала — вакансии, которые стоит проверить сегодня. Неизвестные данные остаются видимыми.", link("/sync", "Обновить данные")) + tabs + summary + rankedQueueFilters(q) + panel(`${data.total || 0} в текущем фильтре · страница ${Math.floor((data.offset || 0) / (data.limit || 25)) + 1}`, list(data.items).length ? list(data.items).map(queueCard).join("") + (data.has_more ? `<div class="actions"><a class="secondary-link" href="/vacancies?offset=${esc(data.next_offset)}${q.get("section") ? `&section=${encodeURIComponent(q.get("section"))}` : ""}${q.get("search") ? `&search=${encodeURIComponent(q.get("search"))}` : ""}">Показать ещё</a></div>` : "") : empty("В этом разделе пока пусто", "Попробуйте другой раздел или выполните read-only HH sync."));
 }
 function matchPanel(m) {
   return panel(
@@ -452,15 +479,22 @@ function vacancyPanel(v) {
         ),
   );
 }
+function rankingDetailPanel(ranking, events) {
+  if (!ranking) return empty("Ranking недоступен", "Очередь требует canonical PostgreSQL candidate/review read model.", "");
+  const reasons = (title, values) => `<h3>${esc(title)}</h3>${list(values).length ? `<ul class="list">${values.map((r) => `<li>${esc(r.evidence || r.code)} <span class="muted">· ${esc(r.source || "")}</span></li>`).join("")}</ul>` : '<p class="muted">Нет</p>'}`;
+  return panel("Детерминированный результат очереди", `<div class="panel-body"><div class="queue-badges">${badge(ranking.eligibility)} ${badge(ranking.fit_band)} ${badge(ranking.confidence)} ${badge(ranking.analysis_state)}</div>${pairs([["Баллы очереди", `${ranking.base_rank_score} / 100`], ["Раздел", ranking.section], ["Состояние просмотра", ranking.review_state], ["Состояние отклика", ranking.application_state], ["Свежесть данных", ranking.freshness_label], ["Изменилось после решения", ranking.changed_since_review == null ? "Неизвестно" : ranking.changed_since_review ? "Да" : "Нет"]])}${reasons("Положительные сигналы", ranking.positive_reasons_all)}${reasons("Ограничения", ranking.concerns_all)}${reasons("Неизвестно", ranking.unknowns_all)}${reasons("Жёсткие причины", ranking.hard_reasons_all)}${events?.length ? `<h3>История решений</h3>${ul(events.map((e) => `${e.type} · ${date(e.occurred_at)}${e.reason ? ` · ${e.reason}` : ""}`))}` : ""}<div class="actions">${ranking.application_state === "none" && ranking.rankable ? `<button data-action="vacancy-review" data-review="seen" data-id="${esc(ranking.vacancy_id)}">Отметить просмотренной</button><button data-action="vacancy-review" data-review="interesting" data-id="${esc(ranking.vacancy_id)}">Интересна</button><button data-action="vacancy-review" data-review="dismiss" data-id="${esc(ranking.vacancy_id)}">Скрыть</button>` : ""}<p class="muted">Подготовка отклика остаётся отдельным существующим application flow: queue не отправляет отклики.</p></div></div>`);
+}
 async function vacancyDetail(id) {
   const v = await api(`/vacancies/${urlID(id)}`);
+  let detail = null;
+  try { detail = await api(`/vacancies/${urlID(id)}/ranking`); } catch (error) { if (error.status !== 503) throw error; }
   return (
     heading(
       v.title || v.name,
       v.company?.name || "Вакансия",
       safeHHLink(v.links?.desktop || v.links?.alternate),
     ) +
-    `<div class="detail-grid"><div>${vacancyPanel(v)}</div><div>${matchPanel(v.match_result)}</div></div>`
+    `<div class="detail-grid"><div>${vacancyPanel(v)}</div><div>${rankingDetailPanel(detail?.ranking, detail?.review_events)}${matchPanel(v.match_result)}</div></div>`
   );
 }
 function knowledgeContext(ctx, used = []) {
@@ -906,12 +940,17 @@ async function render(silent = false) {
     else a.removeAttribute("aria-current");
   });
   try {
-    // Serialize this local read with the page request. The backend protects
-    // local stores with a single-operation lock and returns 409 on overlap.
-    await Promise.all([updateNotificationIndicator(), updateGlobalSyncStatus()]);
+    // Share this render-cycle dashboard read between the global indicator and
+    // Overview. The backend protects local stores with a single-operation
+    // lock, so only independent Overview reads are launched concurrently.
+    const dashboardPromise = api("/dashboard");
+    await Promise.all([
+      updateNotificationIndicator(dashboardPromise),
+      updateGlobalSyncStatus(),
+    ]);
     let html;
     const parts = path.split("/").filter(Boolean);
-    if (path === "/") html = await overview();
+    if (path === "/") html = await overview(dashboardPromise);
     else if (path === "/today") html = await today();
     else if (path === "/applications") html = await applications();
     else if (path === "/vacancies") html = await vacancies();
@@ -1021,7 +1060,11 @@ document.addEventListener("click", async (event) => {
   const previous = button.textContent;
   button.textContent = "Выполняется…";
   try {
-    if (action === "follow-up-draft" || action === "follow-up-dismiss") {
+    if (action === "vacancy-review") {
+      const reason = button.dataset.review === "dismiss" ? window.prompt("Причина скрытия (необязательно)") || "" : "";
+      await api(`/vacancies/${urlID(id)}/review/${button.dataset.review}`, { reason });
+      toast(button.dataset.review === "interesting" ? "Вакансия отмечена интересной" : button.dataset.review === "dismiss" ? "Вакансия скрыта из активной очереди" : "Вакансия отмечена просмотренной");
+    } else if (action === "follow-up-draft" || action === "follow-up-dismiss") {
       const d = await api(`/follow-ups/${urlID(id)}/${action === "follow-up-draft" ? "draft" : "dismiss"}`, {});
       toast(action === "follow-up-dismiss" ? "Предложение скрыто локально" : (statuses[d.action]?.[0] || d.action));
       if (action === "follow-up-draft" && d.action === "draft_reply") { location.href = `/applications/${urlID(id)}`; }

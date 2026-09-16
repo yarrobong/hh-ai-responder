@@ -62,6 +62,11 @@ type SyncResult struct {
 	MetadataChecked         int                  `json:"metadata_checked,omitempty"`
 	HistoryReused           int                  `json:"history_reused,omitempty"`
 	DetailedChatsFetched    int                  `json:"detailed_chats_fetched,omitempty"`
+	DetailRequested         int                  `json:"detail_requested,omitempty"`
+	DetailSucceeded         int                  `json:"detail_succeeded,omitempty"`
+	DetailSkipped           int                  `json:"detail_skipped,omitempty"`
+	DetailFailed            int                  `json:"detail_failed,omitempty"`
+	DetailFieldsEnriched    int                  `json:"detail_fields_enriched,omitempty"`
 	SelectedConversationIDs []string             `json:"selected_conversation_ids,omitempty"`
 	ChangedConversationIDs  []string             `json:"changed_conversation_ids,omitempty"`
 	Errors                  []string             `json:"errors,omitempty"`
@@ -94,7 +99,7 @@ type HHReadSyncService struct {
 	calls            map[string]*hhSyncCall
 	lastProgress     HHSyncProgress
 	commitMu         sync.Mutex
-	externalCommitMu *sync.Mutex
+	externalCommitMu sync.Locker
 	stateMu          sync.Mutex
 	client           HHReadClient
 	vacancies        *VacancyStore
@@ -806,6 +811,14 @@ func (c *HHAIResponderReadClient) ReadVacancies(ctx context.Context, cursor stri
 		return HHVacancyPage{}, err
 	}
 	return adapter.ReadVacancies(ctx, cursor)
+}
+
+func (c *HHAIResponderReadClient) ReadVacancyDetail(ctx context.Context, id int) (HHVacancyRecord, error) {
+	adapter, err := c.readAdapter()
+	if err != nil {
+		return HHVacancyRecord{}, err
+	}
+	return adapter.ReadVacancyDetail(ctx, id)
 }
 
 func (c *HHAIResponderReadClient) ReadApplications(ctx context.Context, cursor string) (HHApplicationPage, error) {

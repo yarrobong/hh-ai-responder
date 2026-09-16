@@ -296,8 +296,12 @@ func (s *DashboardServer) today() (TodayView, error) {
 		notifications = s.Notifications.List()
 	}
 	view := buildTodayView(inbox, notifications, s.DailyRefreshState, time.Now().UTC())
+	shownEvents := []QualityLogEvent{}
 	for _, notification := range view.Notifications {
-		_ = s.recordNotificationFeedback(notification, "shown")
+		shownEvents = append(shownEvents, notificationFeedbackEvent(notification, "shown"))
+	}
+	if s.QualityLog != nil {
+		_ = s.QualityLog.RecordMany(shownEvents)
 	}
 	return view, nil
 }

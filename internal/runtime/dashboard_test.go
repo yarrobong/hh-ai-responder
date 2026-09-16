@@ -135,7 +135,7 @@ func TestDashboardServerStartsAndEmptyStores(t *testing.T) {
 	if response.StatusCode != 200 {
 		t.Fatalf("server status %d", response.StatusCode)
 	}
-	for _, path := range []string{"/", "/today", "/inbox", "/applications", "/applications/missing", "/vacancies", "/knowledge", "/knowledge/questions", "/analytics", "/sync", "/app.js", "/styles.css", "/api/dashboard", "/api/applications", "/api/vacancies", "/api/conversations", "/api/inbox", "/api/today", "/api/knowledge", "/api/knowledge/questions", "/api/pilot-candidates", "/api/analytics?period=today", "/api/sync/status"} {
+	for _, path := range []string{"/", "/today", "/inbox", "/applications", "/applications/missing", "/vacancies", "/knowledge", "/knowledge/questions", "/analytics", "/sync", "/app.js", "/styles.css", "/api/dashboard", "/api/applications", "/api/vacancies", "/api/conversations", "/api/inbox", "/api/inbox/overview", "/api/notifications", "/api/notifications/overview", "/api/today", "/api/knowledge", "/api/knowledge/questions", "/api/pilot-candidates", "/api/analytics?period=today", "/api/sync/status"} {
 		w := dashboardRequest(s, "GET", path, "")
 		if w.Code != 200 {
 			t.Errorf("empty %s -> %d: %s", path, w.Code, w.Body.String())
@@ -670,6 +670,55 @@ func TestDashboardAnalyticsDatesCohortsAndNoInventedReplies(t *testing.T) {
 		t.Fatal("7-day range is not inclusive calendar days")
 	}
 }
+
+func TestDashboardAnalyticsUsesBoundedReadGroupsAndStableOutput(t *testing.T) {
+	s := dashboardTestServer(t)
+	dashboardFixture(t, s)
+	now := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+
+	before := perfSnapshot()
+	first, err := s.analytics("all", now)
+	requireKnowledgeOK(t, err)
+	after := perfSnapshot()
+	for _, operation := range []string{
+		"dashboard.read.vacancies", "dashboard.read.applications", "dashboard.read.application_events",
+		"dashboard.read.conversations", "dashboard.read.drafts", "dashboard.read.clarifications",
+	} {
+		if delta := after[operation].Calls - before[operation].Calls; delta != 1 {
+			t.Fatalf("analytics performed %s read group %d times, want 1", operation, delta)
+		}
+	}
+
+	second, err := s.analytics("all", now)
+	requireKnowledgeOK(t, err)
+	firstJSON, err := json.Marshal(first)
+	requireKnowledgeOK(t, err)
+	secondJSON, err := json.Marshal(second)
+	requireKnowledgeOK(t, err)
+	if string(firstJSON) != string(secondJSON) {
+		t.Fatal("repeated analytics calls changed the logical dashboard response")
+	}
+
+	// The read groups stay constant as the application relation cardinality
+	// grows. This guards against reintroducing per-application repository work.
+	for range 25 {
+		_, err := s.Applications.CreateApplication(JobApplication{VacancyID: 999, VacancyTitle: "Unlinked", CompanyName: "Fixture"})
+		requireKnowledgeOK(t, err)
+	}
+	before = perfSnapshot()
+	_, err = s.analytics("all", now)
+	requireKnowledgeOK(t, err)
+	after = perfSnapshot()
+	for _, operation := range []string{
+		"dashboard.read.vacancies", "dashboard.read.applications", "dashboard.read.application_events",
+		"dashboard.read.conversations", "dashboard.read.drafts", "dashboard.read.clarifications",
+	} {
+		if delta := after[operation].Calls - before[operation].Calls; delta != 1 {
+			t.Fatalf("analytics read group %s scaled with applications: %d", operation, delta)
+		}
+	}
+}
+
 func TestDashboardConcurrentAccessAndBusyState(t *testing.T) {
 	s := dashboardTestServer(t)
 	var failures atomic.Int32

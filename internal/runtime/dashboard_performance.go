@@ -99,6 +99,10 @@ func (s *DashboardServer) localFiles() map[string]func() error {
 	return files
 }
 func (s *DashboardServer) refreshLocalFiles() error {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+	start := time.Now()
+	defer perfRecord("dashboard.refresh_local_files", start, 1)
 	if s.files == nil {
 		s.files = map[string]dashboardFile{}
 	}
@@ -108,7 +112,9 @@ func (s *DashboardServer) refreshLocalFiles() error {
 		if path == "" {
 			continue
 		}
+		statStart := time.Now()
 		info, err := os.Stat(path)
+		perfRecord("dashboard.refresh_local_files.stat", statStart, 1)
 		if err != nil && !os.IsNotExist(err) {
 			return err
 		}
@@ -129,22 +135,73 @@ func (s *DashboardServer) refreshLocalFiles() error {
 		}
 	}
 	if len(loads) > 0 {
+		s.cacheMu.Lock()
 		s.viewCache = nil
+		s.cacheMu.Unlock()
 		for _, load := range loads {
-			if err := load(); err != nil {
+			loadStart := time.Now()
+			err := load()
+			perfRecord("dashboard.refresh_local_files.reload", loadStart, 1)
+			if err != nil {
 				return err
 			}
 		}
+		s.cacheMu.Lock()
 		s.generation++
+		s.cacheMu.Unlock()
 	}
 	// Record the pre-load stamps. Replacement during loading is detected next time.
 	s.files = next
 	return nil
 }
-func (s *DashboardServer) invalidateViews() { s.viewCache = nil; s.generation++ }
+
+// refreshForRead keeps file-change detection separate from the shared read
+// lock. A reader only takes the exclusive dashboard lock when a reload is
+// actually needed; concurrent readers therefore do not queue behind another
+// reader's handler work.
+func (s *DashboardServer) refreshForRead() error {
+	if !s.localFilesNeedReload() {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.refreshLocalFiles()
+}
+
+func (s *DashboardServer) localFilesNeedReload() bool {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+	if s.files == nil {
+		return true
+	}
+	for path := range s.localFiles() {
+		if path == "" {
+			continue
+		}
+		info, err := os.Stat(path)
+		if err != nil && !os.IsNotExist(err) {
+			return true
+		}
+		prior := s.files[path]
+		if !prior.initialized || !sameDashboardFile(prior.info, info) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *DashboardServer) invalidateViews() {
+	s.cacheMu.Lock()
+	s.viewCache = nil
+	s.generation++
+	s.cacheMu.Unlock()
+}
 func (s *DashboardServer) serveCachedAPI(w http.ResponseWriter, r *http.Request, p []string) {
 	if p[0] == "generation" {
-		dashboardJSON(w, 200, map[string]any{"generation": fmt.Sprintf("%d:%d", s.generation, time.Now().Unix()/60)})
+		s.cacheMu.RLock()
+		generation := s.generation
+		s.cacheMu.RUnlock()
+		dashboardJSON(w, 200, map[string]any{"generation": fmt.Sprintf("%d:%d", generation, time.Now().Unix()/60)})
 		return
 	}
 	if p[0] == "performance" {
@@ -155,7 +212,10 @@ func (s *DashboardServer) serveCachedAPI(w http.ResponseWriter, r *http.Request,
 	// Action cards and diagnostics are always recomputed; permissions never come
 	// from this cache. The short TTL also handles time-dependent display fields.
 	cacheable := p[0] != "actions" && p[0] != "conversations" && p[0] != "diagnostics" && p[0] != "notifications" && p[0] != "health"
-	if entry, ok := s.viewCache[key]; cacheable && ok && time.Since(entry.at) < 15*time.Second {
+	s.cacheMu.RLock()
+	entry, ok := s.viewCache[key]
+	s.cacheMu.RUnlock()
+	if cacheable && ok && time.Since(entry.at) < 15*time.Second {
 		perfRecord("display.page_hit", time.Now(), 1)
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Write(entry.raw)
@@ -164,10 +224,12 @@ func (s *DashboardServer) serveCachedAPI(w http.ResponseWriter, r *http.Request,
 	capture := &dashboardResponseCapture{ResponseWriter: w}
 	s.readAPI(capture, r, p)
 	if cacheable && capture.status == http.StatusOK {
+		s.cacheMu.Lock()
 		if s.viewCache == nil || len(s.viewCache) > 64 {
 			s.viewCache = map[string]dashboardViewEntry{}
 		}
 		s.viewCache[key] = dashboardViewEntry{raw: capture.raw, at: time.Now()}
+		s.cacheMu.Unlock()
 	}
 }
 

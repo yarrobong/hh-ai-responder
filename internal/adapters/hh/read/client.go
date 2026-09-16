@@ -80,6 +80,7 @@ func NewClient(options Options) (*Client, error) {
 
 var _ hhreadports.HHReadSource = (*Client)(nil)
 var _ hhreadports.HHConversationReadSource = (*Client)(nil)
+var _ hhreadports.VacancyDetailSource = (*Client)(nil)
 
 func (c *Client) ReadVacancies(ctx context.Context, cursor string) (hhread.VacancyPage, error) {
 	if err := c.validate(); err != nil {
@@ -89,7 +90,7 @@ func (c *Client) ReadVacancies(ctx context.Context, cursor string) (hhread.Vacan
 	if err != nil {
 		return hhread.VacancyPage{}, err
 	}
-	return c.readVacancyPage(ctx, c.searchParams, page, true)
+	return c.readVacancyPage(ctx, c.searchParams, page, false)
 }
 
 // ReadVacanciesWithSearch is a typed compatibility operation for the legacy
@@ -141,6 +142,21 @@ func (c *Client) ReadVacancyDescription(ctx context.Context, id int) (string, er
 		return "", err
 	}
 	return c.readVacancyDescription(ctx, id)
+}
+
+// ReadVacancyDetail performs one GET-only read of the vacancy page and maps
+// the provider's richer vacancyView/redirectConfig projection. It is kept
+// separate from search pagination so the sync use case can apply a bounded,
+// evidence-driven enrichment policy.
+func (c *Client) ReadVacancyDetail(ctx context.Context, id int) (hhread.VacancyRecord, error) {
+	if err := c.validate(); err != nil {
+		return hhread.VacancyRecord{}, err
+	}
+	body, err := c.readVacancyDetailBody(ctx, id)
+	if err != nil {
+		return hhread.VacancyRecord{}, err
+	}
+	return parseVacancyDetail(body, c.baseURL, id)
 }
 
 func (c *Client) ReadApplications(ctx context.Context, cursor string) (hhread.ApplicationPage, error) {
@@ -274,7 +290,7 @@ func (c *Client) validate() error {
 }
 
 func (c *Client) readVacancyDescription(ctx context.Context, id int) (string, error) {
-	body, err := c.get(ctx, c.baseURL, fmt.Sprintf("/vacancy/%d", id), url.Values{"hhtmFrom": {"negotiation_list"}}, nil)
+	body, err := c.readVacancyDetailBody(ctx, id)
 	if err != nil {
 		return "", err
 	}
@@ -292,6 +308,13 @@ func (c *Client) readVacancyDescription(ctx context.Context, id int) (string, er
 		return "", fmt.Errorf("failed to parse vacancy: %w", err)
 	}
 	return html.UnescapeString(page.VacancyView.Description), nil
+}
+
+func (c *Client) readVacancyDetailBody(ctx context.Context, id int) ([]byte, error) {
+	if id <= 0 {
+		return nil, errors.New("HH vacancy ID is required")
+	}
+	return c.get(ctx, c.baseURL, fmt.Sprintf("/vacancy/%d", id), url.Values{"hhtmFrom": {"negotiation_list"}}, nil)
 }
 
 func (c *Client) get(ctx context.Context, origin *url.URL, path string, query url.Values, extra map[string]string) ([]byte, error) {

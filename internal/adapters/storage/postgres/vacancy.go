@@ -38,7 +38,7 @@ var (
 )
 
 const vacancyColumns = `
-	id, external_id, name, title, description, requirements, skills,
+	id, external_id, name, title, description, requirements, skills, professional_roles,
 	salary, salary_currency, location, work_format, employment_type, source,
 	published_at, hh_updated_at, hh_metadata, created_at, updated_at,
 	published_at_ns, hh_updated_at_ns, created_at_ns, updated_at_ns,
@@ -54,29 +54,29 @@ const vacancySelect = `SELECT ` + vacancyColumns + ` FROM vacancies`
 const vacancyInsert = `
 	INSERT INTO vacancies (` + vacancyColumns + `)
 	VALUES (
-		$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-		$14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25,
-		$26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37,
-		$38, $39, $40, $41, $42, $43
+		$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+		$15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26,
+		$27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38,
+		$39, $40, $41, $42, $43, $44
 	)`
 
 const vacancyUpdate = `
 	UPDATE vacancies SET
 		external_id = $2, name = $3, title = $4, description = $5,
-		requirements = $6, skills = $7, salary = $8, salary_currency = $9,
-		location = $10, work_format = $11, employment_type = $12, source = $13,
-		published_at = $14, hh_updated_at = $15, hh_metadata = $16,
-		created_at = $17, updated_at = $18, published_at_ns = $19,
-		hh_updated_at_ns = $20, created_at_ns = $21, updated_at_ns = $22,
-		work_schedule = $23, work_experience = $24, links = $25,
-		total_responses_count = $26, area_name = $27, company_id = $28,
-		company_name = $29, company_site_url = $30, compensation = $31,
-		creation_time = $32, last_change_time = $33, user_labels = $34,
-		response_letter_required = $35, user_test_present = $36,
-		archived = $37, response_url = $38,
-		total_responses_count_known = $39, match_result = $40,
-		application_recommendation = $41, data_completeness = $42,
-		reconciliation_evidence = $43
+		requirements = $6, skills = $7, professional_roles = $8, salary = $9, salary_currency = $10,
+		location = $11, work_format = $12, employment_type = $13, source = $14,
+		published_at = $15, hh_updated_at = $16, hh_metadata = $17,
+		created_at = $18, updated_at = $19, published_at_ns = $20,
+		hh_updated_at_ns = $21, created_at_ns = $22, updated_at_ns = $23,
+		work_schedule = $24, work_experience = $25, links = $26,
+		total_responses_count = $27, area_name = $28, company_id = $29,
+		company_name = $30, company_site_url = $31, compensation = $32,
+		creation_time = $33, last_change_time = $34, user_labels = $35,
+		response_letter_required = $36, user_test_present = $37,
+		archived = $38, response_url = $39,
+		total_responses_count_known = $40, match_result = $41,
+		application_recommendation = $42, data_completeness = $43,
+		reconciliation_evidence = $44
 	WHERE id = $1`
 
 // PostgresVacancyRepository is the PostgreSQL implementation of the existing
@@ -352,6 +352,10 @@ func vacancyArgs(value Vacancy) ([]interface{}, error) {
 	if err != nil {
 		return nil, fmt.Errorf("encode vacancy skills: %w", err)
 	}
+	professionalRoles, err := nullableJSON(value.ProfessionalRoles)
+	if err != nil {
+		return nil, fmt.Errorf("encode vacancy professional roles: %w", err)
+	}
 	hhMetadata, err := nullableJSON(value.HHMetadata)
 	if err != nil {
 		return nil, fmt.Errorf("encode vacancy HH metadata: %w", err)
@@ -386,7 +390,7 @@ func vacancyArgs(value Vacancy) ([]interface{}, error) {
 	}
 	return []interface{}{
 		value.ID, value.ExternalID, value.Name, value.Title, value.Description,
-		requirements, skills, value.Salary, value.SalaryCurrency, value.Location,
+		requirements, skills, professionalRoles, value.Salary, value.SalaryCurrency, value.Location,
 		value.WorkFormat, value.EmploymentType, value.Source,
 		nullableTime(value.PublishedAt), nullableTime(value.HHUpdatedAt), hhMetadata,
 		nullableTime(value.CreatedAt), nullableTime(value.UpdatedAt),
@@ -435,20 +439,20 @@ type postgresVacancyScanner interface {
 
 func scanPostgresVacancy(scanner postgresVacancyScanner) (Vacancy, error) {
 	var (
-		value                        Vacancy
-		requirements, skills         []byte
-		hhMetadata, links            []byte
-		compensation, lastChangeTime []byte
-		userLabels, matchResult      []byte
-		recommendation, evidence     []byte
-		publishedAt, hhUpdatedAt     pgtype.Timestamptz
-		createdAt, updatedAt         pgtype.Timestamptz
-		publishedAtNS, hhUpdatedAtNS pgtype.Int8
-		createdAtNS, updatedAtNS     pgtype.Int8
+		value                                   Vacancy
+		requirements, skills, professionalRoles []byte
+		hhMetadata, links                       []byte
+		compensation, lastChangeTime            []byte
+		userLabels, matchResult                 []byte
+		recommendation, evidence                []byte
+		publishedAt, hhUpdatedAt                pgtype.Timestamptz
+		createdAt, updatedAt                    pgtype.Timestamptz
+		publishedAtNS, hhUpdatedAtNS            pgtype.Int8
+		createdAtNS, updatedAtNS                pgtype.Int8
 	)
 	err := scanner.Scan(
 		&value.ID, &value.ExternalID, &value.Name, &value.Title, &value.Description,
-		&requirements, &skills, &value.Salary, &value.SalaryCurrency, &value.Location,
+		&requirements, &skills, &professionalRoles, &value.Salary, &value.SalaryCurrency, &value.Location,
 		&value.WorkFormat, &value.EmploymentType, &value.Source,
 		&publishedAt, &hhUpdatedAt, &hhMetadata, &createdAt, &updatedAt,
 		&publishedAtNS, &hhUpdatedAtNS, &createdAtNS, &updatedAtNS,
@@ -476,6 +480,7 @@ func scanPostgresVacancy(scanner postgresVacancyScanner) (Vacancy, error) {
 	}{
 		{requirements, &value.Requirements, "requirements"},
 		{skills, &value.Skills, "skills"},
+		{professionalRoles, &value.ProfessionalRoles, "professional roles"},
 		{hhMetadata, &value.HHMetadata, "HH metadata"},
 		{links, &value.Links, "links"},
 		{compensation, &value.Compensation, "compensation"},

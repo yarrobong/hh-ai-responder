@@ -10,6 +10,8 @@ import (
 	hhreadport "hh-ai-responder/internal/ports/hhread"
 )
 
+const defaultMaxVacancyDetails = 50
+
 // Service is one-run HH synchronization policy. It is safe to construct per
 // execution; process locks, recurrence, and durable cursor files belong to
 // the caller.
@@ -39,6 +41,9 @@ func (s *Service) ReadBatch(ctx context.Context, target Target, options ReadOpti
 	if options.MaxConversations < 0 {
 		return batch, result, errors.New("HH conversation limit must be non-negative")
 	}
+	if options.MaxVacancyDetails < 0 {
+		return batch, result, errors.New("HH vacancy detail limit must be non-negative")
+	}
 
 	cursor := ""
 	seen := map[string]bool{}
@@ -57,6 +62,9 @@ func (s *Service) ReadBatch(ctx context.Context, target Target, options ReadOpti
 		case TargetVacancies:
 			var page hhread.VacancyPage
 			page, readErr = s.deps.Source.ReadVacancies(ctx, cursor)
+			if readErr == nil {
+				page.Items = s.enrichVacancyDetails(ctx, page.Items, options, &result)
+			}
 			batch.Vacancies = append(batch.Vacancies, page.Items...)
 			result.Fetched += len(page.Items)
 			next = page.NextCursor
@@ -153,6 +161,11 @@ func (s *Service) Sync(ctx context.Context, target Target) (result Result, err e
 	result.MetadataChecked = readResult.MetadataChecked
 	result.HistoryReused = readResult.HistoryReused
 	result.DetailedChatsFetched = readResult.DetailedChatsFetched
+	result.DetailRequested = readResult.DetailRequested
+	result.DetailSucceeded = readResult.DetailSucceeded
+	result.DetailSkipped = readResult.DetailSkipped
+	result.DetailFailed = readResult.DetailFailed
+	result.DetailFieldsEnriched = readResult.DetailFieldsEnriched
 	result.Errors = append(result.Errors, readResult.Errors...)
 	result.Warnings = append(result.Warnings, readResult.Warnings...)
 	if err != nil {
@@ -181,6 +194,12 @@ func (s *Service) ImportBatch(ctx context.Context, batch Batch, options ImportOp
 		return Result{Errors: []string{"HH sync context is nil"}}, errors.New("HH sync context is nil")
 	}
 	result := Result{}
+	observedAt := options.ObservedAt
+	if observedAt.IsZero() {
+		observedAt = time.Now().UTC()
+	} else {
+		observedAt = observedAt.UTC()
+	}
 	apply := func(outcome outcome, err error) error {
 		if err != nil {
 			result.Skipped++
@@ -209,7 +228,7 @@ func (s *Service) ImportBatch(ctx context.Context, batch Batch, options ImportOp
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
-		if err := apply(s.importVacancy(ctx, record)); err != nil {
+		if err := apply(s.importVacancy(ctx, record, observedAt)); err != nil {
 			return result, err
 		}
 	}

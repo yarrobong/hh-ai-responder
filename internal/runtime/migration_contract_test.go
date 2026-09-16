@@ -59,3 +59,68 @@ func TestSemanticContractMigrationIsDimensionFlexibleAndRollbackSafe(t *testing.
 		t.Fatalf("down migration is not an explicit safe refusal: %s", downText)
 	}
 }
+
+func TestVacancyFreshnessReviewMigrationIsAdditiveAndConstrained(t *testing.T) {
+	up, err := os.ReadFile("migrations/000011_vacancy_freshness_review.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	down, err := os.ReadFile("migrations/000011_vacancy_freshness_review.down.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	upText, downText := string(up), string(down)
+	for _, required := range []string{
+		"vacancy_freshness", "vacancy_review_states", "vacancy_review_events",
+		"ON DELETE RESTRICT", "source_fingerprint", "material_fingerprint",
+		"fingerprint_version", "event_type IN ('seen', 'interesting', 'dismissed', 'prepared', 'applied')",
+	} {
+		if !strings.Contains(upText, required) {
+			t.Fatalf("P1.1 migration missing %q", required)
+		}
+	}
+	if strings.Contains(strings.ToUpper(upText), "UPDATE VACANCIES") || strings.Contains(strings.ToUpper(upText), "DELETE FROM VACANCIES") {
+		t.Fatal("P1.1 migration rewrites or deletes legacy vacancies")
+	}
+	for _, table := range []string{"vacancy_review_events", "vacancy_review_states", "vacancy_freshness"} {
+		if !strings.Contains(downText, "DROP TABLE IF EXISTS "+table) {
+			t.Fatalf("P1.1 down migration does not remove %s", table)
+		}
+	}
+}
+
+func TestVacancyProviderEnrichmentMigrationIsAdditiveAndPaired(t *testing.T) {
+	up, err := os.ReadFile("migrations/000012_vacancy_provider_enrichment.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	down, err := os.ReadFile("migrations/000012_vacancy_provider_enrichment.down.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(up), "ADD COLUMN IF NOT EXISTS professional_roles JSONB") || !strings.Contains(string(down), "DROP COLUMN IF EXISTS professional_roles") {
+		t.Fatalf("provider enrichment migration is not additive/paired")
+	}
+}
+
+func TestVacancyFingerprintVersionMigrationIsAdditiveAndPaired(t *testing.T) {
+	up, err := os.ReadFile("migrations/000013_vacancy_fingerprint_versions.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	down, err := os.ReadFile("migrations/000013_vacancy_fingerprint_versions.down.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	upText, downText := string(up), string(down)
+	for _, required := range []string{"decision_fingerprint_version INTEGER NOT NULL DEFAULT 1", "fingerprint_version INTEGER NOT NULL DEFAULT 1", "decision_fingerprint_version > 0", "fingerprint_version > 0"} {
+		if !strings.Contains(upText, required) {
+			t.Fatalf("fingerprint migration missing %q", required)
+		}
+	}
+	for _, required := range []string{"DROP COLUMN IF EXISTS fingerprint_version", "DROP COLUMN IF EXISTS decision_fingerprint_version"} {
+		if !strings.Contains(downText, required) {
+			t.Fatalf("fingerprint migration rollback missing %q", required)
+		}
+	}
+}

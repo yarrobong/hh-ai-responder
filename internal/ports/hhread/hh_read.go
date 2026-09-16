@@ -16,6 +16,13 @@ type HHReadSource interface {
 	ReadConversations(context.Context, string) (hhread.ConversationPage, error)
 }
 
+// VacancyDetailSource is an optional, read-only capability. Search results
+// are intentionally allowed to be partial; callers decide which records need
+// a bounded detail GET before importing them.
+type VacancyDetailSource interface {
+	ReadVacancyDetail(context.Context, int) (hhread.VacancyRecord, error)
+}
+
 // BoundedConversationReadSource is the optional read capability used by an
 // operator-bounded Career run. Implementations must apply the limit before
 // expanding conversation details; zero means the regular unbounded read.

@@ -32,6 +32,14 @@ const conversationColumns = `
 	waiting_since_ns, last_activity_at, last_activity_at_ns, follow_up_state,
 	raw_status, hh_metadata`
 
+const overviewConversationColumns = `
+	id, external_id, vacancy_id, application_id, company_name, vacancy_title,
+	status, created_at, updated_at, created_at_ns, updated_at_ns, hh_updated_at,
+	hh_updated_at_ns, last_employer_message_at, last_employer_message_at_ns,
+	last_candidate_message_at, last_candidate_message_at_ns, summary, next_action,
+	waiting_since, waiting_since_ns, last_activity_at, last_activity_at_ns,
+	follow_up_state, raw_status, hh_metadata`
+
 const conversationInsert = `INSERT INTO conversations (` + conversationColumns + `)
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)`
 
@@ -114,6 +122,114 @@ func (r *ConversationRepository) List(ctx context.Context) ([]conversation.Emplo
 	return r.listConversations(ctx, "TRUE")
 }
 
+// ListForDashboard is a dashboard-specific projection read. It preserves the
+// complete conversation values but loads all message histories in one bulk
+// query, avoiding the general repository's intentionally compatible per-row
+// loading shape. General List semantics remain unchanged for other callers.
+func (r *ConversationRepository) ListForDashboard(ctx context.Context) ([]conversation.EmployerConversation, error) {
+	ctx = postgresContext(ctx)
+	if err := repositoryContextErr(ctx); err != nil {
+		return nil, err
+	}
+	if err := r.requireDB(); err != nil {
+		return nil, err
+	}
+	result, err := r.listConversationParents(ctx, "TRUE")
+	if err != nil {
+		return nil, err
+	}
+	if len(result) == 0 {
+		return result, nil
+	}
+
+	byID := make(map[string]int, len(result))
+	for i := range result {
+		byID[result[i].ID] = i
+		result[i].Messages = []conversation.Message{}
+	}
+	rows, err := r.db.Query(ctx, `SELECT conversation_id,id,external_id,timestamp,timestamp_ns,sender,direction,source,text,system_event,content_unavailable,metadata FROM conversation_messages ORDER BY conversation_id,timestamp,sequence`)
+	if err != nil {
+		return nil, fmt.Errorf("list dashboard conversation messages: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var conversationID string
+		message, scanErr := scanPostgresMessage(rows, &conversationID)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		if index, ok := byID[conversationID]; ok {
+			result[index].Messages = append(result[index].Messages, message)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate dashboard conversation messages: %w", err)
+	}
+	return result, nil
+}
+
+// ListForOverview is the bounded Overview read model. It deliberately omits
+// vacancy bodies and full message histories. The latest meaningful message is
+// selected with the same timestamp/sequence ordering as List, so workflow
+// classification and global ordering can still be performed authoritatively
+// in the runtime layer.
+func (r *ConversationRepository) ListForOverview(ctx context.Context) ([]conversation.EmployerConversation, error) {
+	ctx = postgresContext(ctx)
+	if err := repositoryContextErr(ctx); err != nil {
+		return nil, err
+	}
+	if err := r.requireDB(); err != nil {
+		return nil, err
+	}
+	rows, err := r.db.Query(ctx, `SELECT `+overviewConversationColumns+` FROM conversations WHERE TRUE ORDER BY created_at,id`)
+	if err != nil {
+		return nil, fmt.Errorf("list overview conversations: %w", err)
+	}
+	defer rows.Close()
+	result := make([]conversation.EmployerConversation, 0)
+	byID := make(map[string]int)
+	for rows.Next() {
+		value, scanErr := scanPostgresOverviewConversation(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		value.Messages = []conversation.Message{}
+		byID[value.ID] = len(result)
+		result = append(result, value)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate overview conversations: %w", err)
+	}
+	if len(result) == 0 {
+		return result, nil
+	}
+
+	messageRows, err := r.db.Query(ctx, `SELECT DISTINCT ON (conversation_id) conversation_id,id,external_id,timestamp,timestamp_ns,sender,direction,source,text,system_event,content_unavailable,metadata
+		FROM conversation_messages
+		WHERE NOT system_event AND source <> 'ai_draft' AND sender IN ('candidate','employer')
+		ORDER BY conversation_id,timestamp DESC,sequence DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("list overview conversation messages: %w", err)
+	}
+	defer messageRows.Close()
+	seen := make(map[string]bool, len(result))
+	for messageRows.Next() {
+		var conversationID string
+		message, scanErr := scanPostgresMessage(messageRows, &conversationID)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		if index, ok := byID[conversationID]; ok && !seen[conversationID] {
+			result[index].Messages = []conversation.Message{message}
+			seen[conversationID] = true
+		}
+	}
+	if err := messageRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate overview conversation messages: %w", err)
+	}
+	return result, nil
+}
+
 func (r *ConversationRepository) listConversations(ctx context.Context, predicate string, args ...interface{}) ([]conversation.EmployerConversation, error) {
 	ctx = postgresContext(ctx)
 	if err := repositoryContextErr(ctx); err != nil {
@@ -122,6 +238,21 @@ func (r *ConversationRepository) listConversations(ctx context.Context, predicat
 	if err := r.requireDB(); err != nil {
 		return nil, err
 	}
+	result, err := r.listConversationParents(ctx, predicate, args...)
+	if err != nil {
+		return nil, err
+	}
+	for i := range result {
+		messages, msgErr := loadConversationMessages(ctx, r.db, result[i].ID)
+		if msgErr != nil {
+			return nil, msgErr
+		}
+		result[i].Messages = messages
+	}
+	return result, nil
+}
+
+func (r *ConversationRepository) listConversationParents(ctx context.Context, predicate string, args ...interface{}) ([]conversation.EmployerConversation, error) {
 	rows, err := r.db.Query(ctx, `SELECT `+conversationColumns+` FROM conversations WHERE `+predicate+` ORDER BY created_at,id`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list conversations: %w", err)
@@ -137,13 +268,6 @@ func (r *ConversationRepository) listConversations(ctx context.Context, predicat
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate conversations: %w", err)
-	}
-	for i := range result {
-		messages, msgErr := loadConversationMessages(ctx, r.db, result[i].ID)
-		if msgErr != nil {
-			return nil, msgErr
-		}
-		result[i].Messages = messages
 	}
 	return result, nil
 }
@@ -620,6 +744,40 @@ func scanPostgresConversation(scanner postgresRowScanner) (conversation.Employer
 	return c, nil
 }
 
+func scanPostgresOverviewConversation(scanner postgresRowScanner) (conversation.EmployerConversation, error) {
+	var c conversation.EmployerConversation
+	var created, updated, hhUpdated pgtype.Timestamptz
+	var cns, uns, hns pgtype.Int8
+	var lastEmployer, lastCandidate, lastActivity, waiting pgtype.Timestamptz
+	var lastEmployerNS, lastCandidateNS, lastActivityNS, waitingNS pgtype.Int8
+	var applicationID *string
+	var summary, meta []byte
+	err := scanner.Scan(&c.ID, &c.HHConversationID, &c.VacancyID, &applicationID, &c.CompanyName, &c.VacancyTitle, &c.Status, &created, &updated, &cns, &uns, &hhUpdated, &hns, &lastEmployer, &lastEmployerNS, &lastCandidate, &lastCandidateNS, &summary, &c.NextAction, &waiting, &waitingNS, &lastActivity, &lastActivityNS, &c.FollowUpState, &c.RawStatus, &meta)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return conversation.EmployerConversation{}, conversation.ErrConversationNotFound
+	}
+	if err != nil {
+		return conversation.EmployerConversation{}, fmt.Errorf("scan overview conversation: %w", err)
+	}
+	c.CreatedAt = postgresTimeExact(created, cns)
+	c.UpdatedAt = postgresTimeExact(updated, uns)
+	c.HHUpdatedAt = postgresTimeExact(hhUpdated, hns)
+	c.LastEmployerMessageAt = postgresConversationTimePtr(lastEmployer, lastEmployerNS)
+	c.LastCandidateMessageAt = postgresConversationTimePtr(lastCandidate, lastCandidateNS)
+	c.WaitingSince = postgresConversationTimePtr(waiting, waitingNS)
+	c.LastActivityAt = postgresConversationTimePtr(lastActivity, lastActivityNS)
+	if applicationID != nil {
+		c.ApplicationID = *applicationID
+	}
+	if err := decodeNullableJSON(summary, &c.Summary); err != nil {
+		return conversation.EmployerConversation{}, fmt.Errorf("decode overview conversation summary: %w", err)
+	}
+	if err := decodeNullableJSON(meta, &c.HHMetadata); err != nil {
+		return conversation.EmployerConversation{}, fmt.Errorf("decode overview conversation metadata: %w", err)
+	}
+	return c, nil
+}
+
 func loadConversationMessages(ctx context.Context, db postgresDBTX, id string) ([]conversation.Message, error) {
 	rows, err := db.Query(ctx, `SELECT id,external_id,timestamp,timestamp_ns,sender,direction,source,text,system_event,content_unavailable,metadata FROM conversation_messages WHERE conversation_id=$1 ORDER BY timestamp,sequence`, id)
 	if err != nil {
@@ -628,16 +786,9 @@ func loadConversationMessages(ctx context.Context, db postgresDBTX, id string) (
 	defer rows.Close()
 	result := make([]conversation.Message, 0)
 	for rows.Next() {
-		var m conversation.Message
-		var at pgtype.Timestamptz
-		var ns pgtype.Int8
-		var metadata []byte
-		if err := rows.Scan(&m.ID, &m.ExternalID, &at, &ns, &m.Sender, &m.Direction, &m.Source, &m.Text, &m.HHSystemEvent, &m.ContentUnavailable, &metadata); err != nil {
-			return nil, fmt.Errorf("scan conversation message: %w", err)
-		}
-		m.Timestamp = postgresTimeExact(at, ns)
-		if err := decodeNullableJSON(metadata, &m.Metadata); err != nil {
-			return nil, fmt.Errorf("decode conversation message metadata: %w", err)
+		m, scanErr := scanPostgresMessage(rows, nil)
+		if scanErr != nil {
+			return nil, scanErr
 		}
 		result = append(result, m)
 	}
@@ -645,6 +796,27 @@ func loadConversationMessages(ctx context.Context, db postgresDBTX, id string) (
 		return nil, fmt.Errorf("iterate conversation messages: %w", err)
 	}
 	return result, nil
+}
+
+func scanPostgresMessage(scanner postgresRowScanner, conversationID *string) (conversation.Message, error) {
+	var m conversation.Message
+	var at pgtype.Timestamptz
+	var ns pgtype.Int8
+	var metadata []byte
+	var err error
+	if conversationID != nil {
+		err = scanner.Scan(conversationID, &m.ID, &m.ExternalID, &at, &ns, &m.Sender, &m.Direction, &m.Source, &m.Text, &m.HHSystemEvent, &m.ContentUnavailable, &metadata)
+	} else {
+		err = scanner.Scan(&m.ID, &m.ExternalID, &at, &ns, &m.Sender, &m.Direction, &m.Source, &m.Text, &m.HHSystemEvent, &m.ContentUnavailable, &metadata)
+	}
+	if err != nil {
+		return conversation.Message{}, fmt.Errorf("scan conversation message: %w", err)
+	}
+	m.Timestamp = postgresTimeExact(at, ns)
+	if err := decodeNullableJSON(metadata, &m.Metadata); err != nil {
+		return conversation.Message{}, fmt.Errorf("decode conversation message metadata: %w", err)
+	}
+	return m, nil
 }
 
 func postgresConversationTimePtr(value pgtype.Timestamptz, nanos pgtype.Int8) *time.Time {

@@ -2,6 +2,10 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -27,6 +31,94 @@ func (s *DashboardServer) targetedRefreshRunning(hhID string) bool {
 	return s.asyncTargets["conversation:"+hhID]
 }
 
+type inboxDraftJob struct {
+	target            string
+	conversationID    string
+	conversation      EmployerConversation
+	resolver          *CandidateContextResolver
+	semanticRetriever CandidateSemanticRetriever
+	conversationToken string
+	knowledgeToken    string
+}
+
+// snapshotInboxDraft captures only detached inputs while DashboardServer.mu
+// is held. Context assembly and semantic retrieval happen later against these
+// copies, so neither local store reads nor external embedding work extend the
+// shared dashboard critical section.
+func (s *DashboardServer) snapshotInboxDraft(item CandidateInboxItem) (inboxDraftJob, error) {
+	conversation, err := s.Conversations.GetConversation(item.Conversation.ID)
+	if err != nil {
+		return inboxDraftJob{}, err
+	}
+	resolver, err := cloneCandidateContextResolver(s.Resolver)
+	if err != nil {
+		return inboxDraftJob{}, err
+	}
+	retriever := s.Orchestrator.semanticRetriever
+	if retriever == nil && s.Orchestrator.conversationBuilder != nil {
+		retriever = s.Orchestrator.conversationBuilder.semanticRetriever
+	}
+	return inboxDraftJob{
+		target:            "draft:" + conversation.ID,
+		conversationID:    conversation.ID,
+		conversation:      conversation,
+		resolver:          resolver,
+		semanticRetriever: retriever,
+		conversationToken: draftConversationToken(conversation),
+		knowledgeToken:    draftResolverToken(s.Resolver),
+	}, nil
+}
+
+func cloneCandidateContextResolver(value *CandidateContextResolver) (*CandidateContextResolver, error) {
+	if value == nil {
+		return nil, errors.New("candidate resolver is not configured")
+	}
+	if value.candidate != nil {
+		candidate, err := cloneKnowledge(*value.candidate)
+		if err != nil {
+			return nil, err
+		}
+		return NewCandidateContextResolverFromCandidate(candidate), nil
+	}
+	if value.kb != nil {
+		kb, err := cloneKnowledge(*value.kb)
+		if err != nil {
+			return nil, err
+		}
+		return NewCandidateContextResolver(&kb), nil
+	}
+	return NewCandidateContextResolver(nil), nil
+}
+
+func draftConversationToken(value EmployerConversation) string {
+	raw, _ := json.Marshal(value)
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+func draftResolverToken(value *CandidateContextResolver) string {
+	if value == nil {
+		return ""
+	}
+	var raw []byte
+	if value.candidate != nil {
+		raw, _ = json.Marshal(*value.candidate)
+	} else if value.kb != nil {
+		raw, _ = json.Marshal(*value.kb)
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+func latestDraftForFingerprint(values []AIDraft, conversationID, fingerprint string) bool {
+	for _, draft := range values {
+		if draft.Type == AIDraftEmployerReply && draft.Status == AIDraftGenerated && draft.ConversationID == conversationID && draft.InputFingerprint == fingerprint {
+			return true
+		}
+	}
+	return false
+}
+
 // scheduleInboxDrafts starts only local/AI work after the Inbox projection has
 // been returned. It never calls HH and the orchestrator's cache key prevents
 // regeneration when employer message, relevant knowledge and prompt version
@@ -37,20 +129,6 @@ func (s *DashboardServer) scheduleInboxDrafts(items []CandidateInboxItem) {
 	}
 	for _, item := range items {
 		if item.Workflow.State != WorkflowNeedsReply || item.LatestMessage == nil || item.LatestMessage.Sender != ConversationSenderEmployer {
-			continue
-		}
-		fresh := false
-		currentCacheKey := ""
-		if context, err := NewConversationContextBuilder(s.Conversations, s.Resolver).BuildForReply(item.Conversation.ID); err == nil {
-			_, _, currentCacheKey = employerDraftMetadata(s.Resolver, context)
-		}
-		for _, draft := range item.AIDrafts {
-			if draft.Type == AIDraftEmployerReply && draft.Status == AIDraftGenerated && draft.InputMessageID == item.LatestMessage.ID && currentCacheKey != "" && draft.InputFingerprint == currentCacheKey {
-				fresh = true
-				break
-			}
-		}
-		if fresh {
 			continue
 		}
 		target := "draft:" + item.Conversation.ID
@@ -64,41 +142,174 @@ func (s *DashboardServer) scheduleInboxDrafts(items []CandidateInboxItem) {
 		}
 		s.draftTargets[target] = true
 		s.statusMu.Unlock()
-		go s.generateInboxDraft(target, item.Conversation.ID)
+		job, err := s.snapshotInboxDraft(item)
+		if err != nil {
+			s.statusMu.Lock()
+			delete(s.draftTargets, target)
+			s.statusMu.Unlock()
+			continue
+		}
+		go s.generateInboxDraft(job)
 	}
 }
 
-func (s *DashboardServer) generateInboxDraft(target, conversationID string) {
+// scheduleInboxDraftsDeferred preserves Overview's existing draft scheduling
+// behavior without making the HTTP read wait for complete-history snapshots.
+// The snapshot still takes DashboardServer.mu before reading local state, and
+// generateInboxDraft keeps the existing freshness and deduplication checks.
+func (s *DashboardServer) scheduleInboxDraftsDeferred(items []CandidateInboxItem) {
+	if s == nil || s.backgroundContext == nil || s.Orchestrator == nil {
+		return
+	}
+	for _, item := range items {
+		if item.Workflow.State != WorkflowNeedsReply || item.LatestMessage == nil || item.LatestMessage.Sender != ConversationSenderEmployer {
+			continue
+		}
+		target := "draft:" + item.Conversation.ID
+		s.statusMu.Lock()
+		if s.draftTargets == nil {
+			s.draftTargets = map[string]bool{}
+		}
+		if s.draftTargets[target] {
+			s.statusMu.Unlock()
+			continue
+		}
+		s.draftTargets[target] = true
+		s.statusMu.Unlock()
+		go func(item CandidateInboxItem, target string) {
+			waitStart := time.Now()
+			s.mu.Lock()
+			perfRecord("dashboard.mutex_wait", waitStart, 1)
+			perfRecord("dashboard.inbox_draft.mutex_wait", waitStart, 1)
+			holdStart := time.Now()
+			job, err := s.snapshotInboxDraft(item)
+			perfRecord("dashboard.mutex_hold", holdStart, 1)
+			perfRecord("dashboard.inbox_draft.mutex_hold", holdStart, 1)
+			s.mu.Unlock()
+			if err != nil {
+				s.statusMu.Lock()
+				delete(s.draftTargets, target)
+				s.statusMu.Unlock()
+				return
+			}
+			go s.generateInboxDraft(job)
+		}(item, target)
+	}
+}
+
+func (s *DashboardServer) generateInboxDraft(job inboxDraftJob) {
+	workerStart := time.Now()
+	s.draftWorkersStarted.Add(1)
+	active := s.draftWorkersActive.Add(1)
+	for {
+		max := s.draftWorkersMaxActive.Load()
+		if active <= max || s.draftWorkersMaxActive.CompareAndSwap(max, active) {
+			break
+		}
+	}
 	defer func() {
 		s.statusMu.Lock()
-		delete(s.draftTargets, target)
+		delete(s.draftTargets, job.target)
 		s.statusMu.Unlock()
+		s.draftWorkersActive.Add(-1)
+		perfRecord("dashboard.inbox_draft.total", workerStart, 1)
 	}()
 	select {
 	case <-s.backgroundContext.Done():
 		return
 	default:
 	}
-	// Store mutation is serialized with ordinary dashboard reads/writes. The
-	// AI request is deliberately outside HH transport and remains background
-	// work, so the initial Inbox render is not delayed by it.
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, err := s.Conversations.GetConversation(conversationID); err != nil {
-		return
-	}
-	decision, err := s.Orchestrator.PrepareEmployerReply(conversationID)
+	// Keep the former effective one-worker bound without serializing dashboard
+	// reads. The expensive preparation and AI call may wait on this narrow
+	// worker lock, but DashboardServer.mu remains available to HTTP handlers.
+	s.draftMu.Lock()
+	defer s.draftMu.Unlock()
+	// Build the complete AI input from detached conversation and resolver
+	// snapshots. This phase may perform local computation and semantic
+	// retrieval; DashboardServer.mu is intentionally not held. The AI call
+	// below uses the same detached context.
+	builder := NewConversationContextBuilder(nil, job.resolver, job.semanticRetriever)
+	preparationStart := time.Now()
+	value, err := builder.BuildForReplySnapshot(job.conversation, job.conversation.Messages)
 	if err != nil {
 		return
 	}
-	if err := s.Drafts.Save(); err != nil {
+	messageHash, knowledgeHash, cacheKey := employerDraftMetadata(job.resolver, value)
+	perfRecord("dashboard.inbox_draft.prepare", preparationStart, 1)
+	if err := s.backgroundContext.Err(); err != nil {
 		return
+	}
+	// A fresh draft may have been committed by another local path while this
+	// detached preparation was running. Check that case before invoking AI.
+	if !s.inboxDraftCommitStillCurrent(job, cacheKey) {
+		return
+	}
+	decision, err := s.Orchestrator.PrepareEmployerReplyFromContext(s.backgroundContext, value)
+	if err != nil {
+		return
+	}
+	_ = s.commitInboxDraft(job, value, messageHash, knowledgeHash, cacheKey, decision)
+}
+
+func (s *DashboardServer) lockInboxDraft() func() {
+	waitStart := time.Now()
+	s.mu.Lock()
+	perfRecord("dashboard.mutex_wait", waitStart, 1)
+	perfRecord("dashboard.inbox_draft.mutex_wait", waitStart, 1)
+	holdStart := time.Now()
+	return func() {
+		perfRecord("dashboard.mutex_hold", holdStart, 1)
+		perfRecord("dashboard.inbox_draft.mutex_hold", holdStart, 1)
+		s.mu.Unlock()
+	}
+}
+
+func (s *DashboardServer) inboxDraftCommitStillCurrent(job inboxDraftJob, cacheKey string) bool {
+	unlock := s.lockInboxDraft()
+	defer unlock()
+	if err := s.refreshLocalFiles(); err != nil || draftResolverToken(s.Resolver) != job.knowledgeToken {
+		return false
+	}
+	conversation, err := s.Conversations.GetConversation(job.conversationID)
+	if err != nil || draftConversationToken(conversation) != job.conversationToken {
+		return false
+	}
+	drafts, err := s.Drafts.List()
+	return err == nil && !latestDraftForFingerprint(drafts, job.conversationID, cacheKey)
+}
+
+func (s *DashboardServer) commitInboxDraft(job inboxDraftJob, value ConversationContext, messageHash, knowledgeHash, cacheKey string, decision AIResponseDecision) error {
+	unlock := s.lockInboxDraft()
+	defer unlock()
+	if err := s.refreshLocalFiles(); err != nil {
+		return err
+	}
+	if draftResolverToken(s.Resolver) != job.knowledgeToken {
+		return nil
+	}
+	conversation, err := s.Conversations.GetConversation(job.conversationID)
+	if err != nil || draftConversationToken(conversation) != job.conversationToken {
+		return nil
+	}
+	drafts, err := s.Drafts.List()
+	if err != nil {
+		return err
+	}
+	if latestDraftForFingerprint(drafts, job.conversationID, cacheKey) {
+		return nil
+	}
+	if err := s.Orchestrator.PersistPreparedEmployerReply(s.backgroundContext, value, messageHash, knowledgeHash, cacheKey, decision); err != nil {
+		return err
+	}
+	if err := s.Drafts.Save(); err != nil {
+		return err
 	}
 	if err := s.Clarifications.Save(); err != nil {
-		return
+		return err
 	}
-	s.decisions[conversationID] = decision
+	s.decisions[job.conversationID] = decision
 	s.invalidateViews()
+	return nil
 }
 
 func (s *DashboardServer) startBackgroundInboxRefresh(ctx context.Context, interval time.Duration) {

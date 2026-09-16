@@ -287,6 +287,27 @@ func (s *ApplicationStore) ListApplications() ([]JobApplication, error) {
 	return s.repository.List(nil)
 }
 
+// ListApplicationsForDashboard is a read-only compatibility projection. It
+// deliberately avoids syncCompatibilityState because that method may persist
+// legacy mirror edits. Dashboard reads must not turn a GET into a write.
+func (s *ApplicationStore) ListApplicationsForDashboard() ([]JobApplication, error) {
+	if s == nil {
+		return []JobApplication{}, errors.New("application store is not configured")
+	}
+	if s.careerRepository != nil {
+		return s.careerRepository.List(nil)
+	}
+	if s.repository == nil {
+		return []JobApplication{}, errors.New("application store is not configured")
+	}
+	s.compatibilityMu.Lock()
+	defer s.compatibilityMu.Unlock()
+	if !reflect.DeepEqual(s.applications, s.mirrorApps) {
+		return cloneApplicationMirror(s.applications), nil
+	}
+	return s.repository.List(nil)
+}
+
 func (s *ApplicationStore) UpdateStatus(id string, status ApplicationStatus) error {
 	if s != nil && s.careerRepository != nil {
 		if err := s.careerRepository.UpdateStatus(nil, id, status); err != nil {
@@ -405,6 +426,31 @@ func (s *ApplicationStore) ListEvents() ([]ApplicationEvent, error) {
 	}
 	if err := s.syncCompatibilityState(); err != nil {
 		return []ApplicationEvent{}, err
+	}
+	return s.repository.ListEvents(nil)
+}
+
+// ListEventsForDashboard is the non-persisting counterpart of ListEvents for
+// request-scoped dashboard snapshots.
+func (s *ApplicationStore) ListEventsForDashboard() ([]ApplicationEvent, error) {
+	if s == nil {
+		return []ApplicationEvent{}, errors.New("application store is not configured")
+	}
+	if s.careerRepository != nil {
+		if eventReader, ok := s.careerRepository.(interface {
+			ListEvents(context.Context) ([]ApplicationEvent, error)
+		}); ok {
+			return eventReader.ListEvents(nil)
+		}
+		return []ApplicationEvent{}, nil
+	}
+	if s.repository == nil {
+		return []ApplicationEvent{}, errors.New("application store is not configured")
+	}
+	s.compatibilityMu.Lock()
+	defer s.compatibilityMu.Unlock()
+	if !reflect.DeepEqual(s.events, s.mirrorEvents) {
+		return append([]ApplicationEvent{}, s.events...), nil
 	}
 	return s.repository.ListEvents(nil)
 }

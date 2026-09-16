@@ -21,6 +21,8 @@ import (
 	autochatreconciliation "hh-ai-responder/internal/usecase/autochatreconciliation"
 	reliabilityinspection "hh-ai-responder/internal/usecase/reliabilityinspection"
 	reliabilitynotifications "hh-ai-responder/internal/usecase/reliabilitynotifications"
+	"hh-ai-responder/internal/vacancyranking"
+	"hh-ai-responder/internal/vacancyreview"
 )
 
 const dashboardDefaultHost = "127.0.0.1"
@@ -303,8 +305,15 @@ func loadDashboard(ctx context.Context, wd string, cfg Config) (*DashboardServer
 		Drafts: drafts, StatePath: syncPath,
 	}
 	var service *HHReadSyncService
+	var rankedQueue *vacancyranking.QueueService
+	var vacancyReviews vacancyreview.Store
 	if career, ok := careerRepositoriesFromStores(vacancies, applications, conversations); ok {
 		service = NewHHReadSyncServiceWithRepositories(readClient, career, syncOptions)
+		if postgresVacancies, postgresOK := career.Vacancies.(*PostgresVacancyRepository); postgresOK && postgresVacancies.Pool() != nil && candidatePersistence.Repository != nil {
+			vacancyReviews = NewPostgresVacancyReviewRepository(postgresVacancies.Pool())
+			rankingReadModel := vacancyranking.ReadModel{Vacancies: career.Vacancies, Candidate: candidatePersistence.Repository, Applications: career.Applications, Reviews: vacancyReviews, Now: time.Now}
+			rankedQueue = &vacancyranking.QueueService{ReadModel: rankingReadModel, DefaultPageSize: 25, MaxPageSize: 100, Now: time.Now}
+		}
 	} else {
 		service = NewHHReadSyncServiceWithOptions(readClient, syncOptions)
 	}
@@ -354,7 +363,7 @@ func loadDashboard(ctx context.Context, wd string, cfg Config) (*DashboardServer
 		}
 	}
 	controlled := &operatorControlledReconciler{actions: actions, conversations: conversations, reader: hhWriteChatDeliveryReader{source: readClient}}
-	dashboard, err := NewDashboardServer(DashboardDependencies{FollowUpPolicy: cfg.FollowUpPolicy, Vacancies: vacancies, Applications: applications, Conversations: conversations, Knowledge: kb, Drafts: drafts, Clarifications: clarifications, Sync: service, Orchestrator: orchestrator, Resolver: resolver, Updater: updater, ProposalUpdater: proposalUpdater, Mutation: mutation, CandidateClose: candidateClose, CareerClose: careerClose, Notifications: notifications, QualityLog: qualityLog, WriteGateway: gateway, Lifecycle: lifecycle, ConversationDisplayTTL: cfg.ConversationDisplayTTL, BackgroundInboxRefresh: cfg.BackgroundInboxRefresh, DailyRefreshStatePath: dailyRefreshStateFor(wd), Reliability: reliabilityinspection.NewService(applicationAttemptReader, autoChatAttemptReader), ReliabilityBackend: backend, ApplicationReconciliation: applicationReconciliationService, AutoChatReconciliation: autoChatReconciliationService, ReliabilityNotifications: notificationProjector, ControlledReconciliation: controlled})
+	dashboard, err := NewDashboardServer(DashboardDependencies{FollowUpPolicy: cfg.FollowUpPolicy, Vacancies: vacancies, Applications: applications, Conversations: conversations, Knowledge: kb, Drafts: drafts, Clarifications: clarifications, Sync: service, Orchestrator: orchestrator, Resolver: resolver, Updater: updater, ProposalUpdater: proposalUpdater, Mutation: mutation, CandidateClose: candidateClose, CareerClose: careerClose, Notifications: notifications, QualityLog: qualityLog, WriteGateway: gateway, Lifecycle: lifecycle, ConversationDisplayTTL: cfg.ConversationDisplayTTL, BackgroundInboxRefresh: cfg.BackgroundInboxRefresh, DailyRefreshStatePath: dailyRefreshStateFor(wd), Reliability: reliabilityinspection.NewService(applicationAttemptReader, autoChatAttemptReader), ReliabilityBackend: backend, ApplicationReconciliation: applicationReconciliationService, AutoChatReconciliation: autoChatReconciliationService, ReliabilityNotifications: notificationProjector, ControlledReconciliation: controlled, RankedQueue: rankedQueue, VacancyReviews: vacancyReviews})
 	if err != nil {
 		return nil, err
 	}

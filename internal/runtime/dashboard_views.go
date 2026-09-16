@@ -120,20 +120,14 @@ func matchScore(m *MatchResult) int {
 	}
 	return m.Score
 }
-func (s *DashboardServer) applicationRow(a JobApplication) (DashboardApplication, error) {
+func dashboardApplicationRow(a JobApplication, vacancy *Vacancy, events []ApplicationEvent, conversation *EmployerConversation, now time.Time) DashboardApplication {
 	row := DashboardApplication{JobApplication: a, LastActivity: a.UpdatedAt, DisplayStatus: string(a.Status), Recommendation: matchRecommendation(a.MatchResult)}
-	if row.MatchResult == nil {
-		if v, e := s.Vacancies.Get(a.VacancyID); e == nil {
-			row.MatchResult = v.MatchResult
-			row.Recommendation = matchRecommendation(v.MatchResult)
-			if v.ApplicationRecommendation != nil {
-				row.Recommendation = string(v.ApplicationRecommendation.Decision)
-			}
+	if row.MatchResult == nil && vacancy != nil {
+		row.MatchResult = vacancy.MatchResult
+		row.Recommendation = matchRecommendation(vacancy.MatchResult)
+		if vacancy.ApplicationRecommendation != nil {
+			row.Recommendation = string(vacancy.ApplicationRecommendation.Decision)
 		}
-	}
-	events, err := s.Applications.GetApplicationTimeline(a.ID)
-	if err != nil {
-		return row, err
 	}
 	for _, e := range events {
 		if e.Type == ApplicationEventApplied && (row.AppliedAt == nil || e.Timestamp.Before(*row.AppliedAt)) {
@@ -144,33 +138,49 @@ func (s *DashboardServer) applicationRow(a JobApplication) (DashboardApplication
 			row.LastActivity = e.Timestamp
 		}
 	}
-	// Import creation time is not necessarily the application date; only an
-	// applied event or structured imported timestamp may supply that date.
 	if raw := a.HHMetadata["applied_at"]; row.AppliedAt == nil && raw != "" {
 		if t, e := time.Parse(time.RFC3339, raw); e == nil {
 			row.AppliedAt = &t
 		}
 	}
-	if a.ConversationID != "" {
-		c, e := s.Conversations.GetConversation(a.ConversationID)
-		if errors.Is(e, ErrConversationNotFound) {
-			row.DisplayStatus = "manual_review"
-			return row, nil
-		}
-		if e != nil {
-			return row, e
-		}
-		row.LastContact = c.LastActivityAt
-		if t := conversationActivity(c); t.After(row.LastActivity) {
+	if a.ConversationID != "" && conversation != nil {
+		row.LastContact = conversation.LastActivityAt
+		if t := conversationActivity(*conversation); t.After(row.LastActivity) {
 			row.LastActivity = t
 		}
-		state := (ConversationStateResolver{}).Resolve(a, c, knownApplicationTime(a, events), false, nil, time.Now())
+		state := (ConversationStateResolver{}).Resolve(a, *conversation, knownApplicationTime(a, events), false, nil, now)
 		row.DisplayStatus = string(state.Status)
-		if c.NextAction != "" {
-			row.NextAction = c.NextAction
+		if conversation.NextAction != "" {
+			row.NextAction = conversation.NextAction
 		}
 	}
-	return row, nil
+	if a.ConversationID != "" && conversation == nil {
+		row.DisplayStatus = "manual_review"
+	}
+	return row
+}
+
+func (s *DashboardServer) applicationRow(a JobApplication) (DashboardApplication, error) {
+	var vacancy *Vacancy
+	if v, err := s.Vacancies.Get(a.VacancyID); err == nil {
+		vacancy = &v
+	}
+	events, err := s.Applications.GetApplicationTimeline(a.ID)
+	if err != nil {
+		return dashboardApplicationRow(a, vacancy, nil, nil, time.Now()), err
+	}
+	var conversation *EmployerConversation
+	if a.ConversationID != "" {
+		c, getErr := s.Conversations.GetConversation(a.ConversationID)
+		if errors.Is(getErr, ErrConversationNotFound) {
+			return dashboardApplicationRow(a, vacancy, events, nil, time.Now()), nil
+		}
+		if getErr != nil {
+			return DashboardApplication{}, getErr
+		}
+		conversation = &c
+	}
+	return dashboardApplicationRow(a, vacancy, events, conversation, time.Now()), nil
 }
 func (s *DashboardServer) applicationList(q url.Values) ([]DashboardApplication, error) {
 	status, recommendation, sortBy := q.Get("status"), q.Get("recommendation"), q.Get("sort")
@@ -528,11 +538,11 @@ func (s *DashboardServer) analytics(period string, now time.Time) (any, error) {
 	}
 	inWindow := func(t time.Time) bool { return !t.After(now) && (start.IsZero() || !t.IsZero() && !t.Before(start)) }
 	metrics := DashboardMetrics{}
-	vacancies, err := s.Vacancies.List()
+	snapshot, err := s.loadDashboardSnapshot()
 	if err != nil {
 		return nil, err
 	}
-	for _, v := range vacancies {
+	for _, v := range snapshot.vacancies {
 		if inWindow(v.CreatedAt) {
 			metrics.TotalVacancies++
 			if v.MatchResult != nil {
@@ -540,11 +550,12 @@ func (s *DashboardServer) analytics(period string, now time.Time) (any, error) {
 			}
 		}
 	}
-	conversations, err := s.Conversations.ListConversations()
-	if err != nil {
-		return nil, err
+	conversations := snapshot.conversations
+	originalConversationsByID := snapshot.conversationsByID()
+	byConversation := make(map[string]EmployerConversation, len(originalConversationsByID))
+	for id, conversation := range originalConversationsByID {
+		byConversation[id] = conversation
 	}
-	byConversation := map[string]EmployerConversation{}
 	days := map[string]*DashboardDay{}
 	dayFor := func(t time.Time) *DashboardDay {
 		key := t.In(now.Location()).Format("2006-01-02")
@@ -553,7 +564,7 @@ func (s *DashboardServer) analytics(period string, now time.Time) (any, error) {
 		}
 		return days[key]
 	}
-	career := s.careerSnapshotLocal()
+	career := snapshot.career()
 	for _, c := range conversations {
 		state := career.ResolveConversation(c, now)
 		c.Status = state.Status
@@ -575,19 +586,27 @@ func (s *DashboardServer) analytics(period string, now time.Time) (any, error) {
 			}
 		}
 	}
-	applications, err := s.Applications.ListApplications()
-	if err != nil {
-		return nil, err
-	}
-	for _, a := range applications {
-		row, e := s.applicationRow(a)
-		if e != nil {
-			return nil, e
+	eventsByApplication := snapshot.eventsByApplicationID()
+	vacanciesByID := snapshot.vacanciesByID()
+	for _, a := range snapshot.applications {
+		vacancy, vacancyExists := vacanciesByID[a.VacancyID]
+		var vacancyPtr *Vacancy
+		if vacancyExists {
+			vacancyPtr = &vacancy
 		}
-		events, e := s.Applications.GetApplicationTimeline(a.ID)
-		if e != nil {
-			return nil, e
+		conversation, conversationExists := byConversation[a.ConversationID]
+		var conversationPtr *EmployerConversation
+		if conversationExists {
+			// Use the original conversation for application-row semantics. The
+			// resolved copy above is only the aggregate input for metrics.
+			original, originalExists := originalConversationsByID[a.ConversationID]
+			if originalExists {
+				conversation = original
+			}
+			conversationPtr = &conversation
 		}
+		events := eventsByApplication[a.ID]
+		row := dashboardApplicationRow(a, vacancyPtr, events, conversationPtr, time.Now())
 		applied := row.AppliedAt != nil || a.Status == ApplicationApplied || a.Status == ApplicationEmployerReplied || a.Status == ApplicationInterview || a.Status == ApplicationOffer || a.Status == ApplicationRejected
 		// Structured imported states prove application existence, but undated
 		// applications only participate in all-time metrics, never daily charts.
@@ -651,26 +670,19 @@ func (s *DashboardServer) analytics(period string, now time.Time) (any, error) {
 		metrics.ResponseRate = float64(metrics.EmployerReplies) * 100 / float64(metrics.Applications)
 		metrics.InterviewConversion = float64(metrics.Interviews) * 100 / float64(metrics.Applications)
 	}
-	drafts, err := s.Drafts.List()
-	if err != nil {
-		return nil, err
-	}
-	for _, d := range drafts {
+	for _, d := range snapshot.drafts {
 		if d.Status == AIDraftGenerated {
 			metrics.AIDrafts++
 		}
 	}
-	clarifications, err := s.Clarifications.List()
-	if err != nil {
-		return nil, err
-	}
+	clarifications := snapshot.clarifications
 	for _, c := range clarifications {
 		if c.Status == ClarificationPending {
 			metrics.PendingClarifications++
 		}
 	}
 	workflowApplications := map[string]JobApplication{}
-	for _, application := range applications {
+	for _, application := range snapshot.applications {
 		if application.ConversationID != "" {
 			workflowApplications[application.ConversationID] = application
 		}
@@ -725,14 +737,12 @@ func (s *DashboardServer) analytics(period string, now time.Time) (any, error) {
 	metrics.FollowUpEligible = fu.FollowUpEligible
 	metrics.FollowUpDrafted = fu.FollowUpDrafted
 	if s.WriteGateway != nil {
-		if err := s.WriteGateway.Audit.Reload(); err == nil {
-			events := s.WriteGateway.Audit.List()
-			if len(events) > 0 {
-				writeMetrics := BuildHHWriteMetrics(events)
-				metrics.HHWrite = &writeMetrics
-				metrics.FirstPilot = BuildHHFirstPilotSummary(events)
-			}
+		events := s.WriteGateway.Audit.List()
+		if len(events) > 0 {
+			writeMetrics := BuildHHWriteMetrics(events)
+			metrics.HHWrite = &writeMetrics
+			metrics.FirstPilot = BuildHHFirstPilotSummary(events)
 		}
 	}
-	return map[string]any{"follow_up_analytics": fu, "period": period, "metrics": metrics, "daily": series, "sync": s.Sync.SyncState(), "generated_at": now, "notes": []string{"Response rate and interview conversion use applications with a known application date in the selected period; all-time also includes undated imported applications.", "Charts show dated applications and first employer replies. Missing dates are not guessed.", "New messages means employer messages since the latest candidate response, not HH unread receipts. Knowledge and draft counts show the current queue."}}, nil
+	return map[string]any{"follow_up_analytics": fu, "period": period, "metrics": metrics, "daily": series, "sync": snapshot.sync, "generated_at": now, "notes": []string{"Response rate and interview conversion use applications with a known application date in the selected period; all-time also includes undated imported applications.", "Charts show dated applications and first employer replies. Missing dates are not guessed.", "New messages means employer messages since the latest candidate response, not HH unread receipts. Knowledge and draft counts show the current queue."}}, nil
 }

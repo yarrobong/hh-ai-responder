@@ -240,6 +240,71 @@ func (s *ConversationStore) ListConversations() ([]EmployerConversation, error) 
 	return cloneKnowledge(s.conversations)
 }
 
+// ListConversationsForDashboard is a narrow read-model entry point. A
+// relational repository may satisfy this request with one parent query and
+// one bulk message query; the legacy JSON path keeps its existing semantics.
+// General conversation reads continue to use ListConversations.
+func (s *ConversationStore) ListConversationsForDashboard() ([]EmployerConversation, error) {
+	if s == nil {
+		return []EmployerConversation{}, nil
+	}
+	if repository := s.selectedRepository(); repository != nil {
+		if reader, ok := repository.(interface {
+			ListForDashboard(context.Context) ([]EmployerConversation, error)
+		}); ok {
+			return reader.ListForDashboard(context.Background())
+		}
+		if s.repository != nil {
+			s.compatibilityMu.Lock()
+			defer s.compatibilityMu.Unlock()
+			if !reflect.DeepEqual(s.conversations, s.mirrorConversations) {
+				return cloneKnowledge(s.conversations)
+			}
+		}
+		return repository.List(context.Background())
+	}
+	return cloneKnowledge(s.conversations)
+}
+
+// ListConversationsForOverview returns only the conversation fields needed to
+// classify the initial Overview cards. Relational repositories can omit the
+// full message history and load only the latest meaningful message; legacy
+// stores retain their established in-memory semantics and are narrowed by the
+// caller before serialization.
+func (s *ConversationStore) ListConversationsForOverview() ([]EmployerConversation, error) {
+	if s == nil {
+		return []EmployerConversation{}, nil
+	}
+	if repository := s.selectedRepository(); repository != nil {
+		if reader, ok := repository.(interface {
+			ListForOverview(context.Context) ([]EmployerConversation, error)
+		}); ok {
+			return reader.ListForOverview(context.Background())
+		}
+		if s.repository != nil {
+			s.compatibilityMu.Lock()
+			defer s.compatibilityMu.Unlock()
+			if !reflect.DeepEqual(s.conversations, s.mirrorConversations) {
+				values, err := cloneKnowledge(s.conversations)
+				if err != nil {
+					return nil, err
+				}
+				return overviewConversationValues(values), nil
+			}
+		}
+		values, err := repository.List(context.Background())
+		if err != nil {
+			return nil, err
+		}
+		return overviewConversationValues(values), nil
+	}
+	values, err := cloneKnowledge(s.conversations)
+	if err != nil {
+		return nil, err
+	}
+	return overviewConversationValues(values), nil
+}
+
 func (s *ConversationStore) ListConversationsByStatus(status ConversationStatus) ([]EmployerConversation, error) {
 	values, err := s.ListConversations()
 	if err != nil {

@@ -23,6 +23,8 @@ type VacancyRecord struct {
 	Salary                   string
 	Currency                 string
 	Location                 string
+	AreaName                 string
+	Address                  string
 	WorkFormat               string
 	Experience               string
 	EmploymentType           string
@@ -36,6 +38,7 @@ type VacancyRecord struct {
 	ResponseLetterRequired   bool
 	UserTestPresent          bool
 	ResponseURL              string
+	ProfessionalRoles        []string
 	Metadata                 map[string]string
 }
 

@@ -70,6 +70,17 @@ func TestVacancyLegacyIDsAndResponseCount(t *testing.T) {
 	}
 }
 
+func TestVacancyMapsHHStructuredAliasesWithoutPromotingLocalTimestamp(t *testing.T) {
+	var value vacancy.Vacancy
+	raw := `{"vacancyId":7,"keySkills":[{"name":"Python"}],"professionalRoleIds":[{"professionalRoleId":[96]}],"workFormats":[{"workFormatsElement":["REMOTE"]}],"publicationTime":"2026-09-09T10:00:00+03:00","lastChangeTime":{"$":"2026-09-10T11:00:00+03:00"},"updated_at":"2026-09-11T12:00:00Z"}`
+	if err := json.Unmarshal([]byte(raw), &value); err != nil {
+		t.Fatal(err)
+	}
+	if len(value.Skills) != 1 || len(value.ProfessionalRoles) != 1 || value.WorkFormat != "remote" || value.PublishedAt.IsZero() || value.HHUpdatedAt.IsZero() || value.HHUpdatedAt.Equal(value.UpdatedAt) {
+		t.Fatalf("structured HH aliases were not mapped safely: %+v", value)
+	}
+}
+
 func TestFormatCompensationCompatibility(t *testing.T) {
 	from, to := 80000, 120000
 	tests := []struct {

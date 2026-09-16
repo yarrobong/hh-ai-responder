@@ -19,6 +19,7 @@ type Vacancy struct {
 	Description               string                     `json:"description,omitempty"`
 	Requirements              []string                   `json:"requirements,omitempty"`
 	Skills                    []string                   `json:"skills,omitempty"`
+	ProfessionalRoles         []string                   `json:"professional_roles,omitempty"`
 	Salary                    string                     `json:"salary,omitempty"`
 	SalaryCurrency            string                     `json:"salary_currency,omitempty"`
 	Location                  string                     `json:"location,omitempty"`
@@ -93,7 +94,139 @@ func (v *Vacancy) UnmarshalJSON(data []byte) error {
 	}
 	responseCount, ok := fields["totalResponsesCount"]
 	v.TotalResponsesCountKnown = ok && !bytes.Equal(bytes.TrimSpace(responseCount), []byte("null"))
+	if len(v.Skills) == 0 {
+		v.Skills = jsonStringValues(fields["keySkills"], fields["key_skills"])
+	}
+	if len(v.ProfessionalRoles) == 0 {
+		v.ProfessionalRoles = jsonStringValues(fields["professionalRoles"], fields["professional_roles"], fields["professionalRoleIds"])
+	}
+	if v.WorkFormat == "" {
+		v.WorkFormat = canonicalWorkFormat(jsonStringValues(fields["workFormat"], fields["work_format"], fields["workFormats"]))
+	}
+	if v.PublishedAt.IsZero() {
+		v.PublishedAt = jsonProviderTime(fields["publicationTime"], fields["publishedAt"], fields["published_at"])
+	}
+	if v.HHUpdatedAt.IsZero() {
+		// updated_at is the local persistence timestamp and must never be
+		// promoted to a provider update timestamp.
+		v.HHUpdatedAt = jsonProviderTime(fields["lastChangeTime"], fields["updatedAt"])
+	}
 	return nil
+}
+
+func jsonStringValues(rawValues ...json.RawMessage) []string {
+	result := []string{}
+	for _, raw := range rawValues {
+		if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			continue
+		}
+		var single string
+		if json.Unmarshal(raw, &single) == nil && strings.TrimSpace(single) != "" {
+			result = append(result, strings.TrimSpace(single))
+			continue
+		}
+		var number json.Number
+		if json.Unmarshal(raw, &number) == nil && strings.TrimSpace(number.String()) != "" {
+			result = append(result, number.String())
+			continue
+		}
+		var values []json.RawMessage
+		if json.Unmarshal(raw, &values) != nil {
+			continue
+		}
+		for _, item := range values {
+			if json.Unmarshal(item, &single) == nil && strings.TrimSpace(single) != "" {
+				result = append(result, strings.TrimSpace(single))
+				continue
+			}
+			var itemNumber json.Number
+			if json.Unmarshal(item, &itemNumber) == nil && strings.TrimSpace(itemNumber.String()) != "" {
+				result = append(result, itemNumber.String())
+				continue
+			}
+			var object map[string]json.RawMessage
+			if json.Unmarshal(item, &object) != nil {
+				continue
+			}
+			matched := false
+			for _, key := range []string{"name", "title", "text", "value", "id"} {
+				if json.Unmarshal(object[key], &single) == nil && strings.TrimSpace(single) != "" {
+					result = append(result, strings.TrimSpace(single))
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				for _, key := range []string{"keySkills", "key_skills", "professionalRoleId", "professional_role_id", "workFormatsElement", "work_formats_element"} {
+					result = append(result, jsonStringValues(object[key])...)
+				}
+			}
+		}
+	}
+	result = uniqueJSONStrings(result)
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func canonicalWorkFormat(values []string) string {
+	remote, office := false, false
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		switch {
+		case strings.Contains(value, "remote"), strings.Contains(value, "удален"), strings.Contains(value, "дистанцион"):
+			remote = true
+		case strings.Contains(value, "office"), strings.Contains(value, "офис"), strings.Contains(value, "on_site"), strings.Contains(value, "onsite"), strings.Contains(value, "на месте"):
+			office = true
+		case value == "hybrid", strings.Contains(value, "гибрид"):
+			remote, office = true, true
+		}
+	}
+	if remote && office {
+		return "hybrid"
+	}
+	if remote {
+		return "remote"
+	}
+	if office {
+		return "office"
+	}
+	return ""
+}
+
+func jsonProviderTime(rawValues ...json.RawMessage) time.Time {
+	for _, raw := range rawValues {
+		var value string
+		if json.Unmarshal(raw, &value) != nil {
+			var object map[string]json.RawMessage
+			if json.Unmarshal(raw, &object) == nil {
+				for _, key := range []string{"$", "value", "date"} {
+					if json.Unmarshal(object[key], &value) == nil {
+						break
+					}
+				}
+			}
+		}
+		for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05-0700"} {
+			if parsed, err := time.Parse(layout, strings.TrimSpace(value)); err == nil {
+				return parsed.UTC()
+			}
+		}
+	}
+	return time.Time{}
+}
+
+func uniqueJSONStrings(values []string) []string {
+	seen := map[string]struct{}{}
+	result := []string{}
+	for _, value := range values {
+		if _, ok := seen[value]; !ok {
+			seen[value] = struct{}{}
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 type NamedObject struct {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"hh-ai-responder/internal/platform"
@@ -53,18 +54,22 @@ type qualityLogFile struct {
 }
 
 type QualityLogStore struct {
-	path   string
-	events []QualityLogEvent
+	path    string
+	events  []QualityLogEvent
+	mu      sync.RWMutex
+	persist func(string, []byte) error
 }
 
 func NewQualityLogStore(path string) *QualityLogStore {
-	return &QualityLogStore{path: path, events: []QualityLogEvent{}}
+	return &QualityLogStore{path: path, events: []QualityLogEvent{}, persist: persistQualityLogFile}
 }
 
 func (s *QualityLogStore) Load() error {
 	if s == nil {
 		return errors.New("quality log store is nil")
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if strings.TrimSpace(s.path) == "" {
 		s.events = []QualityLogEvent{}
 		return nil
@@ -114,18 +119,34 @@ func (s *QualityLogStore) Save() error {
 	if s == nil {
 		return errors.New("quality log store is nil")
 	}
-	if err := validateQualityEvents(s.events); err != nil {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.saveEvents(s.events)
+}
+
+func persistQualityLogFile(path string, raw []byte) error {
+	return platform.WritePrivateFileAtomic(path, raw, ".quality-log-*.tmp")
+}
+
+// saveEvents validates and durably writes a complete quality-log snapshot. The
+// caller must hold the appropriate store lock when accessing store state.
+func (s *QualityLogStore) saveEvents(events []QualityLogEvent) error {
+	if err := validateQualityEvents(events); err != nil {
 		return err
 	}
 	if strings.TrimSpace(s.path) == "" {
 		return nil
 	}
-	raw, err := json.MarshalIndent(qualityLogFile{Version: 1, Events: s.events}, "", "  ")
+	raw, err := json.MarshalIndent(qualityLogFile{Version: 1, Events: events}, "", "  ")
 	if err != nil {
 		return errors.New("cannot encode quality log")
 	}
+	persist := s.persist
+	if persist == nil {
+		persist = persistQualityLogFile
+	}
 	return withStoreLock(s.path, func() error {
-		return platform.WritePrivateFileAtomic(s.path, append(raw, '\n'), ".quality-log-*.tmp")
+		return persist(s.path, append(raw, '\n'))
 	})
 }
 
@@ -133,6 +154,8 @@ func (s *QualityLogStore) List() []QualityLogEvent {
 	if s == nil {
 		return []QualityLogEvent{}
 	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return append([]QualityLogEvent{}, s.events...)
 }
 
@@ -144,9 +167,12 @@ func (s *QualityLogStore) RecordMany(events []QualityLogEvent) error {
 	if s == nil {
 		return errors.New("quality log store is nil")
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if len(events) == 0 {
 		return nil
 	}
+	nextEvents := append([]QualityLogEvent{}, s.events...)
 	changed := false
 	for _, event := range events {
 		if event.ID == "" {
@@ -164,7 +190,7 @@ func (s *QualityLogStore) RecordMany(events []QualityLogEvent) error {
 		}
 		if event.ObservationKey != "" {
 			duplicate := false
-			for _, existing := range s.events {
+			for _, existing := range nextEvents {
 				if existing.ObservationKey == event.ObservationKey {
 					duplicate = true
 					break
@@ -177,13 +203,19 @@ func (s *QualityLogStore) RecordMany(events []QualityLogEvent) error {
 		if err := validateQualityEvents([]QualityLogEvent{event}); err != nil {
 			return err
 		}
-		s.events = append(s.events, event)
+		nextEvents = append(nextEvents, event)
 		changed = true
 	}
 	if !changed {
 		return nil
 	}
-	return s.Save()
+	start := time.Now()
+	if err := s.saveEvents(nextEvents); err != nil {
+		return err
+	}
+	perfRecord("quality_log.durable_save", start, len(nextEvents)-len(s.events))
+	s.events = nextEvents
+	return nil
 }
 
 type QualityCount struct {

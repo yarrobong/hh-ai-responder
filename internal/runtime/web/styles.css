@@ -81,6 +81,43 @@ button.primary,
   color: var(--ink);
   background: white;
 }
+.vacancy-queue-card {
+  margin-bottom: 12px;
+}
+.queue-card-heading,
+.queue-meta,
+.queue-badges,
+.queue-reasons,
+.queue-summary {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.queue-card-heading {
+  justify-content: space-between;
+}
+.queue-card-heading h3 {
+  margin: 0;
+}
+.queue-meta {
+  align-items: center;
+  margin-top: 8px;
+}
+.queue-reasons {
+  margin: 12px 0;
+}
+.queue-reasons > div {
+  min-width: 220px;
+  flex: 1;
+}
+.queue-reasons ul {
+  margin-top: 5px;
+}
+.compact {
+  padding: 8px 10px;
+  margin: 8px 0;
+}
 input,
 select,
 textarea {

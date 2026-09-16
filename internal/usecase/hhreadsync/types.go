@@ -46,6 +46,11 @@ type Result struct {
 	ChangedConversationIDs  []string  `json:"changed_conversation_ids,omitempty"`
 	Errors                  []string  `json:"errors,omitempty"`
 	Warnings                []string  `json:"warnings,omitempty"`
+	DetailRequested         int       `json:"detail_requested,omitempty"`
+	DetailSucceeded         int       `json:"detail_succeeded,omitempty"`
+	DetailSkipped           int       `json:"detail_skipped,omitempty"`
+	DetailFailed            int       `json:"detail_failed,omitempty"`
+	DetailFieldsEnriched    int       `json:"detail_fields_enriched,omitempty"`
 	StartedAt               time.Time `json:"started_at"`
 	FinishedAt              time.Time `json:"finished_at"`
 }
@@ -55,6 +60,9 @@ type Result struct {
 // its caller can roll the whole career batch back.
 type ImportOptions struct {
 	FailFast bool
+	// ObservedAt is the timestamp assigned to every vacancy observation in
+	// this import batch. Zero uses one UTC timestamp chosen by ImportBatch.
+	ObservedAt time.Time
 }
 
 // ReadOptions contains presentation-free hooks for one-run page reads. The
@@ -63,6 +71,9 @@ type ImportOptions struct {
 type ReadOptions struct {
 	OnPage           func(Result)
 	MaxConversations int
+	// MaxVacancyDetails bounds optional detail GETs for one read batch. Zero
+	// uses the conservative default; it never means unlimited.
+	MaxVacancyDetails int
 }
 
 // ConversationResolution is a deliberately small seam for the established

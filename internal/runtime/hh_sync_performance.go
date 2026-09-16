@@ -28,6 +28,11 @@ type HHSyncProgress struct {
 	MetadataChecked      int       `json:"metadata_checked,omitempty"`
 	HistoryReused        int       `json:"history_reused,omitempty"`
 	DetailedChatsFetched int       `json:"detailed_chats_fetched,omitempty"`
+	DetailRequested      int       `json:"detail_requested,omitempty"`
+	DetailSucceeded      int       `json:"detail_succeeded,omitempty"`
+	DetailSkipped        int       `json:"detail_skipped,omitempty"`
+	DetailFailed         int       `json:"detail_failed,omitempty"`
+	DetailFieldsEnriched int       `json:"detail_fields_enriched,omitempty"`
 	Errors               int       `json:"errors"`
 	StartedAt            time.Time `json:"started_at"`
 	FinishedAt           time.Time `json:"finished_at,omitempty"`
@@ -132,6 +137,11 @@ func (s *HHReadSyncService) progress(call *hhSyncCall, result SyncResult) {
 	call.progress.MetadataChecked = result.MetadataChecked
 	call.progress.HistoryReused = result.HistoryReused
 	call.progress.DetailedChatsFetched = result.DetailedChatsFetched
+	call.progress.DetailRequested = result.DetailRequested
+	call.progress.DetailSucceeded = result.DetailSucceeded
+	call.progress.DetailSkipped = result.DetailSkipped
+	call.progress.DetailFailed = result.DetailFailed
+	call.progress.DetailFieldsEnriched = result.DetailFieldsEnriched
 	call.progress.Errors = len(result.Errors)
 }
 func (s *HHReadSyncService) fetchAndCommit(ctx context.Context, target string, call *hhSyncCall, options hhreadsync.ReadOptions) (result SyncResult, err error) {
@@ -173,6 +183,11 @@ func (s *HHReadSyncService) fetchAndCommit(ctx context.Context, target string, c
 		result.MetadataChecked = page.MetadataChecked
 		result.HistoryReused = page.HistoryReused
 		result.DetailedChatsFetched = page.DetailedChatsFetched
+		result.DetailRequested = page.DetailRequested
+		result.DetailSucceeded = page.DetailSucceeded
+		result.DetailSkipped = page.DetailSkipped
+		result.DetailFailed = page.DetailFailed
+		result.DetailFieldsEnriched = page.DetailFieldsEnriched
 		s.progress(call, result)
 	}
 	batch, readResult, readErr := s.syncUsecase().ReadBatch(ctx, hhreadsync.Target(target), options)
@@ -180,6 +195,11 @@ func (s *HHReadSyncService) fetchAndCommit(ctx context.Context, target string, c
 	result.MetadataChecked = readResult.MetadataChecked
 	result.HistoryReused = readResult.HistoryReused
 	result.DetailedChatsFetched = readResult.DetailedChatsFetched
+	result.DetailRequested = readResult.DetailRequested
+	result.DetailSucceeded = readResult.DetailSucceeded
+	result.DetailSkipped = readResult.DetailSkipped
+	result.DetailFailed = readResult.DetailFailed
+	result.DetailFieldsEnriched = readResult.DetailFieldsEnriched
 	result.SelectedConversationIDs = append([]string{}, readResult.SelectedConversationIDs...)
 	result.Errors = append(result.Errors, readResult.Errors...)
 	if readErr != nil {
@@ -231,7 +251,7 @@ func (s *HHReadSyncService) fetchAndCommit(ctx context.Context, target string, c
 	}
 	return result, nil
 }
-func (s *HHReadSyncService) commitMutex() *sync.Mutex {
+func (s *HHReadSyncService) commitMutex() sync.Locker {
 	if s.externalCommitMu != nil {
 		return s.externalCommitMu
 	}
@@ -463,8 +483,11 @@ func (s *HHReadSyncService) prepareVacancyAnalysisAgainst(ctx context.Context, s
 			continue
 		}
 		old, err := store.GetByExternalID(ctx, value.ExternalID)
-		if err == nil && vacancySourceEquivalent(old, value) {
-			continue
+		if err == nil {
+			value = hhreadsync.MergeVacancy(old, value)
+			if vacancySourceEquivalent(old, value) {
+				continue
+			}
 		}
 		if err != nil && !errors.Is(err, ErrVacancyNotFound) {
 			return nil, err
@@ -489,10 +512,6 @@ func (s *HHReadSyncService) applyPreparedVacancyAnalysis(ctx context.Context, st
 		if err != nil {
 			continue
 		}
-		match, ok := prepared.Match(value)
-		if !ok {
-			continue
-		}
 		current, err := store.GetByExternalID(ctx, value.ExternalID)
 		if err != nil {
 			if errors.Is(err, ErrVacancyNotFound) {
@@ -500,8 +519,13 @@ func (s *HHReadSyncService) applyPreparedVacancyAnalysis(ctx context.Context, st
 			}
 			return err
 		}
-		if !vacancySourceEquivalent(value, current) {
-			match = prepared.Analyze(current, nil)
+		merged := hhreadsync.MergeVacancy(current, value)
+		match, ok := prepared.Match(merged)
+		if !ok {
+			continue
+		}
+		if !vacancySourceEquivalent(merged, current) {
+			match = prepared.Analyze(merged, nil)
 		}
 		current.MatchResult = &match
 		current.ApplicationRecommendation = match.Recommendation
