@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"hh-ai-responder/internal/careeragent"
@@ -111,6 +112,52 @@ func TestCareerAgentRoutePropagatesSelectedResumeThroughPreparationAndSubmission
 	}
 	if reader.appCalls != 1 {
 		t.Fatalf("preparation did not perform read-only applicability check: %d", reader.appCalls)
+	}
+}
+
+func TestSelectedResumeProjectionReachesAIInput(t *testing.T) {
+	responder := &HHAIResponder{resumeFactsByHash: map[string]ResumeFacts{
+		"hash-b": {ExperienceText: "B-specific experience"},
+	}}
+	request := responder.applicationProcessingRequest(vacancy.Vacancy{ID: 701}, ResumeItem{
+		Hash: "hash-b", Title: "Resume B", Skills: "API, SQL", Area: "Екатеринбург", Salary: "80000 руб",
+	}, LegacyCandidateContext{
+		ResumeTitle: "Resume A", Skills: "Python, Django", Experience: "A-specific experience", Location: "Москва", Salary: "120000 руб",
+	}, 0)
+	if request.Candidate.ResumeTitle != "Resume B" || request.Candidate.Skills != "API, SQL" || request.Candidate.Experience != "B-specific experience" {
+		t.Fatalf("selected resume facts did not reach AI candidate input: %+v", request.Candidate)
+	}
+	if request.Candidate.ResumeTitle == "Resume A" || request.Candidate.Skills == "Python, Django" {
+		t.Fatalf("previous resume leaked into AI candidate input: %+v", request.Candidate)
+	}
+	_, userPrompt := vacancyanalysis.BuildPrompt(vacancyanalysis.Input{
+		Candidate:   request.Candidate,
+		Vacancy:     vacancy.Vacancy{ID: 701, Name: "Integration specialist"},
+		Description: "API SQL integration",
+	})
+	if !strings.Contains(userPrompt, "Название резюме: Resume B") || !strings.Contains(userPrompt, "Навыки: API, SQL") || !strings.Contains(userPrompt, "B-specific experience") {
+		t.Fatalf("selected resume projection did not reach AI prompt: %s", userPrompt)
+	}
+	if strings.Contains(userPrompt, "Resume A") || strings.Contains(userPrompt, "Python, Django") || strings.Contains(userPrompt, "A-specific experience") {
+		t.Fatalf("previous resume leaked into AI prompt: %s", userPrompt)
+	}
+}
+
+func TestAIDecisionBreakdownKeepsPrimarySafetyReason(t *testing.T) {
+	summary := RunSummaryResult{}
+	missing := VacancyEvaluation{Score: 90, Apply: true, HardRequirements: []HardRequirementEvaluation{{Requirement: "Kafka", Status: hardRequirementStatusMissing}}}
+	unknown := VacancyEvaluation{Score: 90, Apply: true, HardRequirements: []HardRequirementEvaluation{{Requirement: "FastAPI", Status: hardRequirementStatusUnknown}}}
+	applyFalse := VacancyEvaluation{Score: 40, Apply: false}
+	match := VacancyEvaluation{Score: 90, Apply: true}
+	for _, evaluation := range []VacancyEvaluation{missing, unknown, applyFalse, match} {
+		trace := CareerAgentVacancyResult{}
+		recordAIDecisionBreakdown(&summary, &trace, evaluation, 65)
+	}
+	if summary.AIApplyTrue != 3 || summary.AIApplyFalse != 1 || summary.AIHardMissing != 1 || summary.AIHardUnknown != 1 || summary.AIMatched != 1 || summary.AIRejected != 2 || summary.AIReviewed != 1 {
+		t.Fatalf("unexpected AI breakdown: %+v", summary)
+	}
+	if summary.AIReasonCounts[AIReasonHardMissing] != 1 || summary.AIReasonCounts[AIReasonHardUnknown] != 1 || summary.AIReasonCounts[AIReasonApplyFalse] != 1 || summary.AIReasonCounts[AIReasonMatch] != 1 {
+		t.Fatalf("primary AI reason counts are wrong: %+v", summary.AIReasonCounts)
 	}
 }
 

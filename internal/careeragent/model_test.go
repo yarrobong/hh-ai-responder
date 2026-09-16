@@ -213,6 +213,100 @@ func TestSearchProfileProvenanceIsSoftOnly(t *testing.T) {
 	}
 }
 
+func TestResumeScoringDoesNotLoseOrderingThroughCap(t *testing.T) {
+	vacancy := VacancyInput{Title: "Python backend developer", Description: "Python Django PostgreSQL REST API Docker Redis Linux"}
+	strong := scoreResume(vacancy, ResumeProfile{ID: "strong", Title: "Python backend", Skills: []string{"Python", "Django", "PostgreSQL", "REST API", "Docker", "Redis", "Linux"}})
+	weak := scoreResume(vacancy, ResumeProfile{ID: "weak", Title: "Developer", Skills: []string{"Python"}})
+	if strong.RawFit <= weak.RawFit || strong.Score <= weak.Score {
+		t.Fatalf("scoring lost ordering: strong=%+v weak=%+v", strong, weak)
+	}
+	if strong.Score == 100 && weak.Score == 100 {
+		t.Fatalf("normalized score still saturated for distinct fits: strong=%+v weak=%+v", strong, weak)
+	}
+}
+
+func TestResumeScoringSpecificSkillBeatsGenericToken(t *testing.T) {
+	vacancy := VacancyInput{Title: "Developer", Description: "Python service"}
+	specific := scoreResume(vacancy, ResumeProfile{ID: "specific", Title: "Developer", Skills: []string{"Python"}})
+	generic := scoreResume(vacancy, ResumeProfile{ID: "generic", Title: "Developer", Skills: []string{"Developer"}})
+	if specific.SkillScore <= generic.SkillScore || specific.RawFit <= generic.RawFit {
+		t.Fatalf("generic token was too strong: specific=%+v generic=%+v", specific, generic)
+	}
+}
+
+func TestResumeScoringDistinguishesSkillMatchStrength(t *testing.T) {
+	partial := scoreResume(VacancyInput{Title: "Backend", Description: "API"}, ResumeProfile{ID: "partial", Title: "Backend", Skills: []string{"REST API"}})
+	exact := scoreResume(VacancyInput{Title: "Backend", Description: "REST API"}, ResumeProfile{ID: "exact", Title: "Backend", Skills: []string{"REST API"}})
+	if partial.SkillScore >= exact.SkillScore || len(partial.SpecificMatches) != 0 {
+		t.Fatalf("partial multi-token skill was treated as exact: partial=%+v exact=%+v", partial, exact)
+	}
+	if len(exact.SpecificMatches) != 1 || !strings.Contains(exact.SpecificMatches[0], "exact normalized phrase") {
+		t.Fatalf("exact skill evidence was not recorded: %+v", exact)
+	}
+	technicalOnly := scoreResume(VacancyInput{Title: "Technical role"}, ResumeProfile{ID: "support", Title: "Support", Skills: []string{"Technical Support"}})
+	if technicalOnly.SkillScore != 0 {
+		t.Fatalf("single generic token incorrectly satisfied a skill phrase: %+v", technicalOnly)
+	}
+}
+
+func TestResumeIdentityKeepsFourProfilesDistinct(t *testing.T) {
+	profiles := NormalizeResumes([]candidate.ResumeItem{
+		{Hash: "python", Title: "Backend-разработчик (Python/Django)", Skills: "Python, Django, PostgreSQL, REST API"},
+		{Hash: "backend", Title: "Backend-разработчик", Skills: "PHP, Laravel, VueJS, SOAP"},
+		{Hash: "automation", Title: "Специалист по автоматизации и интеграциям", Skills: "Python, API-интеграции, CRM, Webhooks"},
+		{Hash: "support", Title: "Технический специалист", Skills: "Техническая поддержка, Диагностика неисправностей, Linux"},
+	})
+	if len(profiles) != 4 {
+		t.Fatalf("profiles collapsed during normalization: %+v", profiles)
+	}
+	identities := map[string]ResumeIdentity{}
+	for _, profile := range profiles {
+		identities[profile.ID] = profile.Identity
+	}
+	seen := map[string]bool{}
+	for _, identity := range identities {
+		key := strings.Join(identity.PrimaryRoles, ",") + "|" + strings.Join(identity.StrongSkills, ",") + "|" + strings.Join(identity.DomainSignals, ",")
+		seen[key] = true
+	}
+	if len(seen) != 4 {
+		t.Fatalf("resume identities are not distinct: %+v", identities)
+	}
+}
+
+func TestResumeRouterDifferentiatesPythonAndSupportVacancies(t *testing.T) {
+	resumes := []ResumeProfile{
+		{ID: "python", Title: "Backend-разработчик (Python/Django)", Skills: []string{"Python", "Django", "PostgreSQL"}, Enabled: true},
+		{ID: "support", Title: "Технический специалист", Skills: []string{"Техническая поддержка", "Диагностика неисправностей", "Linux"}, Enabled: true},
+		{ID: "automation", Title: "Автоматизация и интеграции", Skills: []string{"API-интеграции", "CRM"}, Enabled: true},
+		{ID: "backend", Title: "Backend-разработчик", Skills: []string{"PHP", "Laravel"}, Enabled: true},
+	}
+	python := RouteResume(VacancyInput{ID: 301, Title: "Python Backend Developer", Description: "Python Django PostgreSQL"}, resumes)
+	if python.Status != RouteSelected || python.SelectedResumeID != "python" {
+		t.Fatalf("Python vacancy was not differentiated: %+v", python)
+	}
+	support := RouteResume(VacancyInput{ID: 302, Title: "Инженер технической поддержки", Description: "Диагностика неисправностей Linux"}, resumes)
+	if support.Status != RouteSelected || support.SelectedResumeID != "support" {
+		t.Fatalf("support vacancy was not differentiated: %+v", support)
+	}
+}
+
+func TestResumeRouterMeaningfulMarginsAndGenuineAmbiguity(t *testing.T) {
+	selected := RouteResume(VacancyInput{ID: 303, Title: "Python Django backend", Description: "Python Django PostgreSQL"}, []ResumeProfile{
+		{ID: "python", Title: "Python backend", Skills: []string{"Python", "Django", "PostgreSQL"}, Enabled: true},
+		{ID: "other", Title: "Developer", Skills: []string{"Python"}, Enabled: true},
+	})
+	if selected.Status != RouteSelected || selected.AbsoluteMargin <= 0 || selected.RelativeMargin <= 0 || selected.TopRawScore <= selected.SecondRawScore {
+		t.Fatalf("meaningful raw margin was not exposed: %+v", selected)
+	}
+	tie := RouteResume(VacancyInput{ID: 304, Title: "Python backend", Description: "Python API"}, []ResumeProfile{
+		{ID: "a", Title: "Python backend", Skills: []string{"Python"}, Enabled: true},
+		{ID: "b", Title: "Python backend", Skills: []string{"Python"}, Enabled: true},
+	})
+	if tie.Status != RouteReviewRequired || tie.ReasonCode != RouteReasonAmbiguous || tie.AbsoluteMargin != 0 {
+		t.Fatalf("genuine tie was not kept ambiguous: %+v", tie)
+	}
+}
+
 func TestObviousHardBlockedCardDoesNotNeedDetail(t *testing.T) {
 	decision := PreliminaryRouteResume(VacancyInput{ID: 207, Title: "PHP developer"}, []ResumeProfile{{ID: "python", Title: "Python developer", ExcludeKeywords: []string{"PHP"}, Enabled: true}})
 	if decision.Status != PreliminaryObviousReject {

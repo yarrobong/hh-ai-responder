@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	applicationprocessing "hh-ai-responder/internal/usecase/applicationprocessing"
 	"hh-ai-responder/internal/usecase/candidatecontext"
@@ -233,10 +234,29 @@ func (r *HHAIResponder) applicationProcessingService(candidateResolver *Candidat
 }
 
 func (r *HHAIResponder) applicationProcessingRequest(value vacancy.Vacancy, resume ResumeItem, candidate LegacyCandidateContext, applicationsInRun int) applicationprocessing.Request {
+	// The selected HH resume is the factual scope for resume routing and AI
+	// evaluation. Keep common confirmed candidate knowledge, but do not pass
+	// the previously active resume's title, salary, or skill list.
+	selected := candidate
+	selected.ResumeTitle = resume.Title
+	if strings.TrimSpace(resume.Salary) != "" {
+		selected.Salary = resume.Salary
+	}
+	if strings.TrimSpace(resume.Skills) != "" {
+		selected.Skills = resume.Skills
+	}
+	if strings.TrimSpace(resume.Area) != "" {
+		selected.Location = resume.Area
+	}
+	if r != nil && strings.TrimSpace(resume.Hash) != "" && r.resumeFactsByHash != nil {
+		if facts, ok := r.resumeFactsByHash[resume.Hash]; ok && strings.TrimSpace(facts.ExperienceText) != "" {
+			selected.Experience = facts.ExperienceText
+		}
+	}
 	return applicationprocessing.Request{
 		Vacancy: value, ResumeID: resume.Hash, ResumeTitle: resume.Title,
-		Candidate:   vacancyanalysis.CandidateFacts{FullName: candidate.FullName, ResumeTitle: candidate.ResumeTitle, Salary: candidate.Salary, Experience: candidate.Experience, Skills: candidate.Skills, Location: candidate.Location, Contacts: candidate.Contacts, EducationKnown: candidate.EducationKnown, EducationLevel: candidate.EducationLevel, EducationDetails: candidate.EducationDetails, TotalExperienceMonthsKnown: candidate.TotalExperienceMonthsKnown, TotalExperienceMonths: candidate.TotalExperienceMonths, Profile: candidate.Profile, SafeContext: candidate.SafeContext},
-		LetterFacts: coverLetterCandidateFacts(candidate), Stories: append([]CandidateStory(nil), candidate.Stories...), Contacts: r.contacts, GitHubURL: r.githubURL,
+		Candidate:   vacancyanalysis.CandidateFacts{FullName: selected.FullName, ResumeTitle: selected.ResumeTitle, Salary: selected.Salary, Experience: selected.Experience, Skills: selected.Skills, Location: selected.Location, Contacts: selected.Contacts, EducationKnown: selected.EducationKnown, EducationLevel: selected.EducationLevel, EducationDetails: selected.EducationDetails, TotalExperienceMonthsKnown: selected.TotalExperienceMonthsKnown, TotalExperienceMonths: selected.TotalExperienceMonths, Profile: selected.Profile, SafeContext: selected.SafeContext},
+		LetterFacts: coverLetterCandidateFacts(selected), Stories: append([]CandidateStory(nil), selected.Stories...), Contacts: r.contacts, GitHubURL: r.githubURL,
 		ExtraLetterPrompt: r.extraLetterPrompt, ExtraTestPrompt: r.extraTestSolutionPrompt, ForceLetter: r.forceLetter, IncludeKeywords: append([]string(nil), r.includeKeywords...),
 		ApplicationLimitReached: r.maxApplicationsPerRun > 0 && applicationsInRun >= r.maxApplicationsPerRun,
 	}

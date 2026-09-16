@@ -259,7 +259,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 			route := r.routeResumeForVacancy(value)
 			r.writeEvent(careerAgentRouteEvent(route))
 			trace.ResumeCandidates = append([]careeragent.ResumeScore(nil), route.AlternativeScores...)
-			trace.SelectedResume, trace.ResumeConfidence = route.SelectedResumeID, route.Confidence
+			trace.SelectedResume, trace.SelectedResumeTitle, trace.ResumeConfidence = route.SelectedResumeID, route.SelectedResumeTitle, route.Confidence
 			trace.FinalRouteReasonCode = route.ReasonCode
 			if route.Status != careeragent.RouteSelected || route.Confidence == careeragent.ConfidenceLow || (r.careerAgentMode == "canary" && (route.Confidence != careeragent.ConfidenceHigh || !routeRequirementsConfirmed(route))) {
 				recordStage(stageStats, "resume_routing", strings.Join(route.Reasons, "; "), false, true)
@@ -329,6 +329,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 			score := prep.Analysis.Score
 			trace.AIScore = &score
 			trace.AIReasons = append([]string(nil), prep.Analysis.Reasons...)
+			recordAIDecisionBreakdown(&summary, &trace, *prep.Analysis, r.minMatchScore)
 			recordStage(stageStats, "ai_evaluation", "completed", false, true)
 		}
 		if r.careerAgentMode != "" && prep.Analysis == nil && trace.AICallReason == "" {
@@ -344,6 +345,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 		case applicationprocessing.OutcomeNeedsCandidateInput:
 			trace.FinalDecision = string(VacancyReviewRequired)
 			trace.SelectedResume = firstNonEmpty(trace.SelectedResume, selectedResume.Hash)
+			trace.SelectedResumeTitle = firstNonEmpty(trace.SelectedResumeTitle, selectedResume.Title)
 			if prep.Analysis != nil && len(hardRequirementsUnknown(*prep.Analysis)) > 0 {
 				trace.FinalRouteReasonCode = careeragent.RouteReasonUnknownHard
 			}
@@ -373,7 +375,6 @@ func (r *HHAIResponder) ApplyVacancies() error {
 					terminal = TerminalDeterministicReject
 					summary.Rejected++
 				} else {
-					summary.AIRejected++
 					summary.Rejected++
 				}
 				score := prep.Analysis.Score
@@ -406,6 +407,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 		summary.Matched++
 		trace.FinalDecision = string(VacancyMatch)
 		trace.SelectedResume = firstNonEmpty(trace.SelectedResume, selectedResume.Hash)
+		trace.SelectedResumeTitle = firstNonEmpty(trace.SelectedResumeTitle, selectedResume.Title)
 		trace.CoverLetterGenerated = strings.TrimSpace(prep.Prepared.CoverLetter) != ""
 		r.writeEvent(VacancyMatchResult{Type: "vacancy_match", VacancyID: value.ID, Name: value.Name, URL: vacancyURL, Score: evaluation.Score, Reasons: evaluation.Reasons, Missing: evaluation.Missing, HardRequirementsMissing: hardRequirementsMissing(evaluation), HardRequirements: evaluation.HardRequirements, SearchProfiles: r.vacancySearchSources[value.ID]})
 		logger.Info("MATCH — vacancy %d: %d/100", value.ID, evaluation.Score)

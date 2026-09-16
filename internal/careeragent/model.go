@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"math"
 	"net/url"
 	"sort"
 	"strconv"
@@ -18,21 +19,34 @@ import (
 )
 
 type ResumeProfile struct {
-	ID              string   `json:"id"`
-	HHID            int64    `json:"hh_id,omitempty"`
-	Hash            string   `json:"hash,omitempty"`
-	Title           string   `json:"title"`
-	DesiredRole     string   `json:"desired_role,omitempty"`
-	Skills          []string `json:"skills,omitempty"`
-	Experience      string   `json:"experience,omitempty"`
-	Location        string   `json:"location,omitempty"`
-	Salary          string   `json:"salary,omitempty"`
-	Employment      string   `json:"employment,omitempty"`
-	Schedule        string   `json:"schedule,omitempty"`
-	SearchHints     []string `json:"search_hints,omitempty"`
-	IncludeKeywords []string `json:"include_keywords,omitempty"`
-	ExcludeKeywords []string `json:"exclude_keywords,omitempty"`
-	Enabled         bool     `json:"enabled"`
+	ID              string         `json:"id"`
+	HHID            int64          `json:"hh_id,omitempty"`
+	Hash            string         `json:"hash,omitempty"`
+	Title           string         `json:"title"`
+	DesiredRole     string         `json:"desired_role,omitempty"`
+	Skills          []string       `json:"skills,omitempty"`
+	Experience      string         `json:"experience,omitempty"`
+	Location        string         `json:"location,omitempty"`
+	Salary          string         `json:"salary,omitempty"`
+	Employment      string         `json:"employment,omitempty"`
+	Schedule        string         `json:"schedule,omitempty"`
+	SearchHints     []string       `json:"search_hints,omitempty"`
+	IncludeKeywords []string       `json:"include_keywords,omitempty"`
+	ExcludeKeywords []string       `json:"exclude_keywords,omitempty"`
+	Identity        ResumeIdentity `json:"identity,omitempty"`
+	Enabled         bool           `json:"enabled"`
+}
+
+// ResumeIdentity is a deterministic, explainable summary of the resume's
+// actual title and HH skills. It is a routing aid, not additional candidate
+// knowledge: every value is derived from fields already present in the
+// profile.
+type ResumeIdentity struct {
+	PrimaryRoles     []string `json:"primary_roles,omitempty"`
+	StrongSkills     []string `json:"strong_skills,omitempty"`
+	SupportingSkills []string `json:"supporting_skills,omitempty"`
+	DomainSignals    []string `json:"domain_signals,omitempty"`
+	NegativeSignals  []string `json:"negative_signals,omitempty"`
 }
 
 // StableResumeID is independent of list order and therefore safe to use in
@@ -62,11 +76,13 @@ func NormalizeResumes(values []candidate.ResumeItem) []ResumeProfile {
 			continue
 		}
 		seen[id] = true
-		result = append(result, ResumeProfile{
+		profile := ResumeProfile{
 			ID: id, HHID: value.Id, Hash: strings.TrimSpace(value.Hash),
 			Title: strings.TrimSpace(value.Title), DesiredRole: strings.TrimSpace(value.Title),
 			Skills: splitList(value.Skills), Location: strings.TrimSpace(value.Area), Salary: strings.TrimSpace(value.Salary), Enabled: true,
-		})
+		}
+		profile.Identity = DeriveResumeIdentity(profile)
+		result = append(result, profile)
 	}
 	sort.SliceStable(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	return result
@@ -227,27 +243,42 @@ type SearchProfileEvidence struct {
 }
 
 type ResumeScore struct {
-	ResumeID        string   `json:"resume_id"`
-	Title           string   `json:"title"`
-	Score           int      `json:"score"`
-	FitScore        int      `json:"fit_score,omitempty"`
-	ProvenanceScore int      `json:"provenance_score,omitempty"`
-	Reasons         []string `json:"reasons,omitempty"`
-	HardBlockers    []string `json:"hard_blockers,omitempty"`
+	ResumeID             string   `json:"resume_id"`
+	Title                string   `json:"title"`
+	Score                int      `json:"score"`
+	FitScore             int      `json:"fit_score,omitempty"`
+	ProvenanceScore      int      `json:"provenance_score,omitempty"`
+	RoleScore            int      `json:"role_score,omitempty"`
+	SkillScore           int      `json:"skill_score,omitempty"`
+	DomainScore          int      `json:"domain_score,omitempty"`
+	ExperienceScore      int      `json:"experience_score,omitempty"`
+	GenericEvidenceScore int      `json:"generic_evidence_score,omitempty"`
+	RawFit               int      `json:"raw_fit,omitempty"`
+	NormalizedScore      int      `json:"normalized_score,omitempty"`
+	SpecificMatches      []string `json:"specific_matches,omitempty"`
+	PartialMatches       []string `json:"partial_matches,omitempty"`
+	Reasons              []string `json:"reasons,omitempty"`
+	HardBlockers         []string `json:"hard_blockers,omitempty"`
 }
 
 type RouteDecision struct {
-	VacancyID           int                `json:"vacancy_id"`
-	Status              string             `json:"status"`
-	SelectedResumeID    string             `json:"selected_resume_id,omitempty"`
-	SelectedResumeTitle string             `json:"selected_resume_title,omitempty"`
-	Score               int                `json:"score"`
-	AlternativeScores   []ResumeScore      `json:"alternative_resume_scores,omitempty"`
-	Reasons             []string           `json:"reasons,omitempty"`
-	Confidence          string             `json:"confidence"`
-	HardRequirements    []RequirementState `json:"hard_requirements,omitempty"`
-	HardBlockers        []string           `json:"hard_blockers,omitempty"`
-	ReasonCode          string             `json:"reason_code,omitempty"`
+	VacancyID             int                `json:"vacancy_id"`
+	Status                string             `json:"status"`
+	SelectedResumeID      string             `json:"selected_resume_id,omitempty"`
+	SelectedResumeTitle   string             `json:"selected_resume_title,omitempty"`
+	Score                 int                `json:"score"`
+	TopRawScore           int                `json:"top_raw_score,omitempty"`
+	SecondRawScore        int                `json:"second_raw_score,omitempty"`
+	TopNormalizedScore    int                `json:"top_normalized_score,omitempty"`
+	SecondNormalizedScore int                `json:"second_normalized_score,omitempty"`
+	AbsoluteMargin        int                `json:"absolute_margin,omitempty"`
+	RelativeMargin        float64            `json:"relative_margin,omitempty"`
+	AlternativeScores     []ResumeScore      `json:"alternative_resume_scores,omitempty"`
+	Reasons               []string           `json:"reasons,omitempty"`
+	Confidence            string             `json:"confidence"`
+	HardRequirements      []RequirementState `json:"hard_requirements,omitempty"`
+	HardBlockers          []string           `json:"hard_blockers,omitempty"`
+	ReasonCode            string             `json:"reason_code,omitempty"`
 }
 
 type PreliminaryRouteDecision struct {
@@ -299,6 +330,9 @@ func RouteResume(vacancy VacancyInput, resumes []ResumeProfile) RouteDecision {
 		return decision
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].RawFit != candidates[j].RawFit {
+			return candidates[i].RawFit > candidates[j].RawFit
+		}
 		if candidates[i].Score != candidates[j].Score {
 			return candidates[i].Score > candidates[j].Score
 		}
@@ -322,6 +356,14 @@ func RouteResume(vacancy VacancyInput, resumes []ResumeProfile) RouteDecision {
 	}
 	candidates = compatible
 	decision.Score = candidates[0].Score
+	decision.TopRawScore, decision.TopNormalizedScore = candidates[0].RawFit, candidates[0].NormalizedScore
+	if len(candidates) > 1 {
+		decision.SecondRawScore, decision.SecondNormalizedScore = candidates[1].RawFit, candidates[1].NormalizedScore
+		decision.AbsoluteMargin = candidates[0].RawFit - candidates[1].RawFit
+		if candidates[0].RawFit > 0 {
+			decision.RelativeMargin = float64(decision.AbsoluteMargin) / float64(candidates[0].RawFit)
+		}
+	}
 	decision.SelectedResumeID, decision.SelectedResumeTitle = candidates[0].ResumeID, candidates[0].Title
 	decision.HardRequirements = requirementStates(vacancy, candidates[0], resumes)
 	for _, requirement := range decision.HardRequirements {
@@ -332,12 +374,17 @@ func RouteResume(vacancy VacancyInput, resumes []ResumeProfile) RouteDecision {
 		}
 	}
 	// Provenance is a bounded tie-break signal, never enough to resolve a
-	// genuinely close fit. Compare fit-only scores for the ambiguity gate.
-	if len(candidates) > 1 && candidates[0].FitScore-candidates[1].FitScore < 8 {
-		decision.Status, decision.Confidence, decision.ReasonCode = RouteReviewRequired, ConfidenceLow, RouteReasonAmbiguous
-		decision.SelectedResumeID, decision.SelectedResumeTitle = "", ""
-		decision.Reasons = append(decision.Reasons, "top resume scores are too close for deterministic selection")
-		return decision
+	// genuinely close fit. Compare uncapped fit-only scores for the ambiguity
+	// gate, while exposing the total raw margin for operator review.
+	if len(candidates) > 1 {
+		fitMargin := candidates[0].FitScore - candidates[1].FitScore
+		fitRelative := float64(fitMargin) / float64(maxInt(candidates[0].FitScore, 1))
+		if fitMargin < 10 || fitRelative < 0.12 {
+			decision.Status, decision.Confidence, decision.ReasonCode = RouteReviewRequired, ConfidenceLow, RouteReasonAmbiguous
+			decision.SelectedResumeID, decision.SelectedResumeTitle = "", ""
+			decision.Reasons = append(decision.Reasons, "top resume scores are too close for deterministic selection")
+			return decision
+		}
 	}
 	if decision.Score < 12 {
 		decision.Status, decision.Confidence, decision.ReasonCode = RouteReviewRequired, ConfidenceLow, RouteReasonNoStrong
@@ -634,57 +681,333 @@ func canonicalToken(value string) string {
 		"внедрение": "implementation", "внедрения": "implementation", "внедрению": "implementation", "внедрении": "implementation", "implementation": "implementation",
 		"разработчик": "developer", "разработчика": "developer", "разработчики": "developer", "разработка": "developer", "разработке": "developer", "developer": "developer", "developers": "developer",
 		"бэкенд": "backend", "бекенд": "backend", "бэкенда": "backend", "бекенда": "backend", "backend": "backend", "back-end": "backend",
-		"технический": "technical", "техническая": "technical", "техническое": "technical", "technical": "technical",
+		"технический": "technical", "техническая": "technical", "техническое": "technical", "технической": "technical", "technical": "technical",
 		"специалист": "specialist", "специалиста": "specialist", "специалисты": "specialist", "specialist": "specialist",
 		"инженер": "engineer", "инженера": "engineer", "инженеры": "engineer", "engineer": "engineer",
 		"разработчикa": "developer",
-		"rest":         "api", "restful": "api", "api": "api", "apis": "api",
+		"rest":         "rest_api", "restful": "rest_api", "api": "api", "apis": "api",
+		"postgres": "postgresql", "postgresql": "postgresql",
+		"node": "nodejs", "nodejs": "nodejs",
+		"vue": "vuejs", "vuejs": "vuejs",
 	}
 	if canonical, ok := aliases[value]; ok {
 		return canonical
 	}
 	return value
 }
+
+var genericEvidenceTokens = map[string]bool{
+	"developer": true, "specialist": true, "technical": true, "engineer": true,
+	"api": true, "backend": true,
+}
+
+var specificEvidenceTokens = map[string]bool{
+	"python": true, "django": true, "postgresql": true, "sql": true, "rest_api": true,
+	"docker": true, "redis": true, "nginx": true, "typescript": true, "javascript": true,
+	"react": true, "nodejs": true, "express": true, "webhooks": true, "bitrix24": true,
+	"crm": true, "linux": true, "soap": true, "vuejs": true, "laravel": true,
+	"php": true, "html": true, "css": true, "automation": true, "integration": true,
+	"implementation": true, "support": true, "troubleshooting": true, "diagnostics": true,
+	"installation": true, "network": true, "cloud": true, "devops": true, "kubernetes": true,
+	"kafka": true, "celery": true, "xml": true, "dns": true, "fullstack": true,
+}
+
+var domainEvidenceTokens = map[string]bool{
+	"automation": true, "integration": true, "implementation": true, "support": true,
+	"crm": true, "backend": true, "fullstack": true, "data": true, "analytics": true,
+}
+
+var roleEvidenceTokens = map[string]bool{
+	"python": true, "django": true, "backend": true, "support": true, "automation": true,
+	"integration": true, "implementation": true, "fullstack": true, "devops": true,
+	"data": true, "analytics": true,
+}
+
+// DeriveResumeIdentity exposes distinctions already present in the profile.
+// It never adds candidate facts: generic title words remain separate from
+// strong, specific evidence.
+func DeriveResumeIdentity(resume ResumeProfile) ResumeIdentity {
+	identity := ResumeIdentity{}
+	roleTokens := tokens(resume.Title + " " + resume.DesiredRole)
+	allTokens := tokens(strings.Join(append([]string{resume.Title, resume.DesiredRole}, resume.Skills...), " "))
+	for _, token := range sortedTokenNames(roleTokens) {
+		if roleEvidenceTokens[token] || genericEvidenceTokens[token] {
+			identity.PrimaryRoles = append(identity.PrimaryRoles, token)
+		}
+	}
+	for _, token := range sortedTokenNames(allTokens) {
+		if domainEvidenceTokens[token] {
+			identity.DomainSignals = append(identity.DomainSignals, token)
+		}
+	}
+	for _, skill := range resume.Skills {
+		name := strings.TrimSpace(skill)
+		if name == "" {
+			continue
+		}
+		key := strings.Join(sortedTokenNames(tokens(name)), " ")
+		if key == "" {
+			continue
+		}
+		specific := false
+		for token := range tokens(name) {
+			if specificEvidenceTokens[token] && !genericEvidenceTokens[token] {
+				specific = true
+				break
+			}
+		}
+		if specific {
+			identity.StrongSkills = appendUniqueCanonical(identity.StrongSkills, name)
+		} else {
+			identity.SupportingSkills = appendUniqueCanonical(identity.SupportingSkills, name)
+		}
+	}
+	for _, value := range resume.ExcludeKeywords {
+		if normalized := normalizeQuery(value); normalized != "" {
+			identity.NegativeSignals = appendUnique(identity.NegativeSignals, normalized)
+		}
+	}
+	return identity
+}
+
+type skillMatchKind string
+
+const (
+	skillMatchNone        skillMatchKind = "none"
+	skillMatchExact       skillMatchKind = "exact normalized phrase"
+	skillMatchSubstantial skillMatchKind = "multi-token substantial overlap"
+	skillMatchSpecific    skillMatchKind = "single specific token"
+	skillMatchGeneric     skillMatchKind = "single generic token"
+)
+
 func scoreResume(v VacancyInput, resume ResumeProfile) ResumeScore {
-	fitScore := 0
-	reasons := []string{}
+	identity := resume.Identity
+	if len(identity.PrimaryRoles) == 0 && len(identity.StrongSkills) == 0 && len(identity.SupportingSkills) == 0 && len(identity.DomainSignals) == 0 {
+		identity = DeriveResumeIdentity(resume)
+	}
 	vacancyText := strings.Join([]string{v.Title, v.Description, strings.Join(v.RequiredSkills, " "), strings.Join(v.KeySkills, " "), strings.Join(v.ProfessionalRoles, " "), v.Experience, v.Employment, v.Schedule, v.Location, v.WorkFormat, v.Salary}, " ")
-	vacancyTokens := tokens(vacancyText)
+	structuredText := strings.Join([]string{v.Title, strings.Join(v.RequiredSkills, " "), strings.Join(v.KeySkills, " "), strings.Join(v.ProfessionalRoles, " ")}, " ")
+	structuredTokens := tokens(structuredText)
+	descriptionTokens := tokens(v.Description)
+	roleTokens := tokens(strings.Join([]string{v.Title, strings.Join(v.ProfessionalRoles, " ")}, " "))
 	hardBlockers := []string{}
 	for _, keyword := range resume.ExcludeKeywords {
 		if containsKeyword(vacancyText, []string{keyword}) {
 			hardBlockers = append(hardBlockers, "excluded keyword: "+keyword)
 		}
 	}
-	matchedSkills := map[string]bool{}
-	for _, skill := range resume.Skills {
-		matchedToken := overlappingToken(tokens(skill), vacancyTokens)
-		if matchedToken != "" && !matchedSkills[matchedToken] {
-			matchedSkills[matchedToken] = true
-			fitScore += 18
-			reasons = append(reasons, "skill: "+skill)
-		}
-	}
-	overlap := 0
+
+	roleScore, genericEvidence := 0, 0
 	for token := range tokens(resume.Title + " " + resume.DesiredRole) {
-		if vacancyTokens[token] {
-			overlap++
+		if !roleTokens[token] {
+			continue
+		}
+		if roleEvidenceTokens[token] && !genericEvidenceTokens[token] {
+			roleScore += 12
+		} else if genericEvidenceTokens[token] {
+			roleScore += 2
+			genericEvidence++
 		}
 	}
-	fitScore += overlap * 12
-	if overlap > 0 {
-		reasons = append(reasons, "role/title overlap")
+
+	skillScore := 0
+	specificMatches, partialMatches := []string{}, []string{}
+	seenSkills := map[string]bool{}
+	for _, skill := range resume.Skills {
+		key := strings.Join(sortedTokenNames(tokens(skill)), " ")
+		if key == "" || seenSkills[key] {
+			continue
+		}
+		seenSkills[key] = true
+		kind := classifySkillMatch(skill, structuredText, structuredTokens)
+		weight := 1
+		if kind == skillMatchNone {
+			kind = classifySkillMatch(skill, v.Description, descriptionTokens)
+			weight = 2 // free-text description is useful, but weaker than fields
+		}
+		switch kind {
+		case skillMatchExact:
+			if weight == 1 {
+				skillScore += 20
+			} else {
+				skillScore += 5
+			}
+			specificMatches = append(specificMatches, strings.TrimSpace(skill)+" (exact normalized phrase)")
+		case skillMatchSubstantial:
+			if weight == 1 {
+				skillScore += 12
+			} else {
+				skillScore += 4
+			}
+			partialMatches = append(partialMatches, strings.TrimSpace(skill)+" (multi-token substantial overlap)")
+		case skillMatchSpecific:
+			if weight == 1 {
+				skillScore += 7
+			} else {
+				skillScore += 2
+			}
+			partialMatches = append(partialMatches, strings.TrimSpace(skill)+" (single specific token)")
+		case skillMatchGeneric:
+			genericEvidence++
+		}
 	}
+	domainScore := 0
+	for token := range domainEvidenceTokens {
+		if structuredTokens[token] && (containsToken(identity.DomainSignals, token) || tokensContain(tokens(resume.Title+" "+strings.Join(resume.Skills, " ")), token)) {
+			domainScore += 8
+		}
+	}
+	experienceScore := experienceFitScore(v, resume)
 	provenanceScore := 0
 	for _, source := range v.SearchProfiles {
 		if source.ResumeID != "" && (source.ResumeID == resume.ID || source.ResumeID == resume.Hash) {
-			provenanceScore = 4
-			reasons = append(reasons, "source search profile for this resume (+4 soft signal)")
+			provenanceScore = 5
 			break
 		}
 	}
-	score := minInt(fitScore+provenanceScore, 100)
-	return ResumeScore{ResumeID: resume.ID, Title: resume.Title, Score: score, FitScore: minInt(fitScore, 100), ProvenanceScore: provenanceScore, Reasons: reasons, HardBlockers: hardBlockers}
+	genericScore := minInt(genericEvidence, 5)
+	fitScore := roleScore + skillScore + domainScore + experienceScore + genericScore
+	rawFit := fitScore + provenanceScore
+	normalized := normalizeResumeScore(rawFit)
+	reasons := []string{}
+	if roleScore > 0 {
+		reasons = append(reasons, fmtScoreReason("role fit", roleScore))
+		reasons = append(reasons, "role/title overlap")
+	}
+	if skillScore > 0 {
+		reasons = append(reasons, fmtScoreReason("specific skill fit", skillScore))
+	}
+	if domainScore > 0 {
+		reasons = append(reasons, fmtScoreReason("domain fit", domainScore))
+	}
+	if experienceScore > 0 {
+		reasons = append(reasons, fmtScoreReason("seniority/experience fit", experienceScore))
+	}
+	if provenanceScore > 0 {
+		reasons = append(reasons, "search provenance (+5 bounded soft signal)")
+	}
+	if genericScore > 0 {
+		reasons = append(reasons, fmtScoreReason("generic evidence (bounded)", genericScore))
+	}
+	for _, match := range specificMatches {
+		reasons = append(reasons, "specific skill: "+match)
+	}
+	for _, match := range partialMatches {
+		reasons = append(reasons, "partial skill: "+match)
+	}
+	return ResumeScore{ResumeID: resume.ID, Title: resume.Title, Score: normalized, FitScore: fitScore, ProvenanceScore: provenanceScore, RoleScore: roleScore, SkillScore: skillScore, DomainScore: domainScore, ExperienceScore: experienceScore, GenericEvidenceScore: genericScore, RawFit: rawFit, NormalizedScore: normalized, SpecificMatches: specificMatches, PartialMatches: partialMatches, Reasons: reasons, HardBlockers: hardBlockers}
+}
+
+func classifySkillMatch(skill, vacancyText string, vacancyTokens map[string]bool) skillMatchKind {
+	skillTokens := tokens(skill)
+	if len(skillTokens) == 0 {
+		return skillMatchNone
+	}
+	specificCount, overlapSpecific := 0, 0
+	overlapGeneric := false
+	for token := range skillTokens {
+		if specificEvidenceTokens[token] && !genericEvidenceTokens[token] {
+			specificCount++
+			if vacancyTokens[token] {
+				overlapSpecific++
+			}
+		} else if genericEvidenceTokens[token] && vacancyTokens[token] {
+			overlapGeneric = true
+		}
+	}
+	if overlapSpecific == 0 {
+		if specificCount == 0 && overlapGeneric {
+			return skillMatchGeneric
+		}
+		return skillMatchNone
+	}
+	if containsCanonicalPhrase(vacancyText, skill) {
+		return skillMatchExact
+	}
+	if specificCount >= 2 && overlapSpecific*2 >= specificCount {
+		return skillMatchSubstantial
+	}
+	return skillMatchSpecific
+}
+
+func containsCanonicalPhrase(haystack, phrase string) bool {
+	want := canonicalTokenSequence(phrase)
+	if len(want) == 0 {
+		return false
+	}
+	have := canonicalTokenSequence(haystack)
+	for start := 0; start+len(want) <= len(have); start++ {
+		match := true
+		for index, token := range want {
+			if have[start+index] != token {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
+func canonicalTokenSequence(value string) []string {
+	value = strings.ToLower(strings.ReplaceAll(value, "ё", "е"))
+	value = strings.NewReplacer("/", " ", "|", " ", ",", " ", ";", " ", "–", " ", "—", " ", "-", " ", "(", " ", ")", " ", ":", " ").Replace(value)
+	result := []string{}
+	for _, raw := range strings.Fields(value) {
+		if token := canonicalToken(raw); token != "" {
+			result = append(result, token)
+		}
+	}
+	return result
+}
+
+func experienceFitScore(v VacancyInput, resume ResumeProfile) int {
+	vacancy := strings.ToLower(v.Experience + " " + v.Title)
+	resumeText := strings.ToLower(resume.Title + " " + resume.DesiredRole)
+	for _, level := range []string{"senior", "middle", "middle+", "junior", "стажер", "ведущий"} {
+		if strings.Contains(vacancy, level) && strings.Contains(resumeText, level) {
+			return 8
+		}
+	}
+	return 0
+}
+
+func normalizeResumeScore(raw int) int {
+	if raw <= 0 {
+		return 0
+	}
+	// Monotonic compression keeps a 0..100 UI score while retaining ordering
+	// in RawFit for routing and margins. There is no early cap on the fit sum.
+	return int(math.Round(100 * float64(raw) / float64(raw+60)))
+}
+
+func fmtScoreReason(component string, value int) string {
+	return component + " (+" + strconv.Itoa(value) + ")"
+}
+
+func tokensContain(values map[string]bool, value string) bool {
+	return values[value]
+}
+
+func containsToken(values []string, value string) bool {
+	for _, item := range values {
+		if item == value {
+			return true
+		}
+	}
+	return false
+}
+
+func appendUniqueCanonical(values []string, value string) []string {
+	key := strings.Join(sortedTokenNames(tokens(value)), " ")
+	for _, existing := range values {
+		if strings.Join(sortedTokenNames(tokens(existing)), " ") == key {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 func requirementStates(v VacancyInput, selected ResumeScore, resumes []ResumeProfile) []RequirementState {
@@ -752,6 +1075,13 @@ func appendUnique(values []string, value string) []string {
 }
 func minInt(a, b int) int {
 	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a, b int) int {
+	if a > b {
 		return a
 	}
 	return b
