@@ -15,6 +15,7 @@ import (
 
 	"hh-ai-responder/internal/careeragent"
 	"hh-ai-responder/internal/platform"
+	attemptpolicy "hh-ai-responder/internal/usecase/applicationattemptpolicy"
 	applicationpilot "hh-ai-responder/internal/usecase/applicationpilot"
 	applicationprocessing "hh-ai-responder/internal/usecase/applicationprocessing"
 	applicationreconciliation "hh-ai-responder/internal/usecase/applicationreconciliation"
@@ -43,8 +44,10 @@ type PilotArtifact struct {
 	VacancyID           int                         `json:"vacancy_id"`
 	Vacancy             Vacancy                     `json:"vacancy"`
 	SelectedResumeID    string                      `json:"selected_resume_id"`
+	SelectedResumeHHID  int64                       `json:"selected_resume_hh_id,omitempty"`
 	SelectedResumeHash  string                      `json:"selected_resume_hash"`
 	SelectedResumeTitle string                      `json:"selected_resume_title"`
+	RouterScore         int                         `json:"router_score,omitempty"`
 	AlternativeScores   []careeragent.ResumeScore   `json:"alternative_resume_scores,omitempty"`
 	AIScore             *int                        `json:"ai_score,omitempty"`
 	AIRecommendation    string                      `json:"ai_recommendation,omitempty"`
@@ -60,6 +63,8 @@ type PilotArtifact struct {
 	Nonce               string                      `json:"nonce,omitempty"`
 	NonceUsedAt         *time.Time                  `json:"nonce_used_at,omitempty"`
 	PreviewFreshAt      time.Time                   `json:"preview_fresh_at"`
+	CandidatesChecked   int                         `json:"candidates_checked,omitempty"`
+	BlockedCandidates   []PilotBlockedCandidate     `json:"blocked_candidates,omitempty"`
 }
 
 type PilotPreflightSnapshot struct {
@@ -77,9 +82,17 @@ type PilotPreflightSnapshot struct {
 }
 
 type PilotPreview struct {
-	Artifact PilotArtifact
-	Status   string
-	Reasons  []string
+	Artifact          PilotArtifact
+	Status            string
+	Reasons           []string
+	CandidatesChecked int
+	BlockedCandidates []PilotBlockedCandidate
+}
+
+type PilotBlockedCandidate struct {
+	VacancyID     int    `json:"vacancy_id"`
+	Title         string `json:"title"`
+	BlockedReason string `json:"blocked_reason"`
 }
 
 func careerAgentPilotPath(cfg Config) string {
@@ -98,11 +111,15 @@ func runCareerAgentPilotCommand(args []string, cfg Config, stdout, stderr io.Wri
 	fs.SetOutput(stderr)
 	vacancyID := 0
 	fs.IntVar(&vacancyID, "vacancy", 0, "HH vacancy id for the read-only pilot preview")
+	search := false
+	fs.BoolVar(&search, "search", false, "find the first fresh pilot-eligible vacancy")
+	maxCandidates := 20
+	fs.IntVar(&maxCandidates, "max-candidates", 20, "maximum fresh candidates to check")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() != 0 || vacancyID <= 0 {
-		return errors.New("usage: career-agent pilot --vacancy <id>")
+	if fs.NArg() != 0 || maxCandidates <= 0 || maxCandidates > 20 || (vacancyID <= 0 && !search) || (vacancyID > 0 && search) {
+		return errors.New("usage: career-agent pilot --search [--max-candidates 1..20] | career-agent pilot --vacancy <id>")
 	}
 
 	// 30A is always read-only, independent of HH_AUTO_* and write flags in the
@@ -117,7 +134,12 @@ func runCareerAgentPilotCommand(args []string, cfg Config, stdout, stderr io.Wri
 	}
 	defer responder.closeResources()
 	responder.loadCareerAgentRegistry(cfg.ResumeRegistryPath)
-	preview, err := responder.buildCareerAgentPilotPreview(vacancyID)
+	var preview PilotPreview
+	if search {
+		preview, err = responder.findFirstCareerAgentPilotCandidate(maxCandidates)
+	} else {
+		preview, err = responder.buildCareerAgentPilotPreview(vacancyID)
+	}
 	if err != nil {
 		return err
 	}
@@ -155,10 +177,96 @@ func (r *HHAIResponder) buildCareerAgentPilotPreview(vacancyID int) (PilotPrevie
 		return PilotPreview{}, fmt.Errorf("pilot application preflight read failed: %w", err)
 	}
 
+	return r.buildCareerAgentPilotPreviewFromState(value, preflight)
+}
+
+// findFirstCareerAgentPilotCandidate is the bounded read-only pilot search.
+// It deliberately performs the cheap provider response-state read before
+// detail, routing, AI, and cover-letter preparation.
+func (r *HHAIResponder) findFirstCareerAgentPilotCandidate(maxCandidates int) (PilotPreview, error) {
+	if maxCandidates <= 0 || maxCandidates > 20 {
+		return PilotPreview{}, errors.New("pilot search candidate bound must be from 1 to 20")
+	}
+	if r == nil || r.hhReadClient() == nil {
+		return PilotPreview{}, errors.New("HH read client is not configured")
+	}
+	summary := RunSummaryResult{}
+	vacancies, err := r.fetchVacanciesFromSearchProfiles(&summary)
+	if err != nil {
+		return PilotPreview{}, fmt.Errorf("pilot fresh search failed: %w", err)
+	}
+
+	result := PilotPreview{Status: applicationpilot.StatusBlocked, CandidatesChecked: 0, BlockedCandidates: []PilotBlockedCandidate{}}
+	for _, candidate := range vacancies {
+		if result.CandidatesChecked >= maxCandidates {
+			break
+		}
+		result.CandidatesChecked++
+		title := firstNonEmpty(candidate.Title, candidate.Name)
+		blocked := func(reason string) {
+			result.BlockedCandidates = append(result.BlockedCandidates, PilotBlockedCandidate{VacancyID: candidate.ID, Title: title, BlockedReason: reason})
+		}
+
+		gate, gateErr := r.automaticApplicationGate(ctxOrBackground(r.ctx), candidate.ID)
+		if gateErr != nil {
+			blocked("UNRESOLVED_PREVIOUS_ATTEMPT")
+			continue
+		}
+		if gate.Classification == attemptpolicy.BlockingConfirmed || gate.Classification == attemptpolicy.BlockingUnresolved {
+			blocked("UNRESOLVED_PREVIOUS_ATTEMPT")
+			continue
+		}
+
+		preflight, preflightErr := r.GetVacancyPreflight(candidate)
+		if preflightErr != nil {
+			blocked("PREFLIGHT_READ_FAILED")
+			continue
+		}
+		if reason := pilotPreflightBlockReason(preflight); reason != "" {
+			blocked(reason)
+			continue
+		}
+
+		detail, detailErr := r.fetchCareerAgentDetail(ctxOrBackground(r.ctx), candidate)
+		if detailErr != nil {
+			blocked("VACANCY_DETAIL_UNAVAILABLE")
+			continue
+		}
+		preview, previewErr := r.buildCareerAgentPilotPreviewFromState(detail, preflight)
+		if previewErr != nil {
+			blocked(pilotErrorReason(previewErr))
+			continue
+		}
+		if preview.Status != pilotReadyStatus {
+			blocked(pilotPreviewBlockedReason(preview, r.minMatchScore))
+			continue
+		}
+		preview.CandidatesChecked = result.CandidatesChecked
+		preview.BlockedCandidates = append([]PilotBlockedCandidate(nil), result.BlockedCandidates...)
+		preview.Artifact.CandidatesChecked = preview.CandidatesChecked
+		preview.Artifact.BlockedCandidates = append([]PilotBlockedCandidate(nil), preview.BlockedCandidates...)
+		return preview, nil
+	}
+
+	result.Artifact = PilotArtifact{Version: pilotArtifactVersion, Status: applicationpilot.StatusBlocked, FinalDecision: string(applicationprocessing.DecisionReviewRequired), FinalReason: "no fresh pilot-eligible candidate", PreviewFreshAt: time.Now().UTC()}
+	result.Artifact.CandidatesChecked = result.CandidatesChecked
+	result.Artifact.BlockedCandidates = append([]PilotBlockedCandidate(nil), result.BlockedCandidates...)
+	return result, nil
+}
+
+func (r *HHAIResponder) buildCareerAgentPilotPreviewFromState(value Vacancy, preflight VacancyPreflight) (PilotPreview, error) {
+	ctx := ctxOrBackground(r.ctx)
+	if value.ID <= 0 {
+		return PilotPreview{}, errors.New("pilot vacancy has invalid id")
+	}
+	if reason := pilotPreflightBlockReason(preflight); reason != "" {
+		return PilotPreview{Status: applicationpilot.StatusBlocked, Artifact: PilotArtifact{Version: pilotArtifactVersion, VacancyID: value.ID, Vacancy: value, Preflight: pilotPreflightSnapshot(preflight), PreviewFreshAt: time.Now().UTC()}, Reasons: []string{reason}}, nil
+	}
+
 	// The router is rebuilt from the freshly loaded /applicant/my_resumes data;
 	// no resume ID is hardcoded from Stage 29.6.
 	route := r.routeResumeForVacancy(value)
-	artifact := PilotArtifact{Version: pilotArtifactVersion, Status: applicationpilot.StatusBlocked, VacancyID: vacancyID, Vacancy: value, SelectedResumeID: route.SelectedResumeID, SelectedResumeTitle: route.SelectedResumeTitle, AlternativeScores: append([]careeragent.ResumeScore(nil), route.AlternativeScores...), Preflight: pilotPreflightSnapshot(preflight), PreviewFreshAt: time.Now().UTC()}
+	artifact := PilotArtifact{Version: pilotArtifactVersion, Status: applicationpilot.StatusBlocked, VacancyID: value.ID, Vacancy: value, SelectedResumeID: route.SelectedResumeID, SelectedResumeTitle: route.SelectedResumeTitle, RouterScore: route.Score, AlternativeScores: append([]careeragent.ResumeScore(nil), route.AlternativeScores...), Preflight: pilotPreflightSnapshot(preflight), PreviewFreshAt: time.Now().UTC()}
 	preview := PilotPreview{Artifact: artifact, Status: applicationpilot.StatusBlocked, Reasons: append([]string(nil), route.Reasons...)}
 	if route.Status != careeragent.RouteSelected || route.Confidence == careeragent.ConfidenceLow {
 		preview.Reasons = append(preview.Reasons, "resume router requires review: "+strings.Join(route.Reasons, "; "))
@@ -174,6 +282,7 @@ func (r *HHAIResponder) buildCareerAgentPilotPreview(vacancyID int) (PilotPrevie
 		return PilotPreview{}, fmt.Errorf("pilot selected resume read failed: %w", err)
 	}
 	artifact.SelectedResumeHash = selectedResume.Hash
+	artifact.SelectedResumeHHID = selectedResume.Id
 	artifact.SelectedResumeTitle = selectedResume.Title
 
 	description := value.Description
@@ -205,6 +314,11 @@ func (r *HHAIResponder) buildCareerAgentPilotPreview(vacancyID int) (PilotPrevie
 	artifact.HardRequirements = append([]HardRequirementEvaluation(nil), assessment.HardRequirements...)
 	artifact.FinalDecision, artifact.FinalReason = string(decision), reason
 	preview.Reasons = append(preview.Reasons, reason)
+	if !pilotAIEligibleForPreview(assessment, decision, r.minMatchScore) {
+		artifact.Status = applicationpilot.StatusBlocked
+		preview.Status = applicationpilot.StatusBlocked
+		return preview, nil
+	}
 
 	letterInput := coverLetterInput(value, description, candidate, &assessment, strings.TrimSpace(strings.Join([]string{r.extraLetterPrompt, pilotCoverLetterPrompt}, "\n")), r.coverLetterSemanticExamples(value, description, assessment, resolver))
 	letter, letterErr := rootApplicationCoverLetter{client: r.ai}.Generate(ctx, letterInput)
@@ -239,7 +353,7 @@ func (r *HHAIResponder) buildCareerAgentPilotPreview(vacancyID int) (PilotPrevie
 		preview.Reasons = append(preview.Reasons, "hard requirement missing: "+strings.Join(artifact.HardMissing, "; "))
 	}
 
-	if decision == applicationprocessing.DecisionMatch && len(artifact.HardMissing) == 0 && len(artifact.HardUnknown) == 0 && preflight.ArchivedKnown && !preflight.Archived && preflight.AlreadyRespondedKnown && !preflight.AlreadyResponded && preflight.CanApplyKnown && preflight.CanApply && preflight.TestPresentKnown && !preflight.TestPresent && preflight.LetterRequiredKnown && artifact.ContentHash != "" {
+	if pilotAIEligibleForPreview(assessment, decision, r.minMatchScore) && len(artifact.HardMissing) == 0 && len(artifact.HardUnknown) == 0 && preflight.ArchivedKnown && !preflight.Archived && preflight.AlreadyRespondedKnown && !preflight.AlreadyResponded && preflight.CanApplyKnown && preflight.CanApply && preflight.TestPresentKnown && !preflight.TestPresent && preflight.LetterRequiredKnown && artifact.ContentHash != "" {
 		artifact.Nonce, err = generateUUIDv4()
 		if err != nil {
 			return PilotPreview{}, fmt.Errorf("pilot nonce generation failed: %w", err)
@@ -252,6 +366,96 @@ func (r *HHAIResponder) buildCareerAgentPilotPreview(vacancyID int) (PilotPrevie
 	}
 	preview.Artifact = artifact
 	return preview, nil
+}
+
+func pilotAIEligibleForPreview(assessment VacancyEvaluation, decision applicationprocessing.Decision, minScore int) bool {
+	if len(hardRequirementsMissing(assessment)) > 0 || len(hardRequirementsUnknown(assessment)) > 0 || assessment.Score < minScore {
+		return false
+	}
+	if decision == applicationprocessing.DecisionMatch {
+		return true
+	}
+	return decision == applicationprocessing.DecisionReviewRequired && assessmentRecommendation(assessment) == vacancyanalysis.RecommendationUncertain
+}
+
+func pilotPreflightBlockReason(preflight VacancyPreflight) string {
+	if preflight.AlreadyRespondedKnown && preflight.AlreadyResponded {
+		return "ALREADY_RESPONDED"
+	}
+	if !preflight.AlreadyRespondedKnown {
+		return "ALREADY_RESPONDED_UNKNOWN"
+	}
+	if preflight.CanApplyKnown && !preflight.CanApply {
+		return "CAN_APPLY_FALSE"
+	}
+	if !preflight.CanApplyKnown {
+		return "CAN_APPLY_UNKNOWN"
+	}
+	if !preflight.ArchivedKnown {
+		return "VACANCY_ACTIVE_UNKNOWN"
+	}
+	if preflight.Archived {
+		return "VACANCY_INACTIVE"
+	}
+	if preflight.TestPresentKnown && preflight.TestPresent {
+		return "TEST_REQUIRED_UNSUPPORTED"
+	}
+	if !preflight.TestPresentKnown {
+		return "TEST_REQUIRED_UNKNOWN"
+	}
+	if !preflight.LetterRequiredKnown {
+		return "COVER_LETTER_REQUIREMENT_UNKNOWN"
+	}
+	if preflight.LetterRequired && preflight.CanApplyKnown && !preflight.CanApply {
+		return "COVER_LETTER_NOT_ALLOWED"
+	}
+	return ""
+}
+
+func pilotErrorReason(err error) string {
+	if err == nil {
+		return "PILOT_PREVIEW_FAILED"
+	}
+	text := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(text, "resume router"):
+		return "ROUTE_AMBIGUOUS"
+	case strings.Contains(text, "selected resume"):
+		return "RESUME_UNAVAILABLE"
+	case strings.Contains(text, "ai"):
+		return "AI_EVALUATION_FAILED"
+	case strings.Contains(text, "cover-letter"):
+		return "COVER_LETTER_PREVIEW_FAILED"
+	default:
+		return "PILOT_PREVIEW_FAILED"
+	}
+}
+
+func pilotPreviewBlockedReason(preview PilotPreview, minScore int) string {
+	if len(preview.Artifact.HardMissing) > 0 {
+		return "HARD_REQUIREMENT_MISSING"
+	}
+	if len(preview.Artifact.HardUnknown) > 0 {
+		return "HARD_REQUIREMENT_UNKNOWN"
+	}
+	if preview.Artifact.AIScore != nil && *preview.Artifact.AIScore < minScore {
+		return "SCORE_BELOW_THRESHOLD"
+	}
+	for _, reason := range preview.Reasons {
+		lower := strings.ToLower(reason)
+		switch {
+		case strings.Contains(lower, "resume router") || strings.Contains(lower, "scores are too close"):
+			return "ROUTE_AMBIGUOUS"
+		case strings.Contains(lower, "cover-letter preview failed"):
+			return "COVER_LETTER_PREVIEW_FAILED"
+		case strings.Contains(lower, "advisory"):
+			return "AI_ADVISORY_CONCERN"
+		}
+	}
+	if preview.Artifact.FinalDecision == string(applicationprocessing.DecisionReviewRequired) {
+		return "AI_ADVISORY_CONCERN"
+	}
+	return "PILOT_PREVIEW_BLOCKED"
 }
 
 func pilotPreflightSnapshot(value VacancyPreflight) PilotPreflightSnapshot {
@@ -299,26 +503,71 @@ func loadPilotArtifact(path string) (PilotArtifact, error) {
 
 func renderCareerAgentPilotPreview(preview PilotPreview) string {
 	a := preview.Artifact
+	if preview.Status != pilotReadyStatus && a.VacancyID == 0 {
+		lines := []string{"PILOT: NO_ELIGIBLE_CANDIDATE", fmt.Sprintf("Checked: %d", preview.CandidatesChecked), "Blocked reason counts:"}
+		counts := map[string]int{}
+		order := []string{}
+		for _, candidate := range preview.BlockedCandidates {
+			if counts[candidate.BlockedReason] == 0 {
+				order = append(order, candidate.BlockedReason)
+			}
+			counts[candidate.BlockedReason]++
+		}
+		for _, reason := range order {
+			lines = append(lines, "  "+reason+": "+fmt.Sprint(counts[reason]))
+		}
+		if len(order) == 0 {
+			lines = append(lines, "  none: 0")
+		}
+		if len(preview.BlockedCandidates) > 0 {
+			lines = append(lines, "Blocked candidates:")
+			for _, candidate := range preview.BlockedCandidates {
+				lines = append(lines, fmt.Sprintf("  %d %s — %s", candidate.VacancyID, candidate.Title, candidate.BlockedReason))
+			}
+		}
+		return strings.Join(append(lines, "Real HH reads: YES", "Real HH writes: 0", "Application POST: 0", "Shadow writes: 0"), "\n") + "\n"
+	}
 	aiScore := "unknown"
 	if a.AIScore != nil {
 		aiScore = fmt.Sprint(*a.AIScore)
 	}
-	company := a.Vacancy.Company.Name
-	url := a.Vacancy.Links["desktop"]
-	if url == "" {
-		url = a.Vacancy.Links["desktop"]
+	company := firstNonEmpty(a.Vacancy.Company.Name, "unknown")
+	url := firstNonEmpty(a.Vacancy.Links["desktop"], "unknown")
+	resumeID := firstNonEmpty(fmt.Sprint(a.SelectedResumeHHID), a.SelectedResumeHash, a.SelectedResumeID, "unknown")
+	if a.SelectedResumeHHID <= 0 {
+		resumeID = firstNonEmpty(a.SelectedResumeHash, a.SelectedResumeID, "unknown")
 	}
-	lines := []string{"LIVE APPLICATION PILOT", "Vacancy: " + firstNonEmpty(a.Vacancy.Title, a.Vacancy.Name) + " (" + fmt.Sprint(a.VacancyID) + ")", "Company: " + company, "URL: " + url, "Current vacancy detail: " + renderPilotVacancyDetail(a.Vacancy), "Active: " + pointerWord(a.Preflight.Active), "Selected resume: " + a.SelectedResumeTitle, "Resume ID: " + a.SelectedResumeHash, "Alternative resume scores: " + renderResumeScores(a.AlternativeScores), "AI score: " + aiScore, "Recommendation: " + firstNonEmpty(a.AIRecommendation, "unknown"), "Hard requirements: " + renderHardRequirements(a.HardRequirements), "Hard missing: " + joinOrUnknown(a.HardMissing), "Hard unknown: " + joinOrUnknown(a.HardUnknown), "Already responded: " + pointerWord(a.Preflight.AlreadyResponded), "Can apply: " + pointerWord(a.Preflight.CanApply), "Test required: " + pointerWord(a.Preflight.TestRequired), "Cover letter: required=" + pointerWord(a.Preflight.CoverLetterRequired) + "; allowed=" + pointerWord(a.Preflight.CoverLetterAllowed), "Exact content hash: " + firstNonEmpty(a.ContentHash, "none"), "Nonce: " + firstNonEmpty(a.Nonce, "none"), "Write capability: DISABLED (30A preview)", "Freshness: " + a.PreviewFreshAt.UTC().Format(time.RFC3339), "STATUS: " + preview.Status}
+	localDecision := firstNonEmpty(a.FinalDecision, "unknown")
+	if a.FinalReason != "" {
+		localDecision += " (" + a.FinalReason + ")"
+	}
+	nonceStatus := "not issued"
+	if a.Nonce != "" {
+		nonceStatus = "issued; unused"
+		if a.NonceUsedAt != nil {
+			nonceStatus = "used"
+		}
+	}
+	freshness := a.PreviewFreshAt.UTC().Format(time.RFC3339)
+	if !a.Preflight.ObservedAt.IsZero() {
+		freshness = "preflight=" + a.Preflight.ObservedAt.UTC().Format(time.RFC3339) + "; preview=" + freshness
+	}
+	status := "BLOCKED"
+	if preview.Status == pilotReadyStatus {
+		status = "READY_FOR_EXPLICIT_SEND"
+	}
+	lines := []string{"PILOT: " + status, "Vacancy ID: " + fmt.Sprint(a.VacancyID), "Title: " + firstNonEmpty(a.Vacancy.Title, a.Vacancy.Name, "unknown"), "Company: " + company, "URL: " + url, "Selected resume: " + firstNonEmpty(a.SelectedResumeTitle, "unknown"), "Resume ID: " + resumeID, "Router score: " + firstNonEmpty(fmt.Sprint(a.RouterScore), "unknown"), "AI score: " + aiScore, "AI recommendation: " + firstNonEmpty(a.AIRecommendation, "unknown"), "Local decision: " + localDecision, "Hard missing: " + joinOrUnknown(a.HardMissing), "Hard unknown: " + joinOrUnknown(a.HardUnknown), "Active: " + pointerWord(a.Preflight.Active), "Already responded: " + pointerWord(a.Preflight.AlreadyResponded), "Can apply: " + pointerWord(a.Preflight.CanApply), "Test required: " + pointerWord(a.Preflight.TestRequired), "Cover letter required: " + pointerWord(a.Preflight.CoverLetterRequired), "Cover letter allowed: " + pointerWord(a.Preflight.CoverLetterAllowed), "Content hash: " + firstNonEmpty(a.ContentHash, "none"), "Nonce status: " + nonceStatus, "Freshness: " + freshness, fmt.Sprintf("Candidates checked: %d", preview.CandidatesChecked), "Real HH reads: YES", "Real HH writes: 0", "HH writes = 0", "Application POST: 0", "Shadow writes: 0"}
+	if a.CoverLetter != "" {
+		lines = append(lines, "Cover letter:", a.CoverLetter)
+	}
+	if len(preview.BlockedCandidates) > 0 {
+		lines = append(lines, "Blocked candidates:")
+		for _, candidate := range preview.BlockedCandidates {
+			lines = append(lines, fmt.Sprintf("  %d %s — %s", candidate.VacancyID, candidate.Title, candidate.BlockedReason))
+		}
+	}
 	if len(preview.Reasons) > 0 {
 		lines = append(lines, "Reason: "+strings.Join(uniqueStrings(preview.Reasons), "; "))
-	}
-	if a.CoverLetter != "" {
-		lines = append(lines, "Cover-letter exact preview:", a.CoverLetter)
-	}
-	if preview.Status == pilotReadyStatus {
-		lines = append(lines, "STATUS: READY_FOR_EXPLICIT_SEND", "HH writes = 0")
-	} else {
-		lines = append(lines, "HH writes = 0")
 	}
 	return strings.Join(lines, "\n") + "\n"
 }
