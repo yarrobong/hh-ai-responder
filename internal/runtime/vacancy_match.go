@@ -36,6 +36,7 @@ type VacancySkippedResult struct {
 	Score                   *int                        `json:"score,omitempty"`
 	HardRequirementsMissing []string                    `json:"hard_requirements_missing,omitempty"`
 	HardRequirements        []HardRequirementEvaluation `json:"hard_requirements,omitempty"`
+	SearchProfiles          []string                    `json:"search_profiles,omitempty"`
 }
 
 type VacancyReviewRequiredResult struct {
@@ -49,6 +50,7 @@ type VacancyReviewRequiredResult struct {
 	Missing                 []string                    `json:"missing"`
 	HardRequirementsUnknown []string                    `json:"hard_requirements_unknown"`
 	HardRequirements        []HardRequirementEvaluation `json:"hard_requirements"`
+	SearchProfiles          []string                    `json:"search_profiles,omitempty"`
 }
 
 type VacancyMatchResult struct {
@@ -61,6 +63,7 @@ type VacancyMatchResult struct {
 	Missing                 []string                    `json:"missing"`
 	HardRequirementsMissing []string                    `json:"hard_requirements_missing,omitempty"`
 	HardRequirements        []HardRequirementEvaluation `json:"hard_requirements,omitempty"`
+	SearchProfiles          []string                    `json:"search_profiles,omitempty"`
 }
 
 type SearchProfileSummary struct {
@@ -176,6 +179,7 @@ func (r *HHAIResponder) skipVacancyWithEvaluation(vacancy Vacancy, vacancyURL, r
 		Score:                   score,
 		HardRequirementsMissing: hardRequirementsMissing,
 		HardRequirements:        hardRequirements,
+		SearchProfiles:          r.vacancySearchSources[vacancy.ID],
 	})
 }
 

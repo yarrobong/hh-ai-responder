@@ -22,13 +22,14 @@ func withCommandHelp(command appcli.CommandKind, handler appbootstrap.Handler) a
 
 func writeCommandHelp(command appcli.CommandKind, out io.Writer) error {
 	usage := map[appcli.CommandKind]string{
-		appcli.CommandCandidate: "usage: candidate migrate-postgres ... | status | semantic status | semantic reindex [--dry-run|--apply] | semantic search QUERY",
-		appcli.CommandProfile:   "usage: profile [show|questions|bootstrap|import file|stories|communication|knowledge proposals|knowledge confirm <id>|knowledge reject <id>] [-candidate-profile path] [-candidate-stories path]",
-		appcli.CommandStorage:   "usage: storage migrate-postgres [--dry-run] [--apply] [--source-dir DIR] [--report FILE]",
-		appcli.CommandReconcile: "usage: reconcile [--dry-run]",
-		appcli.CommandMonitor:   "usage: monitor [--run-once] [application flags]",
-		appcli.CommandAudit:     "usage: audit [application flags]",
-		appcli.CommandHH:        "usage: hh sync [vacancies|applications|conversations] | hh sync conversation <conversation-id-or-chat-id> | hh inbox | hh workflow | hh draft <conversation-id> | hh pilot-candidates | hh pilot-shortlist | hh pilot-show <conversation-id> | hh write-status | hh eligible | hh eligibility-report | hh eligibility-summary | hh quality-report | hh action preflight|request-preview <action-id> | hh reliability applications|autochat [--limit N] [--state STATE] [--all] [--json] | hh reliability applications|autochat reconcile <attempt-id> [--json]",
+		appcli.CommandCandidate:   "usage: candidate migrate-postgres ... | status | semantic status | semantic reindex [--dry-run|--apply] | semantic search QUERY",
+		appcli.CommandProfile:     "usage: profile [show|questions|bootstrap|import file|stories|communication|knowledge proposals|knowledge confirm <id>|knowledge reject <id>] [-candidate-profile path] [-candidate-stories path]",
+		appcli.CommandStorage:     "usage: storage migrate-postgres [--dry-run] [--apply] [--source-dir DIR] [--report FILE]",
+		appcli.CommandReconcile:   "usage: reconcile [--dry-run]",
+		appcli.CommandMonitor:     "usage: monitor [--run-once] [application flags]",
+		appcli.CommandAudit:       "usage: audit [application flags]",
+		appcli.CommandCareerAgent: "usage: career-agent --shadow | career-agent --canary | career-agent resumes | career-agent resume enable|disable --id <resume-id> | career-agent feedback --vacancy <id> --type <type>",
+		appcli.CommandHH:          "usage: hh sync [vacancies|applications|conversations] | hh sync conversation <conversation-id-or-chat-id> | hh inbox | hh workflow | hh draft <conversation-id> | hh pilot-candidates | hh pilot-shortlist | hh pilot-show <conversation-id> | hh write-status | hh eligible | hh eligibility-report | hh eligibility-summary | hh quality-report | hh action preflight|request-preview <action-id> | hh reliability applications|autochat [--limit N] [--state STATE] [--all] [--json] | hh reliability applications|autochat reconcile <attempt-id> [--json]",
 	}
 	value, ok := usage[command]
 	if !ok {

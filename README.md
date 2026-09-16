@@ -40,7 +40,36 @@ go build ./cmd/hh-ai-responder
 
 1. Базовый домен берётся из cookie `redirect_host` для `.hh.ru`.
 2. Если такой cookie нет — используется `https://hh.ru`.
-3. Если параметры поиска отсутствуют — автоматически добавляется параметр `resume=<id_выбранного_резюме>`, и ищутся подходящие вакансии.
+3. Если параметры поиска отсутствуют — из доступных резюме и Candidate Profile строится bounded набор explainable search profiles; legacy `resume=<id_выбранного_резюме>` остаётся только безопасным fallback при пустом/неполном профиле.
+
+### Career Agent / Shadow Mode
+
+Для всех доступных резюме можно автоматически построить ограниченный набор
+объяснимых поисковых профилей, дедуплицировать результаты и получить JSON-отчёт
+без единой записи в HH:
+
+```sh
+./hh-ai-responder career-agent --shadow
+```
+
+Отчёт сохраняется в `career_agent_latest.json` (или в `HH_CAREER_AGENT_RESULT`).
+Список нормализованных резюме и локальное включение/отключение:
+
+```sh
+./hh-ai-responder career-agent resumes
+./hh-ai-responder career-agent resume disable --id hh-resume-<hash>
+./hh-ai-responder career-agent resume enable --id hh-resume-<hash>
+```
+
+Операторский feedback сохраняется отдельно и не меняет Candidate Knowledge:
+
+```sh
+./hh-ai-responder career-agent feedback --vacancy 123 --type GOOD_MATCH --resume-id hh-resume-<hash>
+```
+
+`career-agent --canary` существует как строго ограниченный live-путь, но требует
+явных `HH_DRY_RUN=false` и `HH_WRITE_ENABLED=true`; по умолчанию команда всегда
+работает в shadow mode.
 
 Используйте флаг `-h` для справки.
 
@@ -64,6 +93,8 @@ cp example.env .env
 | ---------------------- | -------------------- | ---------------------------------------------------------------------- |
 | `HH_SEARCH_URL`        | `-u`                 | URL для поиска вакансий.                                               |
 | `HH_SEARCH_URLS`       | —                    | Несколько URL поиска через `||`; если пусто, используется `HH_SEARCH_URL`. Параметры `area` и `resume` каждого URL сохраняются; задаются также `order_by=publication_time`, `search_period=7`, `items_on_page=50`. |
+| `HH_SEARCH_PERIOD_DAYS` | `--search-period-days` | Период свежести автоматически построенного и manual HH search profile; по умолчанию `7`. |
+| `HH_MAX_SEARCH_PROFILES` | `--max-search-profiles` | Верхняя граница автоматически построенных search profiles; по умолчанию `16`. |
 | `HH_AI_BASE_URL`       | `-ai-base-url`       | Базовый URL OpenAI-compatible API.                                     |
 | `HH_AI_MODEL`          | `-ai-model`          | Модель AI.                                                             |
 | `HH_AI_API_KEY`        | `-ai-api-key`        | API key для OpenAI-compatible API.                                     |
@@ -101,6 +132,10 @@ cp example.env .env
 | `HH_MAX_CONVERSATIONS_PER_RUN` | `-max-conversations-per-run` | Максимум чатов при явном `monitor --run-once`; `0` — полный scope. Ограничение применяется до чтения деталей чатов и не меняет scheduled Career monitor. |
 | `HH_CANDIDATE_PROFILE` | `-candidate-profile` | Локальная база знаний кандидата; по умолчанию `candidate_profile.json`, файл не коммитится. |
 | `HH_CANDIDATE_STORIES` | `-candidate-stories` | Необязательные примеры опыта; по умолчанию `candidate_stories.json`. Используются только в релевантных cover letters, максимум 2 кейса. |
+| `HH_RESUME_REGISTRY` | `-resume-registry` | Локальные enabled/disabled overrides нормализованных HH-резюме; файл создаётся только явной CLI-командой. |
+| `HH_CAREER_AGENT_RESULT` | `-career-agent-result` | Последний JSON shadow/canary report. |
+| `HH_CAREER_AGENT_FEEDBACK` | `-career-agent-feedback` | Структурированный feedback `ACCEPT`, `REJECT`, `WRONG_RESUME`, `GOOD_MATCH`, `BAD_MATCH`. |
+| `HH_AUTO_APPLY_MODE` | `-auto-apply-mode` | Документирует `off`/`canary`; само значение не включает writes. Для live-пути нужен `career-agent --canary`. |
 | `HH_SYNC_INTERVAL` | `-sync-interval` | Интервал локального Career Monitor; по умолчанию `15m`. Только read-only sync. |
 | `HH_QUIET_HOURS` | `-quiet-hours` | Тихие часы уведомлений в формате `23:00-07:00`; HH sync не отключается. |
 | `HH_NOTIFICATION_COOLDOWN` | `-notification-cooldown` | Минимальный интервал повторных локальных уведомлений; по умолчанию `15m`. |

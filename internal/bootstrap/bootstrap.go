@@ -40,15 +40,16 @@ type Handler func(Request) int
 // Handlers is explicit command wiring. It is intentionally not a registry or
 // dependency container: every supported top-level command has a named slot.
 type Handlers struct {
-	Run       Handler
-	Candidate Handler
-	Storage   Handler
-	Reconcile Handler
-	Monitor   Handler
-	Audit     Handler
-	Web       Handler
-	HH        Handler
-	Profile   Handler
+	Run         Handler
+	Candidate   Handler
+	Storage     Handler
+	Reconcile   Handler
+	Monitor     Handler
+	Audit       Handler
+	Web         Handler
+	HH          Handler
+	Profile     Handler
+	CareerAgent Handler
 }
 
 // Env contains process seams required by bootstrap. Nil streams and lookup
@@ -165,6 +166,8 @@ func handlerFor(command appcli.CommandKind, handlers Handlers) Handler {
 		return handlers.HH
 	case appcli.CommandProfile:
 		return handlers.Profile
+	case appcli.CommandCareerAgent:
+		return handlers.CareerAgent
 	default:
 		return nil
 	}

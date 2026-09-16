@@ -9,16 +9,17 @@ package cli
 type CommandKind string
 
 const (
-	CommandRun       CommandKind = "run"
-	CommandHelp      CommandKind = "help"
-	CommandHH        CommandKind = "hh"
-	CommandCandidate CommandKind = "candidate"
-	CommandProfile   CommandKind = "profile"
-	CommandStorage   CommandKind = "storage"
-	CommandWeb       CommandKind = "web"
-	CommandReconcile CommandKind = "reconcile"
-	CommandMonitor   CommandKind = "monitor"
-	CommandAudit     CommandKind = "audit"
+	CommandRun         CommandKind = "run"
+	CommandHelp        CommandKind = "help"
+	CommandHH          CommandKind = "hh"
+	CommandCandidate   CommandKind = "candidate"
+	CommandProfile     CommandKind = "profile"
+	CommandStorage     CommandKind = "storage"
+	CommandWeb         CommandKind = "web"
+	CommandReconcile   CommandKind = "reconcile"
+	CommandMonitor     CommandKind = "monitor"
+	CommandAudit       CommandKind = "audit"
+	CommandCareerAgent CommandKind = "career-agent"
 )
 
 // Invocation is the parsed CLI intent. Args are the arguments after the

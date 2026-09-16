@@ -90,6 +90,17 @@ func NormalizeChatMode(mode string) (string, error) {
 	}
 }
 
+func NormalizeAutoApplyMode(mode string) (string, error) {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		return "off", nil
+	}
+	if mode != "off" && mode != "canary" {
+		return "", fmt.Errorf("HH_AUTO_APPLY_MODE must be off or canary")
+	}
+	return mode, nil
+}
+
 func NormalizeSalaryCurrency(value string) (string, error) {
 	currency := strings.ToUpper(strings.TrimSpace(value))
 	if currency == "" {
@@ -187,6 +198,15 @@ func Validate(c Config) error {
 	}
 	if c.MaxConversationsPerRun < 0 {
 		return errors.New("max-conversations-per-run must not be negative")
+	}
+	if c.SearchPeriodDays <= 0 {
+		return errors.New("search-period-days must be greater than 0")
+	}
+	if c.CareerAgentMaxSearchProfiles <= 0 {
+		return errors.New("max-search-profiles must be greater than 0")
+	}
+	if _, err := NormalizeAutoApplyMode(c.AutoApplyMode); err != nil {
+		return err
 	}
 	if c.AIAttempts < 1 {
 		return errors.New("ai-attempts must be greater than 0")

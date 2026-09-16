@@ -7,6 +7,7 @@ import (
 	"time"
 
 	domain "hh-ai-responder/internal/applicationattempt"
+	"hh-ai-responder/internal/careeragent"
 	attemptpolicy "hh-ai-responder/internal/usecase/applicationattemptpolicy"
 	applicationprocessing "hh-ai-responder/internal/usecase/applicationprocessing"
 	applicationreconciliation "hh-ai-responder/internal/usecase/applicationreconciliation"
@@ -116,7 +117,32 @@ func (r *HHAIResponder) ApplyVacancies() error {
 			return nil
 		}
 
-		prep, prepErr := r.prepareApplication(value, *resume, baseCandidate, resolver, applicationCount)
+		selectedResume := *resume
+		selectedCandidate, selectedResolver := baseCandidate, resolver
+		if r.careerAgentMode != "" {
+			route := r.routeResumeForVacancy(value)
+			r.writeEvent(careerAgentRouteEvent(route))
+			if route.Status != careeragent.RouteSelected || route.Confidence == careeragent.ConfidenceLow || (r.careerAgentMode == "canary" && (route.Confidence != careeragent.ConfidenceHigh || !routeRequirementsConfirmed(route))) {
+				summary.ReviewRequired++
+				r.skipVacancy(value, vacancyURL, "resume routing requires review: "+strings.Join(careerAgentReasonList(route), "; "), nil)
+				continue
+			}
+			hash := r.resumeHashForProfile(route.SelectedResumeID)
+			if hash == "" {
+				hash = route.SelectedResumeID
+			}
+			if hash != r.resumeHash {
+				var activateErr error
+				selectedResume, selectedCandidate, selectedResolver, activateErr = r.activateResume(hash)
+				if activateErr != nil {
+					summary.ReviewRequired++
+					r.skipVacancy(value, vacancyURL, "selected resume facts could not be verified: "+activateErr.Error(), nil)
+					continue
+				}
+			}
+		}
+
+		prep, prepErr := r.prepareApplication(value, selectedResume, selectedCandidate, selectedResolver, applicationCount)
 		if prepErr != nil {
 			summary.Errors++
 			r.skipVacancy(value, vacancyURL, prepErr.Error(), nil)
@@ -141,7 +167,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 			if prep.Reason == "per-run application limit reached" && prep.Analysis != nil {
 				evaluation := *prep.Analysis
 				summary.Matched++
-				r.writeEvent(VacancyMatchResult{Type: "vacancy_match", VacancyID: value.ID, Name: value.Name, URL: vacancyURL, Score: evaluation.Score, Reasons: evaluation.Reasons, Missing: evaluation.Missing, HardRequirementsMissing: hardRequirementsMissing(evaluation), HardRequirements: evaluation.HardRequirements})
+				r.writeEvent(VacancyMatchResult{Type: "vacancy_match", VacancyID: value.ID, Name: value.Name, URL: vacancyURL, Score: evaluation.Score, Reasons: evaluation.Reasons, Missing: evaluation.Missing, HardRequirementsMissing: hardRequirementsMissing(evaluation), HardRequirements: evaluation.HardRequirements, SearchProfiles: r.vacancySearchSources[value.ID]})
 				summary.ApplicationLimitSkipped++
 				r.skipVacancy(value, vacancyURL, prep.Reason, &evaluation.Score)
 				return nil
@@ -169,19 +195,19 @@ func (r *HHAIResponder) ApplyVacancies() error {
 		}
 		evaluation := *prep.Analysis
 		summary.Matched++
-		r.writeEvent(VacancyMatchResult{Type: "vacancy_match", VacancyID: value.ID, Name: value.Name, URL: vacancyURL, Score: evaluation.Score, Reasons: evaluation.Reasons, Missing: evaluation.Missing, HardRequirementsMissing: hardRequirementsMissing(evaluation), HardRequirements: evaluation.HardRequirements})
+		r.writeEvent(VacancyMatchResult{Type: "vacancy_match", VacancyID: value.ID, Name: value.Name, URL: vacancyURL, Score: evaluation.Score, Reasons: evaluation.Reasons, Missing: evaluation.Missing, HardRequirementsMissing: hardRequirementsMissing(evaluation), HardRequirements: evaluation.HardRequirements, SearchProfiles: r.vacancySearchSources[value.ID]})
 		logger.Info("MATCH — vacancy %d: %d/100", value.ID, evaluation.Score)
 
 		submissionResult, solutions, sendErr := r.submitPreparedApplication(*prep.Prepared)
 		if r.dryRun {
 			if sendErr != nil {
 				summary.Errors++
-				r.writeApplicationError(value, vacancyURL, resume, sendErr)
+				r.writeApplicationError(value, vacancyURL, &selectedResume, sendErr)
 				continue
 			}
 			budget.recordPreview()
 			summary.WouldApply++
-			r.writeApplicationPreview(value, vacancyURL, resume, prep.Prepared.CoverLetter, solutions)
+			r.writeApplicationPreview(value, vacancyURL, &selectedResume, prep.Prepared.CoverLetter, solutions)
 			continue
 		}
 		if budget.recordExecution(submissionResult.Execution) {
@@ -193,20 +219,29 @@ func (r *HHAIResponder) ApplyVacancies() error {
 				return nil
 			}
 			summary.Errors++
-			r.writeApplicationError(value, vacancyURL, resume, sendErr)
+			r.writeApplicationError(value, vacancyURL, &selectedResume, sendErr)
 			continue
 		}
 		if submissionResult.Status == applicationsubmission.StatusSubmitted {
 			successfulApplicationsInRun++
 			summary.Applied++
-			r.writeApplicationSuccess(value, vacancyURL, resume, prep.Prepared.CoverLetter, solutions)
+			r.writeApplicationSuccess(value, vacancyURL, &selectedResume, prep.Prepared.CoverLetter, solutions)
 			continue
 		}
 		summary.Errors++
-		r.writeApplicationError(value, vacancyURL, resume, errors.New(submissionResult.Reason))
+		r.writeApplicationError(value, vacancyURL, &selectedResume, errors.New(submissionResult.Reason))
 	}
 	logger.Info("Finished processing!")
 	return nil
+}
+
+func routeRequirementsConfirmed(route careeragent.RouteDecision) bool {
+	for _, requirement := range route.HardRequirements {
+		if requirement.Status != "met" {
+			return false
+		}
+	}
+	return true
 }
 
 func applicationPreflight(id int, value applicationprocessing.Applicability) VacancyPreflight {
@@ -218,7 +253,7 @@ func (r *HHAIResponder) writeApplicationReview(value Vacancy, url string, prep a
 		return
 	}
 	evaluation := *prep.Analysis
-	r.writeEvent(VacancyReviewRequiredResult{Type: "vacancy_review_required", VacancyID: value.ID, Name: value.Name, URL: url, Score: evaluation.Score, Apply: evaluation.Apply, Reasons: append(append([]string{}, evaluation.Reasons...), reason), Missing: evaluation.Missing, HardRequirementsUnknown: hardRequirementsUnknown(evaluation), HardRequirements: evaluation.HardRequirements})
+	r.writeEvent(VacancyReviewRequiredResult{Type: "vacancy_review_required", VacancyID: value.ID, Name: value.Name, URL: url, Score: evaluation.Score, Apply: evaluation.Apply, Reasons: append(append([]string{}, evaluation.Reasons...), reason), Missing: evaluation.Missing, HardRequirementsUnknown: hardRequirementsUnknown(evaluation), HardRequirements: evaluation.HardRequirements, SearchProfiles: r.vacancySearchSources[value.ID]})
 }
 
 func (r *HHAIResponder) writeApplicationError(value Vacancy, url string, resume *ResumeItem, err error) {

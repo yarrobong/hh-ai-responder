@@ -45,6 +45,9 @@ func TestLoadSafeDefaults(t *testing.T) {
 	if cfg.MaxConversationsPerRun != 0 {
 		t.Fatalf("MaxConversationsPerRun = %d, want 0", cfg.MaxConversationsPerRun)
 	}
+	if cfg.SearchPeriodDays != DefaultSearchPeriodDays || cfg.CareerAgentMaxSearchProfiles != DefaultCareerAgentMaxSearchProfiles || cfg.AutoApplyMode != "off" {
+		t.Fatalf("unexpected Career Agent defaults: period=%d profiles=%d mode=%q", cfg.SearchPeriodDays, cfg.CareerAgentMaxSearchProfiles, cfg.AutoApplyMode)
+	}
 	if cfg.HHReadConcurrency != 4 || cfg.MonitorInterval != 15*time.Minute || cfg.ConversationDisplayTTL != time.Minute {
 		t.Fatalf("unexpected runtime defaults: concurrency=%d interval=%s ttl=%s", cfg.HHReadConcurrency, cfg.MonitorInterval, cfg.ConversationDisplayTTL)
 	}
@@ -88,6 +91,9 @@ func TestLoadEnvironmentParsing(t *testing.T) {
 		"HH_INCLUDE_KEYWORDS":         " Python, Django, REST API ",
 		"HH_SEARCH_URL":               "https://hh.example/search/vacancy?text=python",
 		"HH_SEARCH_URLS":              "https://hh.example/search/vacancy?text=python|| https://hh.example/search/vacancy?text=django ",
+		"HH_SEARCH_PERIOD_DAYS":       "3",
+		"HH_MAX_SEARCH_PROFILES":      "9",
+		"HH_AUTO_APPLY_MODE":          "canary",
 		"HH_CANDIDATE_PROFILE":        filepath.Join(t.TempDir(), "profile.json"),
 		"HH_AI_BASE_URL":              "https://ai.example/v1",
 		"HH_AI_MODEL":                 "fixture-model",
@@ -103,6 +109,9 @@ func TestLoadEnvironmentParsing(t *testing.T) {
 	}
 	if len(cfg.SearchURLs) != 2 || cfg.SearchURLs[1] != "https://hh.example/search/vacancy?text=django" {
 		t.Fatalf("search URLs = %#v", cfg.SearchURLs)
+	}
+	if cfg.SearchPeriodDays != 3 || cfg.CareerAgentMaxSearchProfiles != 9 || cfg.AutoApplyMode != "canary" {
+		t.Fatalf("Career Agent config = period=%d profiles=%d mode=%q", cfg.SearchPeriodDays, cfg.CareerAgentMaxSearchProfiles, cfg.AutoApplyMode)
 	}
 	if cfg.CandidateProfilePath == "" || cfg.AIBaseURL != "https://ai.example/v1" || cfg.AIModel != "fixture-model" {
 		t.Fatalf("path/URL parsing failed: %+v", cfg)

@@ -6,24 +6,26 @@ import (
 )
 
 const (
-	DefaultAIAttempts            = 2
-	DefaultAIBaseURL             = "http://localhost:11434"
-	DefaultAIModel               = "llama3:8b"
-	DefaultEmbeddingModel        = "text-embedding-3-small"
-	DefaultEmbeddingDimensions   = 1536
-	MaxEmbeddingDimensions       = 16000
-	DefaultHHChatURL             = "https://chatik.hh.ru"
-	DefaultMinMatchScore         = 65
-	DefaultMinSalaryCurrency     = "RUR"
-	DefaultHHMaxWritesPerRun     = 1
-	DefaultHHMaxWritesPerDay     = 5
-	DefaultHHReadConcurrency     = 4
-	DefaultMaxVacanciesPerRun    = 20
-	DefaultMaxApplicationsPerRun = 10
-	DefaultCandidateID           = "candidate-local"
-	DefaultStorageBackend        = "json"
-	DefaultChatMode              = "review"
-	DefaultLogLevel              = "info"
+	DefaultAIAttempts                   = 2
+	DefaultAIBaseURL                    = "http://localhost:11434"
+	DefaultAIModel                      = "llama3:8b"
+	DefaultEmbeddingModel               = "text-embedding-3-small"
+	DefaultEmbeddingDimensions          = 1536
+	MaxEmbeddingDimensions              = 16000
+	DefaultHHChatURL                    = "https://chatik.hh.ru"
+	DefaultMinMatchScore                = 65
+	DefaultMinSalaryCurrency            = "RUR"
+	DefaultHHMaxWritesPerRun            = 1
+	DefaultHHMaxWritesPerDay            = 5
+	DefaultHHReadConcurrency            = 4
+	DefaultMaxVacanciesPerRun           = 20
+	DefaultMaxApplicationsPerRun        = 10
+	DefaultSearchPeriodDays             = 7
+	DefaultCareerAgentMaxSearchProfiles = 16
+	DefaultCandidateID                  = "candidate-local"
+	DefaultStorageBackend               = "json"
+	DefaultChatMode                     = "review"
+	DefaultLogLevel                     = "info"
 )
 
 const (
@@ -48,27 +50,33 @@ func DefaultFollowUpConfig() FollowUpConfig {
 
 func defaults(workingDir string) Config {
 	return Config{
-		FollowUp:               DefaultFollowUpConfig(),
-		StorageBackend:         DefaultStorageBackend,
-		CandidateID:            DefaultCandidateID,
-		EmbeddingModel:         DefaultEmbeddingModel,
-		EmbeddingDimensions:    DefaultEmbeddingDimensions,
-		DryRun:                 true,
-		AutoApply:              true,
-		AutoChat:               true,
-		AutoTouch:              true,
-		AutoJobStatus:          true,
-		ChatMode:               DefaultChatMode,
-		LogLevel:               DefaultLogLevel,
-		MinMatchScore:          DefaultMinMatchScore,
-		MinSalaryCurrency:      DefaultMinSalaryCurrency,
-		CandidateProfilePath:   filepath.Join(workingDir, "candidate_profile.json"),
-		CandidateStoriesPath:   filepath.Join(workingDir, "candidate_stories.json"),
-		HHSyncStatePath:        filepath.Join(workingDir, "hh_sync_state.json"),
-		MonitorInterval:        DefaultMonitorInterval,
-		NotificationCooldown:   DefaultNotificationCooldown,
-		ConversationDisplayTTL: DefaultConversationDisplayTTL,
-		HHMaxWritesPerRun:      DefaultHHMaxWritesPerRun,
-		HHMaxWritesPerDay:      DefaultHHMaxWritesPerDay,
+		FollowUp:                     DefaultFollowUpConfig(),
+		StorageBackend:               DefaultStorageBackend,
+		CandidateID:                  DefaultCandidateID,
+		EmbeddingModel:               DefaultEmbeddingModel,
+		EmbeddingDimensions:          DefaultEmbeddingDimensions,
+		DryRun:                       true,
+		AutoApply:                    true,
+		AutoApplyMode:                "off",
+		AutoChat:                     true,
+		AutoTouch:                    true,
+		AutoJobStatus:                true,
+		ChatMode:                     DefaultChatMode,
+		LogLevel:                     DefaultLogLevel,
+		MinMatchScore:                DefaultMinMatchScore,
+		MinSalaryCurrency:            DefaultMinSalaryCurrency,
+		CandidateProfilePath:         filepath.Join(workingDir, "candidate_profile.json"),
+		CandidateStoriesPath:         filepath.Join(workingDir, "candidate_stories.json"),
+		CareerAgentResultPath:        filepath.Join(workingDir, "career_agent_latest.json"),
+		CareerAgentFeedbackPath:      filepath.Join(workingDir, "career_agent_feedback.json"),
+		ResumeRegistryPath:           filepath.Join(workingDir, "resume_registry.json"),
+		SearchPeriodDays:             DefaultSearchPeriodDays,
+		CareerAgentMaxSearchProfiles: DefaultCareerAgentMaxSearchProfiles,
+		HHSyncStatePath:              filepath.Join(workingDir, "hh_sync_state.json"),
+		MonitorInterval:              DefaultMonitorInterval,
+		NotificationCooldown:         DefaultNotificationCooldown,
+		ConversationDisplayTTL:       DefaultConversationDisplayTTL,
+		HHMaxWritesPerRun:            DefaultHHMaxWritesPerRun,
+		HHMaxWritesPerDay:            DefaultHHMaxWritesPerDay,
 	}
 }

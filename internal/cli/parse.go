@@ -47,8 +47,17 @@ func Parse(args []string) (Invocation, error) {
 		Subcommand:  firstSubcommand(commandArgs),
 		Args:        commandArgs,
 		LeadingArgs: leading,
-		Help:        len(commandArgs) > 0 && IsHelpFlag(commandArgs[0]),
+		Help:        (len(commandArgs) > 0 && IsHelpFlag(commandArgs[0])) || (command == CommandCareerAgent && hasHelpFlag(commandArgs)),
 	}, nil
+}
+
+func hasHelpFlag(args []string) bool {
+	for _, value := range args {
+		if IsHelpFlag(value) {
+			return true
+		}
+	}
+	return false
 }
 
 func topLevelCommand(value string) (CommandKind, bool) {
@@ -69,6 +78,8 @@ func topLevelCommand(value string) (CommandKind, bool) {
 		return CommandMonitor, true
 	case "audit":
 		return CommandAudit, true
+	case "career-agent":
+		return CommandCareerAgent, true
 	default:
 		return "", false
 	}
@@ -127,6 +138,10 @@ func validateCommandArgs(command CommandKind, args []string) error {
 	case CommandStorage:
 		if args[0] != "migrate-postgres" {
 			return fmt.Errorf("unknown storage command %q", args[0])
+		}
+	case CommandCareerAgent:
+		if !known(args[0], "shadow", "canary", "feedback", "resumes", "resume") {
+			return fmt.Errorf("unknown career-agent command %q", args[0])
 		}
 	}
 	return nil

@@ -56,5 +56,9 @@ func NewHandlers() appbootstrap.Handlers {
 			}
 			return commandResult(runProfileCommand(request.Invocation.Args, request.Stdin, request.Stdout), request.Stderr, 2)
 		}),
+		CareerAgent: withCommandHelp(appcli.CommandCareerAgent, func(request appbootstrap.Request) int {
+			cfg := legacyConfigFromPackage(request.Config)
+			return commandResult(runCareerAgentCommand(request.Invocation.Args, cfg, request.Stdout, request.Stderr), request.Stderr, 1)
+		}),
 	}
 }

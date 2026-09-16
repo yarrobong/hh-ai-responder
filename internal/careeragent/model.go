@@ -1,0 +1,545 @@
+// Package careeragent contains deterministic planning, routing, discovery and
+// operator-feedback primitives for the Career Agent flow. It deliberately has
+// no HH transport, AI, or persistence side effects.
+package careeragent
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"net/url"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"hh-ai-responder/internal/candidate"
+)
+
+type ResumeProfile struct {
+	ID              string   `json:"id"`
+	HHID            int64    `json:"hh_id,omitempty"`
+	Hash            string   `json:"hash,omitempty"`
+	Title           string   `json:"title"`
+	DesiredRole     string   `json:"desired_role,omitempty"`
+	Skills          []string `json:"skills,omitempty"`
+	Experience      string   `json:"experience,omitempty"`
+	Location        string   `json:"location,omitempty"`
+	Salary          string   `json:"salary,omitempty"`
+	Employment      string   `json:"employment,omitempty"`
+	Schedule        string   `json:"schedule,omitempty"`
+	SearchHints     []string `json:"search_hints,omitempty"`
+	IncludeKeywords []string `json:"include_keywords,omitempty"`
+	ExcludeKeywords []string `json:"exclude_keywords,omitempty"`
+	Enabled         bool     `json:"enabled"`
+}
+
+// StableResumeID is independent of list order and therefore safe to use in
+// persisted route decisions. Hash is preferred, then the HH numeric id, then
+// a normalized title fallback for old fixtures.
+func StableResumeID(hash string, hhID int64, title string) string {
+	if value := strings.TrimSpace(hash); value != "" {
+		return "hh-resume-" + value
+	}
+	if hhID > 0 {
+		return "hh-resume-id-" + formatInt(hhID)
+	}
+	seed := normalizeText(title)
+	if seed == "" {
+		seed = "unknown"
+	}
+	sum := sha256.Sum256([]byte(seed))
+	return "hh-resume-generated-" + hex.EncodeToString(sum[:8])
+}
+
+func NormalizeResumes(values []candidate.ResumeItem) []ResumeProfile {
+	result := make([]ResumeProfile, 0, len(values))
+	seen := map[string]bool{}
+	for _, value := range values {
+		id := StableResumeID(value.Hash, value.Id, value.Title)
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		result = append(result, ResumeProfile{
+			ID: id, HHID: value.Id, Hash: strings.TrimSpace(value.Hash),
+			Title: strings.TrimSpace(value.Title), DesiredRole: strings.TrimSpace(value.Title),
+			Skills: splitList(value.Skills), Location: strings.TrimSpace(value.Area), Salary: strings.TrimSpace(value.Salary), Enabled: true,
+		})
+	}
+	sort.SliceStable(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result
+}
+
+type RegistryOverrides struct {
+	Enabled map[string]bool `json:"enabled,omitempty"`
+}
+
+func ApplyRegistryOverrides(profiles []ResumeProfile, overrides RegistryOverrides) []ResumeProfile {
+	result := append([]ResumeProfile(nil), profiles...)
+	for i := range result {
+		if value, ok := overrides.Enabled[result[i].ID]; ok {
+			result[i].Enabled = value
+		}
+	}
+	return result
+}
+
+type CandidateSignals struct {
+	Roles             []string
+	Skills            []string
+	PreferredLocation string
+}
+
+type SearchConstraints struct {
+	MaxProfiles      int
+	SearchPeriodDays int
+	Area             string
+	IncludeKeywords  []string
+	ExcludeKeywords  []string
+}
+
+type SearchProfile struct {
+	ID               string     `json:"id"`
+	ResumeID         string     `json:"resume_id"`
+	ResumeTitle      string     `json:"resume_title"`
+	Query            string     `json:"query"`
+	Reason           string     `json:"reason"`
+	SearchPeriodDays int        `json:"search_period_days"`
+	Params           url.Values `json:"params"`
+}
+
+func PlanSearches(resumes []ResumeProfile, signals CandidateSignals, constraints SearchConstraints) []SearchProfile {
+	max := constraints.MaxProfiles
+	if max <= 0 {
+		max = 16
+	}
+	period := constraints.SearchPeriodDays
+	if period <= 0 {
+		period = 7
+	}
+	result := make([]SearchProfile, 0, max)
+	seen := map[string]bool{}
+	for _, resume := range resumes {
+		if !resume.Enabled {
+			continue
+		}
+		terms := append([]string{}, resume.SearchHints...)
+		terms = append(terms, resume.DesiredRole, resume.Title)
+		terms = append(terms, signals.Roles...)
+		terms = append(terms, roleExpansions(resume.Title, resume.DesiredRole)...)
+		if len(terms) == 0 {
+			terms = append(terms, signals.Skills...)
+		}
+		for _, raw := range terms {
+			query := normalizeQuery(raw)
+			seenKey := resume.ID + "\x00" + query
+			if query == "" || seen[seenKey] || len(result) >= max || isNoiseQuery(query) || containsKeyword(query, constraints.ExcludeKeywords) {
+				continue
+			}
+			seen[seenKey] = true
+			params := url.Values{}
+			params.Set("text", query)
+			if constraints.Area != "" {
+				params.Set("area", strings.TrimSpace(constraints.Area))
+			}
+			if resume.Hash != "" {
+				params.Set("resume", resume.Hash)
+			}
+			params.Set("order_by", "publication_time")
+			params.Set("search_period", strconv.Itoa(period))
+			params.Set("items_on_page", "50")
+			if len(constraints.IncludeKeywords) > 0 {
+				params.Set("career_agent_include", strings.Join(normalizeKeywords(constraints.IncludeKeywords), ","))
+			}
+			if len(constraints.ExcludeKeywords) > 0 {
+				params.Set("career_agent_exclude", strings.Join(normalizeKeywords(constraints.ExcludeKeywords), ","))
+			}
+			id := stableSearchID(resume.ID, query)
+			result = append(result, SearchProfile{ID: id, ResumeID: resume.ID, ResumeTitle: resume.Title, Query: query, Reason: "derived from resume title/role and normalized role aliases", SearchPeriodDays: period, Params: params})
+		}
+	}
+	return result
+}
+
+type VacancyInput struct {
+	ID             int
+	Title          string
+	Description    string
+	RequiredSkills []string
+	Location       string
+	WorkFormat     string
+}
+
+type ResumeScore struct {
+	ResumeID string   `json:"resume_id"`
+	Title    string   `json:"title"`
+	Score    int      `json:"score"`
+	Reasons  []string `json:"reasons,omitempty"`
+}
+
+type RouteDecision struct {
+	VacancyID           int                `json:"vacancy_id"`
+	Status              string             `json:"status"`
+	SelectedResumeID    string             `json:"selected_resume_id,omitempty"`
+	SelectedResumeTitle string             `json:"selected_resume_title,omitempty"`
+	Score               int                `json:"score"`
+	AlternativeScores   []ResumeScore      `json:"alternative_resume_scores,omitempty"`
+	Reasons             []string           `json:"reasons,omitempty"`
+	Confidence          string             `json:"confidence"`
+	HardRequirements    []RequirementState `json:"hard_requirements,omitempty"`
+}
+
+const (
+	RouteSelected       = "SELECTED"
+	RouteReviewRequired = "REVIEW_REQUIRED"
+	RouteNoResume       = "NO_ENABLED_RESUME"
+	ConfidenceHigh      = "HIGH"
+	ConfidenceMedium    = "MEDIUM"
+	ConfidenceLow       = "LOW"
+)
+
+type RequirementState struct {
+	Requirement string `json:"requirement"`
+	Status      string `json:"status"`
+}
+
+func RouteResume(vacancy VacancyInput, resumes []ResumeProfile) RouteDecision {
+	decision := RouteDecision{VacancyID: vacancy.ID, Status: RouteNoResume, Confidence: ConfidenceLow, Reasons: []string{}}
+	candidates := make([]ResumeScore, 0)
+	for _, resume := range resumes {
+		if resume.Enabled {
+			candidates = append(candidates, scoreResume(vacancy, resume))
+		}
+	}
+	if len(candidates) == 0 {
+		decision.Reasons = []string{"no enabled resume is available"}
+		return decision
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].Score != candidates[j].Score {
+			return candidates[i].Score > candidates[j].Score
+		}
+		return candidates[i].ResumeID < candidates[j].ResumeID
+	})
+	decision.AlternativeScores = append([]ResumeScore(nil), candidates...)
+	decision.Score = candidates[0].Score
+	decision.SelectedResumeID, decision.SelectedResumeTitle = candidates[0].ResumeID, candidates[0].Title
+	decision.HardRequirements = requirementStates(vacancy, candidates[0], resumes)
+	for _, requirement := range decision.HardRequirements {
+		if requirement.Status == "met" {
+			decision.Reasons = append(decision.Reasons, "selected resume covers "+requirement.Requirement)
+		} else {
+			decision.Reasons = append(decision.Reasons, "hard requirement remains unknown: "+requirement.Requirement)
+		}
+	}
+	if len(candidates) > 1 && candidates[0].Score-candidates[1].Score < 8 {
+		decision.Status, decision.Confidence = RouteReviewRequired, ConfidenceLow
+		decision.Reasons = append(decision.Reasons, "top resume scores are too close for deterministic selection")
+		return decision
+	}
+	if decision.Score < 12 {
+		decision.Status, decision.Confidence = RouteReviewRequired, ConfidenceLow
+		decision.Reasons = append(decision.Reasons, "no strong resume signal was found")
+		return decision
+	}
+	decision.Status = RouteSelected
+	decision.Reasons = append(decision.Reasons, "selected by deterministic title/skill overlap")
+	if decision.Score >= 60 && (len(decision.HardRequirements) == 0 || allRequirementsMet(decision.HardRequirements)) {
+		decision.Confidence = ConfidenceHigh
+	} else if decision.Score >= 12 {
+		decision.Confidence = ConfidenceMedium
+	} else {
+		decision.Confidence = ConfidenceLow
+	}
+	return decision
+}
+
+type VacancyCandidate struct {
+	ID               int       `json:"id"`
+	Title            string    `json:"title"`
+	Company          string    `json:"company,omitempty"`
+	URL              string    `json:"url,omitempty"`
+	Description      string    `json:"description,omitempty"`
+	PublishedAt      time.Time `json:"published_at,omitempty"`
+	SearchProfileIDs []string  `json:"search_profile_ids,omitempty"`
+}
+
+type SearchPage struct {
+	Items      []VacancyCandidate
+	NextCursor string
+}
+
+type Searcher interface {
+	Search(context.Context, SearchProfile, string) (SearchPage, error)
+}
+
+type DiscoveryOptions struct {
+	MaxVacancies int
+	Now          func() time.Time
+	FreshAfter   time.Duration
+	CheapFilter  func(VacancyCandidate) (bool, string)
+}
+
+type DiscoverySummary struct {
+	SearchProfiles int `json:"search_profiles"`
+	RawResults     int `json:"raw_results"`
+	Unique         int `json:"unique"`
+	CheapFiltered  int `json:"cheap_filtered"`
+	Pages          int `json:"pages"`
+}
+
+type DiscoveryResult struct {
+	Items   []VacancyCandidate `json:"items"`
+	Summary DiscoverySummary   `json:"summary"`
+}
+
+func Discover(ctx context.Context, profiles []SearchProfile, searcher Searcher, options DiscoveryOptions) (DiscoveryResult, error) {
+	if searcher == nil {
+		return DiscoveryResult{}, errors.New("career discovery searcher is nil")
+	}
+	if options.Now == nil {
+		options.Now = func() time.Time { return time.Now().UTC() }
+	}
+	result := DiscoveryResult{Items: []VacancyCandidate{}, Summary: DiscoverySummary{SearchProfiles: len(profiles)}}
+	byID := map[int]int{}
+	seenIDs := map[int]bool{}
+	for _, profile := range profiles {
+		cursor := ""
+		for {
+			if err := ctx.Err(); err != nil {
+				return result, err
+			}
+			page, err := searcher.Search(ctx, profile, cursor)
+			if err != nil {
+				return result, err
+			}
+			result.Summary.Pages++
+			result.Summary.RawResults += len(page.Items)
+			for _, item := range page.Items {
+				if item.ID <= 0 {
+					continue
+				}
+				if seenIDs[item.ID] {
+					if index, ok := byID[item.ID]; ok {
+						result.Items[index].SearchProfileIDs = appendUnique(result.Items[index].SearchProfileIDs, profile.ID)
+					}
+					continue
+				}
+				seenIDs[item.ID] = true
+				item.SearchProfileIDs = appendUnique(item.SearchProfileIDs, profile.ID)
+				if options.FreshAfter > 0 && !item.PublishedAt.IsZero() && options.Now().Sub(item.PublishedAt) > options.FreshAfter {
+					result.Summary.CheapFiltered++
+					continue
+				}
+				if options.CheapFilter != nil {
+					pass, _ := options.CheapFilter(item)
+					if !pass {
+						result.Summary.CheapFiltered++
+						continue
+					}
+				}
+				if options.MaxVacancies > 0 && len(result.Items) >= options.MaxVacancies {
+					continue
+				}
+				byID[item.ID] = len(result.Items)
+				result.Items = append(result.Items, item)
+			}
+			if page.NextCursor == "" || len(page.Items) == 0 {
+				break
+			}
+			cursor = page.NextCursor
+		}
+	}
+	result.Summary.Unique = len(result.Items)
+	return result, nil
+}
+
+type FeedbackType string
+
+const (
+	FeedbackAccept      FeedbackType = "ACCEPT"
+	FeedbackReject      FeedbackType = "REJECT"
+	FeedbackWrongResume FeedbackType = "WRONG_RESUME"
+	FeedbackGoodMatch   FeedbackType = "GOOD_MATCH"
+	FeedbackBadMatch    FeedbackType = "BAD_MATCH"
+)
+
+type Feedback struct {
+	ID        string       `json:"id"`
+	VacancyID int          `json:"vacancy_id"`
+	Type      FeedbackType `json:"type"`
+	ResumeID  string       `json:"resume_id,omitempty"`
+	Note      string       `json:"note,omitempty"`
+	CreatedAt time.Time    `json:"created_at"`
+}
+
+func FeedbackID(value Feedback) string {
+	if strings.TrimSpace(value.ID) != "" {
+		return value.ID
+	}
+	return StableResumeID(value.ResumeID, int64(value.VacancyID), string(value.Type))
+}
+
+func ValidFeedbackType(value FeedbackType) bool {
+	switch value {
+	case FeedbackAccept, FeedbackReject, FeedbackWrongResume, FeedbackGoodMatch, FeedbackBadMatch:
+		return true
+	}
+	return false
+}
+
+func formatInt(value int64) string {
+	return strconv.FormatInt(value, 10)
+}
+
+func normalizeText(value string) string {
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(value))), " ")
+}
+func normalizeQuery(value string) string {
+	return strings.TrimSpace(strings.Join(strings.Fields(strings.NewReplacer("/", " ", "|", " ", ",", " ", "–", " ").Replace(value)), " "))
+}
+func splitList(value string) []string {
+	parts := strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ';' || r == '\n' || r == '|' })
+	result := []string{}
+	for _, part := range parts {
+		if v := strings.TrimSpace(part); v != "" {
+			result = append(result, v)
+		}
+	}
+	return result
+}
+func roleExpansions(values ...string) []string {
+	text := normalizeText(strings.Join(values, " "))
+	expansions := []string{}
+	if strings.Contains(text, "python") {
+		expansions = append(expansions, "Python backend", "Python developer")
+	}
+	if strings.Contains(text, "django") {
+		expansions = append(expansions, "Django developer")
+	}
+	if strings.Contains(text, "support") {
+		expansions = append(expansions, "technical support", "technical specialist")
+	}
+	if strings.Contains(text, "integration") || strings.Contains(text, "implementation") {
+		expansions = append(expansions, "implementation specialist", "integration specialist")
+	}
+	if strings.Contains(text, "automation") {
+		expansions = append(expansions, "automation engineer", "AI automation")
+	}
+	return expansions
+}
+func isNoiseQuery(value string) bool {
+	return len(strings.Fields(value)) == 0 || len([]rune(value)) < 3
+}
+func normalizeKeywords(values []string) []string {
+	result := []string{}
+	seen := map[string]bool{}
+	for _, value := range values {
+		value = normalizeQuery(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
+}
+func containsKeyword(value string, keywords []string) bool {
+	value = normalizeText(value)
+	for _, keyword := range normalizeKeywords(keywords) {
+		if strings.Contains(value, normalizeText(keyword)) {
+			return true
+		}
+	}
+	return false
+}
+func stableSearchID(resumeID, query string) string {
+	sum := sha256.Sum256([]byte(resumeID + "\x00" + normalizeText(query)))
+	return "search-" + hex.EncodeToString(sum[:8])
+}
+func tokens(value string) map[string]bool {
+	result := map[string]bool{}
+	for _, token := range strings.Fields(normalizeText(value)) {
+		if len([]rune(token)) >= 2 {
+			result[token] = true
+		}
+	}
+	return result
+}
+func scoreResume(v VacancyInput, resume ResumeProfile) ResumeScore {
+	score := 0
+	reasons := []string{}
+	vacancyTokens := tokens(v.Title + " " + v.Description)
+	for _, skill := range resume.Skills {
+		if hasTokenOverlap(tokens(skill), vacancyTokens) {
+			score += 18
+			reasons = append(reasons, "skill: "+skill)
+		}
+	}
+	overlap := 0
+	for token := range tokens(resume.Title + " " + resume.DesiredRole) {
+		if vacancyTokens[token] {
+			overlap++
+		}
+	}
+	score += overlap * 12
+	if overlap > 0 {
+		reasons = append(reasons, "role/title overlap")
+	}
+	return ResumeScore{ResumeID: resume.ID, Title: resume.Title, Score: minInt(score, 100), Reasons: reasons}
+}
+func requirementStates(v VacancyInput, selected ResumeScore, resumes []ResumeProfile) []RequirementState {
+	var profile ResumeProfile
+	for _, resume := range resumes {
+		if resume.ID == selected.ResumeID {
+			profile = resume
+			break
+		}
+	}
+	skills := tokens(strings.Join(profile.Skills, " "))
+	result := []RequirementState{}
+	for _, requirement := range v.RequiredSkills {
+		requirement = strings.TrimSpace(requirement)
+		if requirement == "" {
+			continue
+		}
+		status := "unknown"
+		if hasTokenOverlap(tokens(requirement), skills) {
+			status = "met"
+		}
+		result = append(result, RequirementState{Requirement: requirement, Status: status})
+	}
+	return result
+}
+func allRequirementsMet(values []RequirementState) bool {
+	for _, value := range values {
+		if value.Status != "met" {
+			return false
+		}
+	}
+	return true
+}
+func hasTokenOverlap(left, right map[string]bool) bool {
+	for token := range left {
+		if right[token] {
+			return true
+		}
+	}
+	return false
+}
+func appendUnique(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
+}
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}

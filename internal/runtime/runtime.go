@@ -26,6 +26,7 @@ import (
 
 	hhreadadapter "hh-ai-responder/internal/adapters/hh/read"
 	openaillm "hh-ai-responder/internal/adapters/llm/openai"
+	"hh-ai-responder/internal/careeragent"
 	appconfig "hh-ai-responder/internal/config"
 	attemptport "hh-ai-responder/internal/ports/applicationattempt"
 	autochatattemptport "hh-ai-responder/internal/ports/autochatattempt"
@@ -74,66 +75,72 @@ var (
 )
 
 type Config struct {
-	HHReadOnly                bool // Internal capability restriction for sync/dashboard only.
-	StorageBackend            string
-	DatabaseURL               string
-	CandidateID               string
-	FollowUpPolicy            FollowUpPolicy
-	SearchURL                 string
-	SearchURLs                []string
-	CookiesPath               string
-	LogLevel                  string
-	Resume                    string
-	MaxResponses              int
-	AIBaseURL                 string
-	AIModel                   string
-	AIAPIKey                  string
-	EmbeddingProvider         string
-	EmbeddingBaseURL          string
-	EmbeddingAPIKey           string
-	EmbeddingModel            string
-	EmbeddingDimensions       int
-	AITimeout                 time.Duration
-	AIConnectTimeout          time.Duration
-	AIAttempts                int
-	ExtraLetterPrompt         string
-	ExtraTestSolutionPrompt   string
-	HHReadConcurrency         int
-	RequestInterval           time.Duration
-	OutputPath                string
-	Contacts                  string
-	ListResumes               bool
-	ForceLetter               bool
-	ExtraChatReplyPrompt      string
-	GithubURL                 string
-	DryRun                    bool
-	HHWriteEnabled            bool
-	HHChatURL                 string
-	HHMaxWritesPerRun         int
-	HHMaxWritesPerDay         int
-	AutoApply                 bool
-	AutoChat                  bool
-	AutoTouch                 bool
-	AutoJobStatus             bool
-	ChatMode                  string
-	MinSalary                 int
-	MinSalaryCurrency         string
-	IncludeKeywords           []string
-	ExcludeKeywords           []string
-	MinMatchScore             int
-	RunOnce                   bool
-	MaxVacanciesPerRun        int
-	MaxApplicationsPerRun     int
-	MaxConversationsPerRun    int
-	AlreadyRespondedStatePath string
-	CandidateProfilePath      string
-	CandidateStoriesPath      string
-	HHSyncStatePath           string
-	MonitorInterval           time.Duration
-	MonitorQuietHours         string
-	NotificationCooldown      time.Duration
-	ConversationDisplayTTL    time.Duration
-	BackgroundInboxRefresh    bool
+	HHReadOnly                   bool // Internal capability restriction for sync/dashboard only.
+	StorageBackend               string
+	DatabaseURL                  string
+	CandidateID                  string
+	FollowUpPolicy               FollowUpPolicy
+	SearchURL                    string
+	SearchURLs                   []string
+	SearchPeriodDays             int
+	CareerAgentMaxSearchProfiles int
+	CareerAgentResultPath        string
+	CareerAgentFeedbackPath      string
+	ResumeRegistryPath           string
+	CookiesPath                  string
+	LogLevel                     string
+	Resume                       string
+	MaxResponses                 int
+	AIBaseURL                    string
+	AIModel                      string
+	AIAPIKey                     string
+	EmbeddingProvider            string
+	EmbeddingBaseURL             string
+	EmbeddingAPIKey              string
+	EmbeddingModel               string
+	EmbeddingDimensions          int
+	AITimeout                    time.Duration
+	AIConnectTimeout             time.Duration
+	AIAttempts                   int
+	ExtraLetterPrompt            string
+	ExtraTestSolutionPrompt      string
+	HHReadConcurrency            int
+	RequestInterval              time.Duration
+	OutputPath                   string
+	Contacts                     string
+	ListResumes                  bool
+	ForceLetter                  bool
+	ExtraChatReplyPrompt         string
+	GithubURL                    string
+	DryRun                       bool
+	HHWriteEnabled               bool
+	HHChatURL                    string
+	HHMaxWritesPerRun            int
+	HHMaxWritesPerDay            int
+	AutoApply                    bool
+	AutoApplyMode                string
+	AutoChat                     bool
+	AutoTouch                    bool
+	AutoJobStatus                bool
+	ChatMode                     string
+	MinSalary                    int
+	MinSalaryCurrency            string
+	IncludeKeywords              []string
+	ExcludeKeywords              []string
+	MinMatchScore                int
+	RunOnce                      bool
+	MaxVacanciesPerRun           int
+	MaxApplicationsPerRun        int
+	MaxConversationsPerRun       int
+	AlreadyRespondedStatePath    string
+	CandidateProfilePath         string
+	CandidateStoriesPath         string
+	HHSyncStatePath              string
+	MonitorInterval              time.Duration
+	MonitorQuietHours            string
+	NotificationCooldown         time.Duration
+	ConversationDisplayTTL       time.Duration
+	BackgroundInboxRefresh       bool
 }
 
 type LegacyCandidateContext struct {
@@ -1087,72 +1094,82 @@ type HHResponse struct {
 }
 
 type HHAIResponder struct {
-	ctx                         context.Context
-	baseURL                     *url.URL
-	searchParams                url.Values
-	searchProfiles              []vacancySearchProfile
-	cookiesPath                 string
-	maxResponses                int
-	client                      *http.Client
-	jar                         *MemoryPersistentJar
-	requester                   *HHRequester
-	resumeHash                  string
-	resumeExperience            string
-	resumeFacts                 ResumeFacts
-	candidateProfile            CandidateProfile
-	candidateProfilePath        string
-	candidateStoriesPath        string
-	candidateStories            []CandidateStory
-	candidateRepository         CandidateRepository
-	candidateMutations          *CandidateMutationService
-	semanticRetriever           CandidateSemanticRetriever
-	candidateClose              func()
-	careerRepositories          CareerRepositories
-	careerClose                 func()
-	applicationAttempts         attemptport.Store
-	attemptStoreInitErr         error
-	autoChatAttempts            autochatattemptport.Store
-	autoChatAttemptStoreInitErr error
-	notifications               *NotificationStore
-	reliabilityNotifications    reliabilitynotifications.Sink
-	latestResumeHash            string
-	resumes                     []ResumeItem
-	userId                      int64
-	firstName                   string
-	middleName                  string
-	lastName                    string
-	email                       string
-	ai                          *AIClient
-	extraLetterPrompt           string
-	extraTestSolutionPrompt     string
-	contacts                    string
-	outputPath                  string
-	forceLetter                 bool
-	extraChatReplyPrompt        string
-	githubURL                   string
-	dryRun                      bool
-	hhWriteEnabled              bool
-	autoApply                   bool
-	autoChat                    bool
-	autoTouch                   bool
-	autoJobStatus               bool
-	chatMode                    string
-	minSalary                   int
-	minSalaryCurrency           string
-	includeKeywords             []string
-	excludeKeywords             []string
-	minMatchScore               int
-	runOnce                     bool
-	maxVacanciesPerRun          int
-	maxApplicationsPerRun       int
-	alreadyRespondedStatePath   string
-	alreadyResponded            map[int]struct{}
-	chatURL                     string
-	resumeProfileFrontURL       string
-	ignoredChats                []int64
-	ignoredChatTriggers         map[string]struct{}
-	preflightCache              map[int]VacancyPreflight
-	readClient                  *HHAIResponderReadClient
+	ctx                          context.Context
+	baseURL                      *url.URL
+	searchParams                 url.Values
+	searchProfiles               []vacancySearchProfile
+	cookiesPath                  string
+	maxResponses                 int
+	client                       *http.Client
+	jar                          *MemoryPersistentJar
+	requester                    *HHRequester
+	resumeHash                   string
+	resumeExperience             string
+	resumeFacts                  ResumeFacts
+	candidateProfile             CandidateProfile
+	candidateProfilePath         string
+	candidateStoriesPath         string
+	candidateStories             []CandidateStory
+	candidateRepository          CandidateRepository
+	candidateMutations           *CandidateMutationService
+	semanticRetriever            CandidateSemanticRetriever
+	candidateClose               func()
+	careerRepositories           CareerRepositories
+	careerClose                  func()
+	applicationAttempts          attemptport.Store
+	attemptStoreInitErr          error
+	autoChatAttempts             autochatattemptport.Store
+	autoChatAttemptStoreInitErr  error
+	notifications                *NotificationStore
+	reliabilityNotifications     reliabilitynotifications.Sink
+	latestResumeHash             string
+	resumes                      []ResumeItem
+	userId                       int64
+	firstName                    string
+	middleName                   string
+	lastName                     string
+	email                        string
+	ai                           *AIClient
+	extraLetterPrompt            string
+	extraTestSolutionPrompt      string
+	contacts                     string
+	outputPath                   string
+	forceLetter                  bool
+	extraChatReplyPrompt         string
+	githubURL                    string
+	dryRun                       bool
+	hhWriteEnabled               bool
+	autoApply                    bool
+	autoChat                     bool
+	autoTouch                    bool
+	autoJobStatus                bool
+	chatMode                     string
+	minSalary                    int
+	minSalaryCurrency            string
+	includeKeywords              []string
+	excludeKeywords              []string
+	minMatchScore                int
+	runOnce                      bool
+	maxVacanciesPerRun           int
+	maxApplicationsPerRun        int
+	searchPeriodDays             int
+	careerAgentMaxSearchProfiles int
+	careerAgentIncludeKeywords   []string
+	careerAgentExcludeKeywords   []string
+	careerAgentMode              string
+	careerAgentProfiles          []careeragent.SearchProfile
+	careerAgentResumes           []careeragent.ResumeProfile
+	careerAgentRoutes            map[int]careeragent.RouteDecision
+	resumeFactsByHash            map[string]ResumeFacts
+	vacancySearchSources         map[int][]string
+	alreadyRespondedStatePath    string
+	alreadyResponded             map[int]struct{}
+	chatURL                      string
+	resumeProfileFrontURL        string
+	ignoredChats                 []int64
+	ignoredChatTriggers          map[string]struct{}
+	preflightCache               map[int]VacancyPreflight
+	readClient                   *HHAIResponderReadClient
 
 	eventWriter        io.Writer
 	eventMu            sync.Mutex
@@ -1528,7 +1545,7 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 	if len(searchURLs) == 0 && strings.TrimSpace(cfg.SearchURL) != "" {
 		searchURLs = []string{cfg.SearchURL}
 	}
-	searchProfiles, parsedBaseURL, err := buildVacancySearchProfiles(searchURLs)
+	searchProfiles, parsedBaseURL, err := buildVacancySearchProfilesWithOptions(searchURLs, cfg.SearchPeriodDays)
 	if err != nil {
 		return nil, err
 	}
@@ -1547,42 +1564,46 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 	}
 
 	responder := &HHAIResponder{
-		ctx:                       ctx,
-		baseURL:                   baseURL,
-		cookiesPath:               cfg.CookiesPath,
-		maxResponses:              cfg.MaxResponses,
-		client:                    client,
-		jar:                       jar,
-		resumeHash:                cfg.Resume,
-		ai:                        NewAIClient(ctx, cfg.AIBaseURL, cfg.AIModel, cfg.AIAPIKey, cfg.AITimeout, cfg.AIConnectTimeout, cfg.AIAttempts),
-		extraLetterPrompt:         cfg.ExtraLetterPrompt,
-		extraTestSolutionPrompt:   cfg.ExtraTestSolutionPrompt,
-		contacts:                  cfg.Contacts,
-		outputPath:                cfg.OutputPath,
-		forceLetter:               cfg.ForceLetter,
-		extraChatReplyPrompt:      cfg.ExtraChatReplyPrompt,
-		githubURL:                 cfg.GithubURL,
-		dryRun:                    cfg.DryRun,
-		autoApply:                 cfg.AutoApply,
-		autoChat:                  cfg.AutoChat,
-		autoTouch:                 cfg.AutoTouch,
-		autoJobStatus:             cfg.AutoJobStatus,
-		chatMode:                  cfg.ChatMode,
-		hhWriteEnabled:            cfg.HHWriteEnabled,
-		minSalary:                 cfg.MinSalary,
-		minSalaryCurrency:         cfg.MinSalaryCurrency,
-		includeKeywords:           append([]string(nil), cfg.IncludeKeywords...),
-		excludeKeywords:           append([]string(nil), cfg.ExcludeKeywords...),
-		minMatchScore:             cfg.MinMatchScore,
-		runOnce:                   cfg.RunOnce,
-		maxVacanciesPerRun:        cfg.MaxVacanciesPerRun,
-		maxApplicationsPerRun:     cfg.MaxApplicationsPerRun,
-		alreadyRespondedStatePath: cfg.AlreadyRespondedStatePath,
-		candidateProfilePath:      cfg.CandidateProfilePath,
-		candidateStoriesPath:      cfg.CandidateStoriesPath,
-		candidateClose:            closeCandidate,
-		careerRepositories:        careerRepositories,
-		careerClose:               closeCareer,
+		ctx:                          ctx,
+		baseURL:                      baseURL,
+		cookiesPath:                  cfg.CookiesPath,
+		maxResponses:                 cfg.MaxResponses,
+		client:                       client,
+		jar:                          jar,
+		resumeHash:                   cfg.Resume,
+		ai:                           NewAIClient(ctx, cfg.AIBaseURL, cfg.AIModel, cfg.AIAPIKey, cfg.AITimeout, cfg.AIConnectTimeout, cfg.AIAttempts),
+		extraLetterPrompt:            cfg.ExtraLetterPrompt,
+		extraTestSolutionPrompt:      cfg.ExtraTestSolutionPrompt,
+		contacts:                     cfg.Contacts,
+		outputPath:                   cfg.OutputPath,
+		forceLetter:                  cfg.ForceLetter,
+		extraChatReplyPrompt:         cfg.ExtraChatReplyPrompt,
+		githubURL:                    cfg.GithubURL,
+		dryRun:                       cfg.DryRun,
+		autoApply:                    cfg.AutoApply,
+		autoChat:                     cfg.AutoChat,
+		autoTouch:                    cfg.AutoTouch,
+		autoJobStatus:                cfg.AutoJobStatus,
+		chatMode:                     cfg.ChatMode,
+		hhWriteEnabled:               cfg.HHWriteEnabled,
+		minSalary:                    cfg.MinSalary,
+		minSalaryCurrency:            cfg.MinSalaryCurrency,
+		includeKeywords:              append([]string(nil), cfg.IncludeKeywords...),
+		excludeKeywords:              append([]string(nil), cfg.ExcludeKeywords...),
+		minMatchScore:                cfg.MinMatchScore,
+		runOnce:                      cfg.RunOnce,
+		maxVacanciesPerRun:           cfg.MaxVacanciesPerRun,
+		maxApplicationsPerRun:        cfg.MaxApplicationsPerRun,
+		searchPeriodDays:             cfg.SearchPeriodDays,
+		careerAgentMaxSearchProfiles: cfg.CareerAgentMaxSearchProfiles,
+		careerAgentIncludeKeywords:   append([]string(nil), cfg.IncludeKeywords...),
+		careerAgentExcludeKeywords:   append([]string(nil), cfg.ExcludeKeywords...),
+		alreadyRespondedStatePath:    cfg.AlreadyRespondedStatePath,
+		candidateProfilePath:         cfg.CandidateProfilePath,
+		candidateStoriesPath:         cfg.CandidateStoriesPath,
+		candidateClose:               closeCandidate,
+		careerRepositories:           careerRepositories,
+		careerClose:                  closeCareer,
 	}
 	if backend == storageBackendPostgres {
 		responder.candidateRepository = candidatePersistence.Repository
@@ -1667,6 +1688,7 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 	}
 	responder.resumeFacts = resumeFacts
 	responder.resumeExperience = resumeFacts.ExperienceText
+	responder.resumeFactsByHash = map[string]ResumeFacts{resume.Hash: resumeFacts}
 	if backend == storageBackendJSON && responder.candidateProfilePath != "" {
 		if fullName := strings.TrimSpace(responder.GetFullName()); fullName != "" && sourcePriority(responder.candidateProfile.Identity.FullName.Source) <= sourcePriority(CandidateSourceHHResume) {
 			responder.candidateProfile.Identity.FullName = ProfileStringFact{Value: fullName, ProfileFact: ProfileFact{Source: CandidateSourceHHResume, Confirmed: true, ConfirmedAt: time.Now(), Evidence: []string{"HH account profile"}}}
@@ -1677,16 +1699,16 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 		}
 	}
 
-	// If no search URL was provided, retain the old resume-only search behavior.
+	// If no explicit URL was provided, derive bounded search profiles from the
+	// normalized resume registry. The legacy resume-only search remains the
+	// final fallback for malformed/empty profile data.
+	if len(responder.searchProfiles) == 0 {
+		responder.initializeCareerAgentProfiles(cfg)
+	}
 	if len(responder.searchProfiles) == 0 {
 		responder.searchParams = make(url.Values)
 		responder.searchParams.Set("resume", responder.resumeHash)
-		responder.searchProfiles = []vacancySearchProfile{{
-			Name:    "Default search",
-			BaseURL: responder.baseURL,
-			Params:  cloneValues(responder.searchParams),
-			URL:     searchProfileURL(responder.baseURL, responder.searchParams),
-		}}
+		responder.searchProfiles = []vacancySearchProfile{{Name: "Default search", BaseURL: responder.baseURL, Params: cloneValues(responder.searchParams), URL: searchProfileURL(responder.baseURL, responder.searchParams)}}
 	}
 	resourcesReady = true
 
@@ -1694,6 +1716,13 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 }
 
 func buildVacancySearchProfiles(searchURLs []string) ([]vacancySearchProfile, *url.URL, error) {
+	return buildVacancySearchProfilesWithOptions(searchURLs, appconfig.DefaultSearchPeriodDays)
+}
+
+func buildVacancySearchProfilesWithOptions(searchURLs []string, searchPeriodDays int) ([]vacancySearchProfile, *url.URL, error) {
+	if searchPeriodDays <= 0 {
+		searchPeriodDays = appconfig.DefaultSearchPeriodDays
+	}
 	profiles := make([]vacancySearchProfile, 0, len(searchURLs))
 	var firstBaseURL *url.URL
 
@@ -1717,7 +1746,7 @@ func buildVacancySearchProfiles(searchURLs []string) ([]vacancySearchProfile, *u
 		params := parsed.Query()
 		params.Del("page")
 		params.Set("order_by", "publication_time")
-		params.Set("search_period", "7")
+		params.Set("search_period", strconv.Itoa(searchPeriodDays))
 		params.Set("items_on_page", "50")
 
 		profiles = append(profiles, vacancySearchProfile{
@@ -2613,6 +2642,7 @@ func (r *HHAIResponder) fetchVacanciesFromSearchProfiles(summary *RunSummaryResu
 
 	uniqueVacancies := make([]Vacancy, 0)
 	seenIDs := make(map[int]struct{})
+	r.vacancySearchSources = map[int][]string{}
 	summary.SearchProfiles = make([]SearchProfileSummary, 0, len(profiles))
 	for _, profile := range profiles {
 		profileSummary := SearchProfileSummary{Name: profile.Name, URL: profile.URL}
@@ -2635,6 +2665,7 @@ func (r *HHAIResponder) fetchVacanciesFromSearchProfiles(summary *RunSummaryResu
 			}
 
 			for _, vacancy := range vacancies {
+				r.vacancySearchSources[vacancy.ID] = appendUniqueString(r.vacancySearchSources[vacancy.ID], profile.Name)
 				if _, exists := seenIDs[vacancy.ID]; exists {
 					summary.DuplicatesSkipped++
 					continue
@@ -2987,61 +3018,67 @@ func legacyConfigFromPackage(value appconfig.Config) Config {
 			MaxFollowUps:                      value.FollowUp.MaxFollowUps,
 			MinimumInterval:                   value.FollowUp.MinimumInterval,
 		},
-		SearchURL:                 value.SearchURL,
-		SearchURLs:                value.SearchURLs,
-		CookiesPath:               value.CookiesPath,
-		LogLevel:                  value.LogLevel,
-		Resume:                    value.Resume,
-		MaxResponses:              value.MaxResponses,
-		AIBaseURL:                 value.AIBaseURL,
-		AIModel:                   value.AIModel,
-		AIAPIKey:                  value.AIAPIKey,
-		EmbeddingProvider:         value.EmbeddingProvider,
-		EmbeddingBaseURL:          value.EmbeddingBaseURL,
-		EmbeddingAPIKey:           value.EmbeddingAPIKey,
-		EmbeddingModel:            value.EmbeddingModel,
-		EmbeddingDimensions:       value.EmbeddingDimensions,
-		AITimeout:                 value.AITimeout,
-		AIConnectTimeout:          value.AIConnectTimeout,
-		AIAttempts:                value.AIAttempts,
-		ExtraLetterPrompt:         value.ExtraLetterPrompt,
-		ExtraTestSolutionPrompt:   value.ExtraTestSolutionPrompt,
-		HHReadConcurrency:         value.HHReadConcurrency,
-		RequestInterval:           value.RequestInterval,
-		OutputPath:                value.OutputPath,
-		Contacts:                  value.Contacts,
-		ListResumes:               value.ListResumes,
-		ForceLetter:               value.ForceLetter,
-		ExtraChatReplyPrompt:      value.ExtraChatReplyPrompt,
-		GithubURL:                 value.GithubURL,
-		DryRun:                    value.DryRun,
-		HHWriteEnabled:            value.HHWriteEnabled,
-		HHChatURL:                 value.HHChatURL,
-		HHMaxWritesPerRun:         value.HHMaxWritesPerRun,
-		HHMaxWritesPerDay:         value.HHMaxWritesPerDay,
-		AutoApply:                 value.AutoApply,
-		AutoChat:                  value.AutoChat,
-		AutoTouch:                 value.AutoTouch,
-		AutoJobStatus:             value.AutoJobStatus,
-		ChatMode:                  value.ChatMode,
-		MinSalary:                 value.MinSalary,
-		MinSalaryCurrency:         value.MinSalaryCurrency,
-		IncludeKeywords:           value.IncludeKeywords,
-		ExcludeKeywords:           value.ExcludeKeywords,
-		MinMatchScore:             value.MinMatchScore,
-		RunOnce:                   value.RunOnce,
-		MaxVacanciesPerRun:        value.MaxVacanciesPerRun,
-		MaxApplicationsPerRun:     value.MaxApplicationsPerRun,
-		MaxConversationsPerRun:    value.MaxConversationsPerRun,
-		AlreadyRespondedStatePath: value.AlreadyRespondedStatePath,
-		CandidateProfilePath:      value.CandidateProfilePath,
-		CandidateStoriesPath:      value.CandidateStoriesPath,
-		HHSyncStatePath:           value.HHSyncStatePath,
-		MonitorInterval:           value.MonitorInterval,
-		MonitorQuietHours:         value.MonitorQuietHours,
-		NotificationCooldown:      value.NotificationCooldown,
-		ConversationDisplayTTL:    value.ConversationDisplayTTL,
-		BackgroundInboxRefresh:    value.BackgroundInboxRefresh,
+		SearchURL:                    value.SearchURL,
+		SearchURLs:                   value.SearchURLs,
+		SearchPeriodDays:             value.SearchPeriodDays,
+		CareerAgentMaxSearchProfiles: value.CareerAgentMaxSearchProfiles,
+		CareerAgentResultPath:        value.CareerAgentResultPath,
+		CareerAgentFeedbackPath:      value.CareerAgentFeedbackPath,
+		ResumeRegistryPath:           value.ResumeRegistryPath,
+		CookiesPath:                  value.CookiesPath,
+		LogLevel:                     value.LogLevel,
+		Resume:                       value.Resume,
+		MaxResponses:                 value.MaxResponses,
+		AIBaseURL:                    value.AIBaseURL,
+		AIModel:                      value.AIModel,
+		AIAPIKey:                     value.AIAPIKey,
+		EmbeddingProvider:            value.EmbeddingProvider,
+		EmbeddingBaseURL:             value.EmbeddingBaseURL,
+		EmbeddingAPIKey:              value.EmbeddingAPIKey,
+		EmbeddingModel:               value.EmbeddingModel,
+		EmbeddingDimensions:          value.EmbeddingDimensions,
+		AITimeout:                    value.AITimeout,
+		AIConnectTimeout:             value.AIConnectTimeout,
+		AIAttempts:                   value.AIAttempts,
+		ExtraLetterPrompt:            value.ExtraLetterPrompt,
+		ExtraTestSolutionPrompt:      value.ExtraTestSolutionPrompt,
+		HHReadConcurrency:            value.HHReadConcurrency,
+		RequestInterval:              value.RequestInterval,
+		OutputPath:                   value.OutputPath,
+		Contacts:                     value.Contacts,
+		ListResumes:                  value.ListResumes,
+		ForceLetter:                  value.ForceLetter,
+		ExtraChatReplyPrompt:         value.ExtraChatReplyPrompt,
+		GithubURL:                    value.GithubURL,
+		DryRun:                       value.DryRun,
+		HHWriteEnabled:               value.HHWriteEnabled,
+		HHChatURL:                    value.HHChatURL,
+		HHMaxWritesPerRun:            value.HHMaxWritesPerRun,
+		HHMaxWritesPerDay:            value.HHMaxWritesPerDay,
+		AutoApply:                    value.AutoApply,
+		AutoApplyMode:                value.AutoApplyMode,
+		AutoChat:                     value.AutoChat,
+		AutoTouch:                    value.AutoTouch,
+		AutoJobStatus:                value.AutoJobStatus,
+		ChatMode:                     value.ChatMode,
+		MinSalary:                    value.MinSalary,
+		MinSalaryCurrency:            value.MinSalaryCurrency,
+		IncludeKeywords:              value.IncludeKeywords,
+		ExcludeKeywords:              value.ExcludeKeywords,
+		MinMatchScore:                value.MinMatchScore,
+		RunOnce:                      value.RunOnce,
+		MaxVacanciesPerRun:           value.MaxVacanciesPerRun,
+		MaxApplicationsPerRun:        value.MaxApplicationsPerRun,
+		MaxConversationsPerRun:       value.MaxConversationsPerRun,
+		AlreadyRespondedStatePath:    value.AlreadyRespondedStatePath,
+		CandidateProfilePath:         value.CandidateProfilePath,
+		CandidateStoriesPath:         value.CandidateStoriesPath,
+		HHSyncStatePath:              value.HHSyncStatePath,
+		MonitorInterval:              value.MonitorInterval,
+		MonitorQuietHours:            value.MonitorQuietHours,
+		NotificationCooldown:         value.NotificationCooldown,
+		ConversationDisplayTTL:       value.ConversationDisplayTTL,
+		BackgroundInboxRefresh:       value.BackgroundInboxRefresh,
 	}
 }
 

@@ -40,6 +40,7 @@ func Load(args []string, lookup LookupEnv, workingDir string) (Config, error) {
 		return Config{}, err
 	}
 	flags := visitedFlags(fs)
+	var err error
 	get := func(name, fallback string) string { return getEnv(lookup, dotenv, name, fallback) }
 	getBool := func(name string, fallback bool) (bool, error) {
 		return getEnvBool(lookup, dotenv, name, fallback)
@@ -69,6 +70,22 @@ func Load(args []string, lookup LookupEnv, workingDir string) (Config, error) {
 	if !flags["r"] {
 		cfg.Resume = get("HH_RESUME", cfg.Resume)
 	}
+	if !flags["search-period-days"] {
+		if raw, ok := lookupValue("HH_SEARCH_PERIOD_DAYS"); ok && raw != "" {
+			cfg.SearchPeriodDays, err = atoiEnv(raw, "HH_SEARCH_PERIOD_DAYS")
+			if err != nil {
+				return Config{}, err
+			}
+		}
+	}
+	if !flags["max-search-profiles"] {
+		if raw, ok := lookupValue("HH_MAX_SEARCH_PROFILES"); ok && raw != "" {
+			cfg.CareerAgentMaxSearchProfiles, err = atoiEnv(raw, "HH_MAX_SEARCH_PROFILES")
+			if err != nil {
+				return Config{}, err
+			}
+		}
+	}
 	if !flags["storage-backend"] {
 		cfg.StorageBackend = get("STORAGE_BACKEND", cfg.StorageBackend)
 	}
@@ -78,7 +95,6 @@ func Load(args []string, lookup LookupEnv, workingDir string) (Config, error) {
 	if !flags["candidate-id"] {
 		cfg.CandidateID = get("HH_CANDIDATE_ID", cfg.CandidateID)
 	}
-	var err error
 	if cfg.StorageBackend, err = NormalizeStorageBackend(cfg.StorageBackend); err != nil {
 		return Config{}, err
 	}
@@ -90,6 +106,15 @@ func Load(args []string, lookup LookupEnv, workingDir string) (Config, error) {
 	}
 	if !flags["candidate-stories"] {
 		cfg.CandidateStoriesPath = get("HH_CANDIDATE_STORIES", cfg.CandidateStoriesPath)
+	}
+	if !flags["career-agent-result"] {
+		cfg.CareerAgentResultPath = get("HH_CAREER_AGENT_RESULT", cfg.CareerAgentResultPath)
+	}
+	if !flags["career-agent-feedback"] {
+		cfg.CareerAgentFeedbackPath = get("HH_CAREER_AGENT_FEEDBACK", cfg.CareerAgentFeedbackPath)
+	}
+	if !flags["resume-registry"] {
+		cfg.ResumeRegistryPath = get("HH_RESUME_REGISTRY", cfg.ResumeRegistryPath)
 	}
 	if !flags["hh-read-concurrency"] {
 		if raw, ok := lookupValue("HH_READ_CONCURRENCY"); ok && raw != "" {
@@ -208,6 +233,12 @@ func Load(args []string, lookup LookupEnv, workingDir string) (Config, error) {
 			return Config{}, err
 		}
 	}
+	if !flags["auto-apply-mode"] {
+		cfg.AutoApplyMode = get("HH_AUTO_APPLY_MODE", cfg.AutoApplyMode)
+	}
+	if cfg.AutoApplyMode, err = NormalizeAutoApplyMode(cfg.AutoApplyMode); err != nil {
+		return Config{}, err
+	}
 	if !flags["auto-chat"] {
 		if cfg.AutoChat, err = getBool("HH_AUTO_CHAT", cfg.AutoChat); err != nil {
 			return Config{}, err
@@ -307,6 +338,8 @@ func SplitLeadingArgs(args []string, workingDir string) (leading, remainder []st
 
 func registerFlags(fs *flag.FlagSet, cfg *Config, includeKeywordsRaw, excludeKeywordsRaw *string, wd string) {
 	fs.StringVar(&cfg.SearchURL, "u", "", "URL для поиска вакансий")
+	fs.IntVar(&cfg.SearchPeriodDays, "search-period-days", DefaultSearchPeriodDays, "Период свежести HH search в днях")
+	fs.IntVar(&cfg.CareerAgentMaxSearchProfiles, "max-search-profiles", DefaultCareerAgentMaxSearchProfiles, "Максимум автоматически построенных search profiles")
 	fs.StringVar(&cfg.StorageBackend, "storage-backend", cfg.StorageBackend, "Хранилище вакансий: json или postgres")
 	fs.StringVar(&cfg.DatabaseURL, "database-url", "", "PostgreSQL connection URL (только при storage-backend=postgres)")
 	fs.StringVar(&cfg.CandidateID, "candidate-id", cfg.CandidateID, "Стабильный canonical ID кандидата")
@@ -336,6 +369,7 @@ func registerFlags(fs *flag.FlagSet, cfg *Config, includeKeywordsRaw, excludeKey
 	fs.IntVar(&cfg.HHMaxWritesPerRun, "hh-max-writes-per-run", DefaultHHMaxWritesPerRun, "Максимум ручных HH-отправок за один процесс; 0 — без лимита")
 	fs.IntVar(&cfg.HHMaxWritesPerDay, "hh-max-writes-per-day", DefaultHHMaxWritesPerDay, "Максимум ручных HH-отправок за UTC-день; 0 — без лимита")
 	fs.BoolVar(&cfg.AutoApply, "auto-apply", true, "Разрешить автоматические отклики")
+	fs.StringVar(&cfg.AutoApplyMode, "auto-apply-mode", "off", "Режим откликов: off или canary")
 	fs.BoolVar(&cfg.AutoChat, "auto-chat", true, "Разрешить автоматические ответы в чатах")
 	fs.BoolVar(&cfg.AutoTouch, "auto-touch", true, "Разрешить поднятие резюме")
 	fs.BoolVar(&cfg.AutoJobStatus, "auto-job-status", true, "Разрешить обновление статуса поиска работы")
@@ -352,6 +386,9 @@ func registerFlags(fs *flag.FlagSet, cfg *Config, includeKeywordsRaw, excludeKey
 	fs.StringVar(&cfg.AlreadyRespondedStatePath, "already-responded-state", filepath.Join(wd, ".hh-already-responded.json"), "Локальный JSON-файл подтверждённых предыдущих откликов")
 	fs.StringVar(&cfg.CandidateProfilePath, "candidate-profile", filepath.Join(wd, "candidate_profile.json"), "Локальный профиль кандидата")
 	fs.StringVar(&cfg.CandidateStoriesPath, "candidate-stories", filepath.Join(wd, "candidate_stories.json"), "Примеры опыта кандидата")
+	fs.StringVar(&cfg.CareerAgentResultPath, "career-agent-result", filepath.Join(wd, "career_agent_latest.json"), "Последний Career Agent shadow report")
+	fs.StringVar(&cfg.CareerAgentFeedbackPath, "career-agent-feedback", filepath.Join(wd, "career_agent_feedback.json"), "Career Agent feedback store")
+	fs.StringVar(&cfg.ResumeRegistryPath, "resume-registry", filepath.Join(wd, "resume_registry.json"), "Локальные enabled/disabled overrides резюме")
 	fs.StringVar(&cfg.HHSyncStatePath, "hh-sync-state", filepath.Join(wd, "hh_sync_state.json"), "Состояние read-only синхронизации HH")
 	fs.DurationVar(&cfg.MonitorInterval, "sync-interval", DefaultMonitorInterval, "Интервал background monitor")
 	fs.StringVar(&cfg.MonitorQuietHours, "quiet-hours", "", "Тихие часы уведомлений, например 23:00-07:00")
