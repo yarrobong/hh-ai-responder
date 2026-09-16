@@ -13,8 +13,9 @@ type CareerAgentResumeRouteResult struct {
 	Reasons             []string                       `json:"reasons,omitempty"`
 	Confidence          string                         `json:"confidence"`
 	HardRequirements    []careeragent.RequirementState `json:"hard_requirements,omitempty"`
+	HardBlockers        []string                       `json:"hard_blockers,omitempty"`
 }
 
 func careerAgentRouteEvent(value careeragent.RouteDecision) CareerAgentResumeRouteResult {
-	return CareerAgentResumeRouteResult{Type: "career_agent_resume_route", VacancyID: value.VacancyID, Status: value.Status, SelectedResumeID: value.SelectedResumeID, SelectedResumeTitle: value.SelectedResumeTitle, Score: value.Score, AlternativeScores: value.AlternativeScores, Reasons: value.Reasons, Confidence: value.Confidence, HardRequirements: value.HardRequirements}
+	return CareerAgentResumeRouteResult{Type: "career_agent_resume_route", VacancyID: value.VacancyID, Status: value.Status, SelectedResumeID: value.SelectedResumeID, SelectedResumeTitle: value.SelectedResumeTitle, Score: value.Score, AlternativeScores: value.AlternativeScores, Reasons: value.Reasons, Confidence: value.Confidence, HardRequirements: value.HardRequirements, HardBlockers: value.HardBlockers}
 }

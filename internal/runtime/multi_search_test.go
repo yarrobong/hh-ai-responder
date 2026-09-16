@@ -172,4 +172,7 @@ func TestMultiSearchDeduplicatesBeforeAIAndAppliesGlobalLimit(t *testing.T) {
 	if summary.PreviouslyRespondedSkipped != 1 || summary.AIEvaluated != 1 || summary.Matched != 1 || summary.WouldApply != 1 || summary.VacancyLimitSkipped != 1 {
 		t.Fatalf("pipeline summary: %+v", summary)
 	}
+	if summary.VacanciesProcessed != 3 || summary.TotalTerminal != 3 || !summary.AccountingPass || summary.TerminalOutcomes[TerminalAlreadyResponded] != 1 || summary.TerminalOutcomes[TerminalAIMatch] != 1 || summary.TerminalOutcomes[TerminalVacancyLimit] != 1 {
+		t.Fatalf("accounting summary: %+v", summary)
+	}
 }

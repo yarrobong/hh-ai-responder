@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
+	"hh-ai-responder/internal/careeragent"
 	appconfig "hh-ai-responder/internal/config"
 	vacancyanalysis "hh-ai-responder/internal/usecase/vacancyanalysis"
 )
@@ -84,7 +86,9 @@ type RunSummaryResult struct {
 	PreviouslyRespondedSkipped int                    `json:"previously_responded_skipped"`
 	DeterministicSkipped       int                    `json:"deterministic_skipped"`
 	AIEvaluated                int                    `json:"ai_evaluated"`
+	AIRejected                 int                    `json:"ai_rejected,omitempty"`
 	Matched                    int                    `json:"matched"`
+	Rejected                   int                    `json:"rejected"`
 	ReviewRequired             int                    `json:"review_required"`
 	WouldApply                 int                    `json:"would_apply"`
 	Applied                    int                    `json:"applied"`
@@ -95,6 +99,111 @@ type RunSummaryResult struct {
 	BlockedAttempts            int                    `json:"blocked_attempts,omitempty"`
 	ReconciledConfirmed        int                    `json:"reconciled_confirmed,omitempty"`
 	UnresolvedAttempts         int                    `json:"unresolved_attempts,omitempty"`
+	TerminalOutcomes           map[string]int         `json:"terminal_outcomes,omitempty"`
+	TotalTerminal              int                    `json:"total_terminal,omitempty"`
+	AccountingPass             bool                   `json:"accounting_pass"`
+	ShadowWriteCount           int                    `json:"shadow_write_count"`
+	ResumeRouted               int                    `json:"resume_routed,omitempty"`
+	StageStats                 map[string]StageStats  `json:"stage_stats,omitempty"`
+}
+
+type StageStats struct {
+	Entered int            `json:"entered"`
+	Exited  int            `json:"exited"`
+	Reasons map[string]int `json:"reasons,omitempty"`
+}
+
+type CareerAgentVacancyResult struct {
+	Type                 string                    `json:"type"`
+	VacancyID            int                       `json:"vacancy_id"`
+	Title                string                    `json:"title"`
+	Company              string                    `json:"company,omitempty"`
+	URL                  string                    `json:"url,omitempty"`
+	FoundByProfiles      []string                  `json:"found_by_profiles,omitempty"`
+	CheapFilterResult    string                    `json:"cheap_filter_result,omitempty"`
+	CheapFilterReasons   []string                  `json:"cheap_filter_reasons,omitempty"`
+	DetailFetchStatus    string                    `json:"detail_fetch_status,omitempty"`
+	AIEvaluated          bool                      `json:"ai_evaluated"`
+	AIScore              *int                      `json:"ai_score,omitempty"`
+	AIReasons            []string                  `json:"ai_reasons,omitempty"`
+	ResumeCandidates     []careeragent.ResumeScore `json:"resume_candidates,omitempty"`
+	SelectedResume       string                    `json:"selected_resume,omitempty"`
+	ResumeConfidence     string                    `json:"resume_confidence,omitempty"`
+	FinalDecision        string                    `json:"final_decision"`
+	WouldApply           bool                      `json:"would_apply"`
+	BlockedReason        string                    `json:"blocked_reason,omitempty"`
+	CoverLetterGenerated bool                      `json:"cover_letter_generated"`
+	TerminalOutcome      string                    `json:"terminal_outcome"`
+	ProcessedAt          time.Time                 `json:"processed_at"`
+}
+
+const (
+	TerminalAlreadyResponded    = "ALREADY_RESPONDED"
+	TerminalDeterministicReject = "DETERMINISTIC_REJECT"
+	TerminalDetailFetchFailed   = "DETAIL_FETCH_FAILED"
+	TerminalDetailNotRequired   = "DETAIL_NOT_REQUIRED"
+	TerminalAIReject            = "AI_REJECT"
+	TerminalAIMatch             = "AI_MATCH"
+	TerminalReviewRequired      = "REVIEW_REQUIRED"
+	TerminalVacancyLimit        = "VACANCY_LIMIT"
+	TerminalApplicationLimit    = "APPLICATION_LIMIT"
+	TerminalError               = "ERROR"
+	TerminalAttemptBlocked      = "ATTEMPT_BLOCKED"
+)
+
+func newRunAccounting() (map[int]CareerAgentVacancyResult, map[string]int, map[string]StageStats) {
+	return map[int]CareerAgentVacancyResult{}, map[string]int{}, map[string]StageStats{}
+}
+
+func recordStage(stats map[string]StageStats, stage, reason string, entered, exited bool) {
+	value := stats[stage]
+	if entered {
+		value.Entered++
+	}
+	if exited {
+		value.Exited++
+	}
+	if strings.TrimSpace(reason) != "" {
+		if value.Reasons == nil {
+			value.Reasons = map[string]int{}
+		}
+		value.Reasons[reason]++
+	}
+	stats[stage] = value
+}
+
+func validateCareerAgentAccounting(uniqueIDs []int, outcomes map[int]CareerAgentVacancyResult) error {
+	if len(uniqueIDs) != len(outcomes) {
+		return fmt.Errorf("unique=%d terminal_records=%d", len(uniqueIDs), len(outcomes))
+	}
+	seen := map[int]bool{}
+	for _, id := range uniqueIDs {
+		if id <= 0 || seen[id] {
+			return fmt.Errorf("unique vacancy id %d is duplicated or invalid", id)
+		}
+		seen[id] = true
+		value, ok := outcomes[id]
+		if !ok || !knownTerminalOutcome(value.TerminalOutcome) {
+			return fmt.Errorf("vacancy %d has no terminal outcome", id)
+		}
+	}
+	for id := range outcomes {
+		if !seen[id] {
+			return fmt.Errorf("terminal record %d is not in unique set", id)
+		}
+	}
+	return nil
+}
+
+func knownTerminalOutcome(value string) bool {
+	switch value {
+	case TerminalAlreadyResponded, TerminalDeterministicReject, TerminalDetailFetchFailed, TerminalDetailNotRequired,
+		TerminalAIReject, TerminalAIMatch, TerminalReviewRequired, TerminalVacancyLimit, TerminalApplicationLimit,
+		TerminalError, TerminalAttemptBlocked:
+		return true
+	default:
+		return false
+	}
 }
 
 type VacancyDecision string

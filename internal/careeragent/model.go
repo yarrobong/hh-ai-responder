@@ -119,33 +119,67 @@ func PlanSearches(resumes []ResumeProfile, signals CandidateSignals, constraints
 	if period <= 0 {
 		period = 7
 	}
-	result := make([]SearchProfile, 0, max)
-	seen := map[string]bool{}
+	type plannedTerm struct {
+		resume ResumeProfile
+		query  string
+		reason string
+	}
+	queues := make([][]plannedTerm, 0, len(resumes))
 	for _, resume := range resumes {
 		if !resume.Enabled {
 			continue
 		}
-		terms := append([]string{}, resume.SearchHints...)
-		terms = append(terms, resume.DesiredRole, resume.Title)
-		terms = append(terms, signals.Roles...)
-		terms = append(terms, roleExpansions(resume.Title, resume.DesiredRole)...)
-		if len(terms) == 0 {
-			terms = append(terms, signals.Skills...)
+		terms := make([]plannedTerm, 0)
+		add := func(values []string, reason string) {
+			for _, raw := range values {
+				query := normalizeQuery(raw)
+				if query == "" || isNoiseQuery(query) || containsKeyword(query, constraints.ExcludeKeywords) {
+					continue
+				}
+				duplicate := false
+				for _, existing := range terms {
+					if existing.query == query {
+						duplicate = true
+						break
+					}
+				}
+				if !duplicate {
+					terms = append(terms, plannedTerm{resume: resume, query: query, reason: reason})
+				}
+			}
 		}
-		for _, raw := range terms {
-			query := normalizeQuery(raw)
-			seenKey := resume.ID + "\x00" + query
-			if query == "" || seen[seenKey] || len(result) >= max || isNoiseQuery(query) || containsKeyword(query, constraints.ExcludeKeywords) {
+		add(resume.SearchHints, "resume search hint")
+		add([]string{resume.DesiredRole, resume.Title}, "resume role/title")
+		add(signals.Roles, "candidate role signal")
+		add(roleExpansions(resume.Title, resume.DesiredRole), "deterministic role expansion")
+		if len(terms) == 0 {
+			add(signals.Skills, "candidate skill signal")
+		}
+		queues = append(queues, terms)
+	}
+	// Round-robin over enabled resumes. This keeps a small profile budget from
+	// silently becoming "all searches for the first resume".
+	result := make([]SearchProfile, 0, max)
+	seen := map[string]bool{}
+	for round := 0; len(result) < max; round++ {
+		added := 0
+		for _, queue := range queues {
+			if round >= len(queue) || len(result) >= max {
+				continue
+			}
+			term := queue[round]
+			seenKey := term.resume.ID + "\x00" + term.query
+			if seen[seenKey] {
 				continue
 			}
 			seen[seenKey] = true
 			params := url.Values{}
-			params.Set("text", query)
+			params.Set("text", term.query)
 			if constraints.Area != "" {
 				params.Set("area", strings.TrimSpace(constraints.Area))
 			}
-			if resume.Hash != "" {
-				params.Set("resume", resume.Hash)
+			if term.resume.Hash != "" {
+				params.Set("resume", term.resume.Hash)
 			}
 			params.Set("order_by", "publication_time")
 			params.Set("search_period", strconv.Itoa(period))
@@ -156,8 +190,12 @@ func PlanSearches(resumes []ResumeProfile, signals CandidateSignals, constraints
 			if len(constraints.ExcludeKeywords) > 0 {
 				params.Set("career_agent_exclude", strings.Join(normalizeKeywords(constraints.ExcludeKeywords), ","))
 			}
-			id := stableSearchID(resume.ID, query)
-			result = append(result, SearchProfile{ID: id, ResumeID: resume.ID, ResumeTitle: resume.Title, Query: query, Reason: "derived from resume title/role and normalized role aliases", SearchPeriodDays: period, Params: params})
+			id := stableSearchID(term.resume.ID, term.query)
+			result = append(result, SearchProfile{ID: id, ResumeID: term.resume.ID, ResumeTitle: term.resume.Title, Query: term.query, Reason: term.reason, SearchPeriodDays: period, Params: params})
+			added++
+		}
+		if added == 0 {
+			break
 		}
 	}
 	return result
@@ -173,10 +211,11 @@ type VacancyInput struct {
 }
 
 type ResumeScore struct {
-	ResumeID string   `json:"resume_id"`
-	Title    string   `json:"title"`
-	Score    int      `json:"score"`
-	Reasons  []string `json:"reasons,omitempty"`
+	ResumeID     string   `json:"resume_id"`
+	Title        string   `json:"title"`
+	Score        int      `json:"score"`
+	Reasons      []string `json:"reasons,omitempty"`
+	HardBlockers []string `json:"hard_blockers,omitempty"`
 }
 
 type RouteDecision struct {
@@ -189,6 +228,7 @@ type RouteDecision struct {
 	Reasons             []string           `json:"reasons,omitempty"`
 	Confidence          string             `json:"confidence"`
 	HardRequirements    []RequirementState `json:"hard_requirements,omitempty"`
+	HardBlockers        []string           `json:"hard_blockers,omitempty"`
 }
 
 const (
@@ -224,6 +264,21 @@ func RouteResume(vacancy VacancyInput, resumes []ResumeProfile) RouteDecision {
 		return candidates[i].ResumeID < candidates[j].ResumeID
 	})
 	decision.AlternativeScores = append([]ResumeScore(nil), candidates...)
+	compatible := candidates[:0]
+	for _, candidate := range candidates {
+		if len(candidate.HardBlockers) == 0 {
+			compatible = append(compatible, candidate)
+		}
+	}
+	if len(compatible) == 0 {
+		decision.Reasons = []string{"all enabled resumes have explicit hard incompatibilities"}
+		for _, candidate := range candidates {
+			decision.Reasons = append(decision.Reasons, candidate.Title+": "+strings.Join(candidate.HardBlockers, ", "))
+		}
+		decision.HardBlockers = append([]string(nil), candidates[0].HardBlockers...)
+		return decision
+	}
+	candidates = compatible
 	decision.Score = candidates[0].Score
 	decision.SelectedResumeID, decision.SelectedResumeTitle = candidates[0].ResumeID, candidates[0].Title
 	decision.HardRequirements = requirementStates(vacancy, candidates[0], resumes)
@@ -379,7 +434,9 @@ func FeedbackID(value Feedback) string {
 	if strings.TrimSpace(value.ID) != "" {
 		return value.ID
 	}
-	return StableResumeID(value.ResumeID, int64(value.VacancyID), string(value.Type))
+	seed := formatInt(int64(value.VacancyID)) + "\x00" + strings.TrimSpace(value.ResumeID) + "\x00" + string(value.Type)
+	sum := sha256.Sum256([]byte(seed))
+	return "career-feedback-" + hex.EncodeToString(sum[:8])
 }
 
 func ValidFeedbackType(value FeedbackType) bool {
@@ -471,7 +528,14 @@ func tokens(value string) map[string]bool {
 func scoreResume(v VacancyInput, resume ResumeProfile) ResumeScore {
 	score := 0
 	reasons := []string{}
-	vacancyTokens := tokens(v.Title + " " + v.Description)
+	vacancyText := v.Title + " " + v.Description
+	vacancyTokens := tokens(vacancyText)
+	hardBlockers := []string{}
+	for _, keyword := range resume.ExcludeKeywords {
+		if containsKeyword(vacancyText, []string{keyword}) {
+			hardBlockers = append(hardBlockers, "excluded keyword: "+keyword)
+		}
+	}
 	for _, skill := range resume.Skills {
 		if hasTokenOverlap(tokens(skill), vacancyTokens) {
 			score += 18
@@ -488,8 +552,9 @@ func scoreResume(v VacancyInput, resume ResumeProfile) ResumeScore {
 	if overlap > 0 {
 		reasons = append(reasons, "role/title overlap")
 	}
-	return ResumeScore{ResumeID: resume.ID, Title: resume.Title, Score: minInt(score, 100), Reasons: reasons}
+	return ResumeScore{ResumeID: resume.ID, Title: resume.Title, Score: minInt(score, 100), Reasons: reasons, HardBlockers: hardBlockers}
 }
+
 func requirementStates(v VacancyInput, selected ResumeScore, resumes []ResumeProfile) []RequirementState {
 	var profile ResumeProfile
 	for _, resume := range resumes {

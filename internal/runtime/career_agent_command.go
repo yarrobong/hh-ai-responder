@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,14 +17,16 @@ import (
 )
 
 type CareerAgentRunReport struct {
-	Version        int                         `json:"version"`
-	RunID          string                      `json:"run_id"`
-	Mode           string                      `json:"mode"`
-	GeneratedAt    time.Time                   `json:"generated_at"`
-	ResumeProfiles []careeragent.ResumeProfile `json:"resume_profiles"`
-	SearchProfiles []careeragent.SearchProfile `json:"search_profiles"`
-	Summary        RunSummaryResult            `json:"summary"`
-	Events         []json.RawMessage           `json:"events"`
+	Version         int                         `json:"version"`
+	RunID           string                      `json:"run_id"`
+	Mode            string                      `json:"mode"`
+	GeneratedAt     time.Time                   `json:"generated_at"`
+	ResumeProfiles  []careeragent.ResumeProfile `json:"resume_profiles"`
+	SearchProfiles  []careeragent.SearchProfile `json:"search_profiles"`
+	Summary         RunSummaryResult            `json:"summary"`
+	Vacancies       []CareerAgentVacancyResult  `json:"vacancies"`
+	Events          []json.RawMessage           `json:"events"`
+	HumanReportPath string                      `json:"human_report_path,omitempty"`
 }
 
 func runCareerAgentCommand(args []string, cfg Config, stdout, stderr io.Writer) error {
@@ -60,25 +63,8 @@ func runCareerAgentCommand(args []string, cfg Config, stdout, stderr io.Writer) 
 	if canary {
 		mode = "canary"
 	}
-	if shadow {
-		cfg.DryRun, cfg.HHWriteEnabled = true, false
-		cfg.AutoApply, cfg.AutoChat, cfg.AutoTouch, cfg.AutoJobStatus = true, false, false, false
-		cfg.ChatMode, cfg.RunOnce, cfg.OutputPath = "off", true, ""
-	} else {
-		if cfg.DryRun || !cfg.HHWriteEnabled {
-			return errors.New("canary requires HH_DRY_RUN=false and HH_WRITE_ENABLED=true")
-		}
-		cfg.AutoApply, cfg.AutoChat, cfg.AutoTouch, cfg.AutoJobStatus = true, false, false, false
-		cfg.ChatMode, cfg.RunOnce, cfg.OutputPath, cfg.AutoApplyMode = "off", true, "", "canary"
-		if cfg.HHMaxWritesPerRun == 0 || cfg.HHMaxWritesPerRun > 1 {
-			cfg.HHMaxWritesPerRun = 1
-		}
-		if cfg.HHMaxWritesPerDay == 0 || cfg.HHMaxWritesPerDay > 3 {
-			cfg.HHMaxWritesPerDay = 3
-		}
-		if cfg.MaxApplicationsPerRun == 0 || cfg.MaxApplicationsPerRun > 1 {
-			cfg.MaxApplicationsPerRun = 1
-		}
+	if err := configureCareerAgentMode(&cfg, mode); err != nil {
+		return err
 	}
 	if logger == nil {
 		logger = NewLogger(stderr, parseLogLevel(cfg.LogLevel))
@@ -98,7 +84,7 @@ func runCareerAgentCommand(args []string, cfg Config, stdout, stderr io.Writer) 
 	if err := responder.ApplyVacancies(); err != nil {
 		return err
 	}
-	report := CareerAgentRunReport{Version: 1, RunID: fmt.Sprintf("career-agent-%d", time.Now().UTC().UnixNano()), Mode: mode, GeneratedAt: time.Now().UTC(), ResumeProfiles: responder.careerAgentResumes, SearchProfiles: responder.careerAgentProfiles, Events: []json.RawMessage{}}
+	report := CareerAgentRunReport{Version: 2, RunID: fmt.Sprintf("career-agent-%d", time.Now().UTC().UnixNano()), Mode: mode, GeneratedAt: time.Now().UTC(), ResumeProfiles: responder.careerAgentResumes, SearchProfiles: responder.careerAgentProfiles, Vacancies: []CareerAgentVacancyResult{}, Events: []json.RawMessage{}}
 	if len(report.SearchProfiles) == 0 {
 		report.SearchProfiles = manualCareerAgentSearchProfiles(responder.searchProfiles)
 	}
@@ -114,9 +100,18 @@ func runCareerAgentCommand(args []string, cfg Config, stdout, stderr io.Writer) 
 		if json.Unmarshal(raw, &kind) == nil && kind.Type == "run_summary" {
 			_ = json.Unmarshal(raw, &report.Summary)
 		}
+		if kind.Type == "career_agent_vacancy" {
+			var vacancy CareerAgentVacancyResult
+			if json.Unmarshal(raw, &vacancy) == nil {
+				report.Vacancies = append(report.Vacancies, vacancy)
+			}
+		}
 	}
 	if report.Summary.Type == "" {
 		report.Summary = RunSummaryResult{Type: "run_summary", Errors: 1}
+	}
+	if cfg.CareerAgentResultPath != "" {
+		report.HumanReportPath = cfg.CareerAgentResultPath + ".md"
 	}
 	raw, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
@@ -126,9 +121,87 @@ func runCareerAgentCommand(args []string, cfg Config, stdout, stderr io.Writer) 
 		if err := platform.WritePrivateFileAtomic(cfg.CareerAgentResultPath, append(raw, '\n'), ".career-agent-report-*.tmp"); err != nil {
 			return err
 		}
+		human := renderCareerAgentHumanReport(report)
+		if err := platform.WritePrivateFileAtomic(report.HumanReportPath, []byte(human), ".career-agent-human-report-*.tmp"); err != nil {
+			return err
+		}
 	}
 	_, err = stdout.Write(append(raw, '\n'))
 	return err
+}
+
+func renderCareerAgentHumanReport(report CareerAgentRunReport) string {
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "# Career Agent %s report\n\n", report.Mode)
+	fmt.Fprintf(&builder, "Run: `%s`\n\n", report.RunID)
+	builder.WriteString("## Summary\n\n")
+	fmt.Fprintf(&builder, "- Raw: %d\n- Duplicates: %d\n- Unique: %d\n- Processed: %d\n- AI evaluated: %d\n- MATCH: %d\n- REJECT: %d\n- REVIEW_REQUIRED: %d\n- Would apply: %d\n- Applied: %d\n- Shadow writes: %d\n- TOTAL TERMINAL: %d\n- ACCOUNTING CHECK: %s\n\n", report.Summary.VacanciesFetchedRaw, report.Summary.DuplicatesSkipped, report.Summary.VacanciesAfterDedup, report.Summary.VacanciesProcessed, report.Summary.AIEvaluated, report.Summary.Matched, report.Summary.Rejected, report.Summary.ReviewRequired, report.Summary.WouldApply, report.Summary.Applied, report.Summary.ShadowWriteCount, report.Summary.TotalTerminal, passFail(report.Summary.AccountingPass))
+	builder.WriteString("Terminal outcomes:\n\n")
+	for _, key := range sortedMapKeys(report.Summary.TerminalOutcomes) {
+		fmt.Fprintf(&builder, "- %s: %d\n", key, report.Summary.TerminalOutcomes[key])
+	}
+	builder.WriteString("\n## Search profiles\n\n| Resume | Query | Reason |\n|---|---|---|\n")
+	for _, profile := range report.SearchProfiles {
+		fmt.Fprintf(&builder, "| %s | %s | %s |\n", profile.ResumeTitle, profile.Query, profile.Reason)
+	}
+	builder.WriteString("\n## Vacancy outcomes\n\n| ID | Title | Terminal | AI | Selected resume | Confidence | Blocked reason |\n|---:|---|---|---|---|---|---|\n")
+	for _, vacancy := range report.Vacancies {
+		ai := "no"
+		if vacancy.AIEvaluated {
+			ai = "yes"
+		}
+		fmt.Fprintf(&builder, "| %d | %s | %s | %s | %s | %s | %s |\n", vacancy.VacancyID, vacancy.Title, vacancy.TerminalOutcome, ai, vacancy.SelectedResume, vacancy.ResumeConfidence, vacancy.BlockedReason)
+	}
+	return builder.String()
+}
+
+func passFail(value bool) string {
+	if value {
+		return "PASS"
+	}
+	return "FAIL"
+}
+
+func sortedMapKeys(values map[string]int) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func configureCareerAgentMode(cfg *Config, mode string) error {
+	if cfg == nil {
+		return errors.New("career agent config is nil")
+	}
+	switch mode {
+	case "shadow":
+		cfg.DryRun, cfg.HHWriteEnabled = true, false
+		cfg.AutoApply, cfg.AutoChat, cfg.AutoTouch, cfg.AutoJobStatus = true, false, false, false
+		cfg.ChatMode, cfg.RunOnce, cfg.OutputPath, cfg.AutoApplyMode = "off", true, "", "off"
+		return nil
+	case "canary":
+		if cfg.DryRun || !cfg.HHWriteEnabled {
+			return errors.New("canary requires HH_DRY_RUN=false and HH_WRITE_ENABLED=true")
+		}
+		cfg.AutoApply, cfg.AutoChat, cfg.AutoTouch, cfg.AutoJobStatus = true, false, false, false
+		cfg.ChatMode, cfg.RunOnce, cfg.OutputPath, cfg.AutoApplyMode = "off", true, "", "canary"
+		// Canary caps are hard upper bounds, including when the operator
+		// supplied larger values in the general configuration.
+		if cfg.HHMaxWritesPerRun == 0 || cfg.HHMaxWritesPerRun > 1 {
+			cfg.HHMaxWritesPerRun = 1
+		}
+		if cfg.HHMaxWritesPerDay == 0 || cfg.HHMaxWritesPerDay > 3 {
+			cfg.HHMaxWritesPerDay = 3
+		}
+		if cfg.MaxApplicationsPerRun == 0 || cfg.MaxApplicationsPerRun > 1 {
+			cfg.MaxApplicationsPerRun = 1
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported Career Agent mode %q", mode)
+	}
 }
 
 func manualCareerAgentSearchProfiles(values []vacancySearchProfile) []careeragent.SearchProfile {

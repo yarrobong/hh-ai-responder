@@ -52,7 +52,10 @@ go build ./cmd/hh-ai-responder
 ./hh-ai-responder career-agent --shadow
 ```
 
-Отчёт сохраняется в `career_agent_latest.json` (или в `HH_CAREER_AGENT_RESULT`).
+Отчёт сохраняется в `career_agent_latest.json` (или в `HH_CAREER_AGENT_RESULT`),
+а компактная человекочитаемая версия — рядом с суффиксом `.md`. В JSON для
+каждой unique vacancy есть ровно один `terminal_outcome`; summary содержит
+`accounting_pass`, stage counters и `shadow_write_count`.
 Список нормализованных резюме и локальное включение/отключение:
 
 ```sh

@@ -1160,6 +1160,7 @@ type HHAIResponder struct {
 	careerAgentProfiles          []careeragent.SearchProfile
 	careerAgentResumes           []careeragent.ResumeProfile
 	careerAgentRoutes            map[int]careeragent.RouteDecision
+	careerAgentWriteCount        int
 	resumeFactsByHash            map[string]ResumeFacts
 	vacancySearchSources         map[int][]string
 	alreadyRespondedStatePath    string

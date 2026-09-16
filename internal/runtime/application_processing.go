@@ -18,6 +18,17 @@ import (
 // submission compatibility path in the root. Vacancy preparation itself is
 // delegated to the importable applicationprocessing service.
 func (r *HHAIResponder) ApplyVacancies() error {
+	if r == nil {
+		return errors.New("HH responder is not configured")
+	}
+	if r.careerAgentMode == "shadow" {
+		// Shadow is a hard safety mode, not a presentation flag. Keep this
+		// guard at the orchestration boundary so conflicting config flags
+		// cannot reach any mutation-capable service.
+		r.dryRun, r.hhWriteEnabled = true, false
+		r.autoChat, r.autoTouch, r.autoJobStatus = false, false, false
+		r.chatMode = "off"
+	}
 	if !r.autoApply {
 		logger.Info("Automatic applications disabled by configuration")
 		return nil
@@ -25,6 +36,24 @@ func (r *HHAIResponder) ApplyVacancies() error {
 	r.loadAlreadyRespondedState()
 	r.clearVacancyPreflightCache()
 	summary := RunSummaryResult{Type: "run_summary"}
+	accountingRecords, terminalOutcomes, stageStats := newRunAccounting()
+	uniqueIDs := []int{}
+	finish := func(trace CareerAgentVacancyResult, outcome, reason string) {
+		if _, exists := accountingRecords[trace.VacancyID]; exists {
+			summary.Errors++
+			return
+		}
+		trace.Type = "career_agent_vacancy"
+		trace.TerminalOutcome = outcome
+		trace.BlockedReason = firstNonEmpty(trace.BlockedReason, reason)
+		if trace.CheapFilterResult == "REJECT" && len(trace.CheapFilterReasons) == 0 && strings.TrimSpace(reason) != "" {
+			trace.CheapFilterReasons = []string{reason}
+		}
+		trace.ProcessedAt = time.Now().UTC()
+		accountingRecords[trace.VacancyID] = trace
+		terminalOutcomes[outcome]++
+		r.writeEvent(trace)
+	}
 	defer func() { summary.VacanciesSeen = summary.VacanciesProcessed; r.writeEvent(summary) }()
 	if r.attemptStoreInitErr != nil {
 		summary.Errors++
@@ -42,29 +71,55 @@ func (r *HHAIResponder) ApplyVacancies() error {
 	successfulApplicationsInRun := 0
 	budget := newAutomaticApplicationBudget(r.maxApplicationsPerRun)
 	eligibleVacancies := 0
+	dispatchBlocked := false
 	vacancies, err := r.fetchVacanciesFromSearchProfiles(&summary)
 	if err != nil {
 		summary.Errors++
 		logger.Error("Failed to fetch vacancies: %v", err)
 		return err
 	}
+	for _, value := range vacancies {
+		uniqueIDs = append(uniqueIDs, value.ID)
+		recordStage(stageStats, "unique_discovery", "deduplicated vacancy", true, true)
+	}
+	defer func() {
+		summary.TerminalOutcomes = terminalOutcomes
+		summary.TotalTerminal = len(accountingRecords)
+		summary.AccountingPass = validateCareerAgentAccounting(uniqueIDs, accountingRecords) == nil
+		summary.ShadowWriteCount = r.careerAgentWriteCount
+		summary.StageStats = stageStats
+	}()
 	for _, profile := range summary.SearchProfiles {
 		logger.Info("SEARCH PROFILE — %s: %d vacancies", profile.Name, profile.VacanciesFetched)
 	}
 
 	for _, value := range vacancies {
-		if err := r.ctx.Err(); err != nil {
-			return err
-		}
+		trace := CareerAgentVacancyResult{VacancyID: value.ID, Title: firstNonEmpty(value.Title, value.Name), Company: value.Company.Name, URL: value.Links["desktop"], FoundByProfiles: append([]string(nil), r.vacancySearchSources[value.ID]...), CheapFilterResult: "PASS", DetailFetchStatus: "NOT_STARTED"}
 		summary.VacanciesProcessed++
+		if err := r.ctx.Err(); err != nil {
+			summary.Errors++
+			r.skipVacancy(value, value.Links["desktop"], "context canceled before processing", nil)
+			finish(trace, TerminalError, "context canceled before processing")
+			continue
+		}
+		if dispatchBlocked {
+			summary.ApplicationLimitSkipped++
+			r.skipVacancy(value, value.Links["desktop"], "dispatch blocked after unresolved submission result", nil)
+			finish(trace, TerminalApplicationLimit, "dispatch blocked after unresolved submission result")
+			continue
+		}
+		recordStage(stageStats, "attempt_gate", "entered", true, false)
 		gate, gateErr := r.automaticApplicationGate(ctxOrBackground(r.ctx), value.ID)
 		if gateErr != nil {
+			recordStage(stageStats, "attempt_gate", "error", false, true)
 			summary.Errors++
 			r.skipVacancyForAttempt(value, value.Links["desktop"], "automatic application attempt authority unavailable: "+gate.Reason, "", "")
+			finish(trace, TerminalError, "automatic application attempt authority unavailable: "+gate.Reason)
 			logger.Warn("Could not read automatic application attempt state for vacancy %d: %v", value.ID, gateErr)
 			continue
 		}
 		if gate.Classification == attemptpolicy.BlockingConfirmed || gate.Classification == attemptpolicy.BlockingUnresolved {
+			recordStage(stageStats, "attempt_gate", gate.Reason, false, true)
 			summary.BlockedAttempts++
 			attemptID, attemptState := "", ""
 			if gate.Attempt != nil {
@@ -86,25 +141,38 @@ func (r *HHAIResponder) ApplyVacancies() error {
 				}
 			}
 			r.skipVacancyForAttempt(value, value.Links["desktop"], gate.Reason, attemptID, attemptState)
+			finish(trace, TerminalAttemptBlocked, gate.Reason)
 			continue
 		}
+		recordStage(stageStats, "attempt_gate", "clear", false, true)
 		if r.isAlreadyResponded(value.ID) {
+			recordStage(stageStats, "cheap_filters", "already responded", true, true)
 			summary.PreviouslyRespondedSkipped++
 			r.skipVacancy(value, value.Links["desktop"], "previously confirmed already responded", nil)
+			trace.CheapFilterResult, trace.DetailFetchStatus = "REJECT", "NOT_REQUIRED"
+			finish(trace, TerminalAlreadyResponded, "previously confirmed already responded")
 			continue
 		}
+		recordStage(stageStats, "cheap_filters", "entered", true, false)
 		// Keep the legacy vacancy-limit ordering: these checks happen before
 		// counting a vacancy as eligible or reading its description.
 		if reason := (rootApplicationPolicy{responder: r}).EarlyReject(value); reason != "" {
+			recordStage(stageStats, "cheap_filters", reason, false, true)
 			summary.DeterministicSkipped++
+			summary.Rejected++
 			r.skipVacancy(value, value.Links["desktop"], reason, nil)
+			trace.CheapFilterResult, trace.DetailFetchStatus = "REJECT", "NOT_REQUIRED"
+			finish(trace, TerminalDeterministicReject, reason)
 			continue
 		}
+		recordStage(stageStats, "cheap_filters", "passed", false, true)
 		vacancyURL := value.Links["desktop"]
 		if r.maxVacanciesPerRun > 0 && eligibleVacancies >= r.maxVacanciesPerRun {
 			summary.VacancyLimitSkipped++
 			r.skipVacancy(value, vacancyURL, "per-run vacancy limit reached", nil)
-			return nil
+			trace.CheapFilterResult, trace.DetailFetchStatus = "PASS", "NOT_REQUIRED"
+			finish(trace, TerminalVacancyLimit, "per-run vacancy limit reached")
+			continue
 		}
 		eligibleVacancies++
 		applicationCount := successfulApplicationsInRun
@@ -114,19 +182,29 @@ func (r *HHAIResponder) ApplyVacancies() error {
 		if budget.reached(r.dryRun) {
 			summary.ApplicationLimitSkipped++
 			r.skipVacancy(value, vacancyURL, "per-run application dispatch limit reached", nil)
-			return nil
+			trace.DetailFetchStatus = "NOT_REQUIRED"
+			finish(trace, TerminalApplicationLimit, "per-run application dispatch limit reached")
+			continue
 		}
 
 		selectedResume := *resume
 		selectedCandidate, selectedResolver := baseCandidate, resolver
 		if r.careerAgentMode != "" {
+			recordStage(stageStats, "resume_routing", "entered", true, false)
 			route := r.routeResumeForVacancy(value)
 			r.writeEvent(careerAgentRouteEvent(route))
+			trace.ResumeCandidates = append([]careeragent.ResumeScore(nil), route.AlternativeScores...)
+			trace.SelectedResume, trace.ResumeConfidence = route.SelectedResumeID, route.Confidence
 			if route.Status != careeragent.RouteSelected || route.Confidence == careeragent.ConfidenceLow || (r.careerAgentMode == "canary" && (route.Confidence != careeragent.ConfidenceHigh || !routeRequirementsConfirmed(route))) {
+				recordStage(stageStats, "resume_routing", strings.Join(route.Reasons, "; "), false, true)
 				summary.ReviewRequired++
 				r.skipVacancy(value, vacancyURL, "resume routing requires review: "+strings.Join(careerAgentReasonList(route), "; "), nil)
+				trace.FinalDecision = string(VacancyReviewRequired)
+				finish(trace, TerminalReviewRequired, "resume routing requires review: "+strings.Join(careerAgentReasonList(route), "; "))
 				continue
 			}
+			summary.ResumeRouted++
+			recordStage(stageStats, "resume_routing", "selected", false, true)
 			hash := r.resumeHashForProfile(route.SelectedResumeID)
 			if hash == "" {
 				hash = route.SelectedResumeID
@@ -137,20 +215,35 @@ func (r *HHAIResponder) ApplyVacancies() error {
 				if activateErr != nil {
 					summary.ReviewRequired++
 					r.skipVacancy(value, vacancyURL, "selected resume facts could not be verified: "+activateErr.Error(), nil)
+					trace.FinalDecision = string(VacancyReviewRequired)
+					finish(trace, TerminalReviewRequired, "selected resume facts could not be verified: "+activateErr.Error())
 					continue
 				}
 			}
 		}
 
+		recordStage(stageStats, "detail_fetch", "entered", true, false)
 		prep, prepErr := r.prepareApplication(value, selectedResume, selectedCandidate, selectedResolver, applicationCount)
 		if prepErr != nil {
+			recordStage(stageStats, "detail_fetch", "failed", false, true)
 			summary.Errors++
 			r.skipVacancy(value, vacancyURL, prepErr.Error(), nil)
+			trace.DetailFetchStatus = "FAILED"
+			trace.FinalDecision = string(VacancyReviewRequired)
+			finish(trace, TerminalDetailFetchFailed, prepErr.Error())
 			logger.Warn("Could not prepare vacancy %d: %v", value.ID, prepErr)
 			continue
 		}
+		trace.DetailFetchStatus = "OK"
+		recordStage(stageStats, "detail_fetch", "ok", false, true)
 		if prep.Analysis != nil {
+			recordStage(stageStats, "ai_evaluation", "entered", true, false)
 			summary.AIEvaluated++
+			trace.AIEvaluated = true
+			score := prep.Analysis.Score
+			trace.AIScore = &score
+			trace.AIReasons = append([]string(nil), prep.Analysis.Reasons...)
+			recordStage(stageStats, "ai_evaluation", "completed", false, true)
 		}
 		if prep.Applicability != nil {
 			preflight := applicationPreflight(value.ID, *prep.Applicability)
@@ -160,8 +253,11 @@ func (r *HHAIResponder) ApplyVacancies() error {
 
 		switch prep.Outcome {
 		case applicationprocessing.OutcomeNeedsCandidateInput:
+			trace.FinalDecision = string(VacancyReviewRequired)
+			trace.SelectedResume = firstNonEmpty(trace.SelectedResume, selectedResume.Hash)
 			summary.ReviewRequired++
 			r.writeApplicationReview(value, vacancyURL, prep, prep.Reason)
+			finish(trace, TerminalReviewRequired, prep.Reason)
 			continue
 		case applicationprocessing.OutcomeSkipped, applicationprocessing.OutcomeAlreadyResponded, applicationprocessing.OutcomeUnavailable:
 			if prep.Reason == "per-run application limit reached" && prep.Analysis != nil {
@@ -170,14 +266,33 @@ func (r *HHAIResponder) ApplyVacancies() error {
 				r.writeEvent(VacancyMatchResult{Type: "vacancy_match", VacancyID: value.ID, Name: value.Name, URL: vacancyURL, Score: evaluation.Score, Reasons: evaluation.Reasons, Missing: evaluation.Missing, HardRequirementsMissing: hardRequirementsMissing(evaluation), HardRequirements: evaluation.HardRequirements, SearchProfiles: r.vacancySearchSources[value.ID]})
 				summary.ApplicationLimitSkipped++
 				r.skipVacancy(value, vacancyURL, prep.Reason, &evaluation.Score)
-				return nil
+				trace.FinalDecision = string(VacancyMatch)
+				finish(trace, TerminalApplicationLimit, prep.Reason)
+				continue
 			}
 			summary.DeterministicSkipped++
 			if prep.Analysis != nil {
+				lowerReason := strings.ToLower(prep.Reason)
+				terminal := TerminalAIReject
+				if strings.Contains(lowerReason, "already responded") {
+					terminal = TerminalAlreadyResponded
+					summary.PreviouslyRespondedSkipped++
+				} else if strings.HasPrefix(lowerReason, "preflight:") {
+					terminal = TerminalDeterministicReject
+					summary.Rejected++
+				} else {
+					summary.AIRejected++
+					summary.Rejected++
+				}
 				score := prep.Analysis.Score
 				r.skipVacancyWithEvaluation(value, vacancyURL, prep.Reason, &score, hardRequirementsMissing(*prep.Analysis), prep.Analysis.HardRequirements)
+				trace.FinalDecision = string(VacancyReject)
+				finish(trace, terminal, prep.Reason)
 			} else {
+				summary.Rejected++
 				r.skipVacancy(value, vacancyURL, prep.Reason, nil)
+				trace.FinalDecision = string(VacancyReject)
+				finish(trace, TerminalDetailNotRequired, prep.Reason)
 			}
 			continue
 		case applicationprocessing.OutcomePrepared:
@@ -185,16 +300,21 @@ func (r *HHAIResponder) ApplyVacancies() error {
 		default:
 			summary.Errors++
 			r.skipVacancy(value, vacancyURL, "unknown application preparation outcome", nil)
+			finish(trace, TerminalError, "unknown application preparation outcome")
 			continue
 		}
 
 		if prep.Analysis == nil || prep.Prepared == nil {
 			summary.Errors++
 			r.skipVacancy(value, vacancyURL, "application preparation returned no plan", nil)
+			finish(trace, TerminalError, "application preparation returned no plan")
 			continue
 		}
 		evaluation := *prep.Analysis
 		summary.Matched++
+		trace.FinalDecision = string(VacancyMatch)
+		trace.SelectedResume = firstNonEmpty(trace.SelectedResume, selectedResume.Hash)
+		trace.CoverLetterGenerated = strings.TrimSpace(prep.Prepared.CoverLetter) != ""
 		r.writeEvent(VacancyMatchResult{Type: "vacancy_match", VacancyID: value.ID, Name: value.Name, URL: vacancyURL, Score: evaluation.Score, Reasons: evaluation.Reasons, Missing: evaluation.Missing, HardRequirementsMissing: hardRequirementsMissing(evaluation), HardRequirements: evaluation.HardRequirements, SearchProfiles: r.vacancySearchSources[value.ID]})
 		logger.Info("MATCH — vacancy %d: %d/100", value.ID, evaluation.Score)
 
@@ -203,11 +323,14 @@ func (r *HHAIResponder) ApplyVacancies() error {
 			if sendErr != nil {
 				summary.Errors++
 				r.writeApplicationError(value, vacancyURL, &selectedResume, sendErr)
+				finish(trace, TerminalError, sendErr.Error())
 				continue
 			}
 			budget.recordPreview()
 			summary.WouldApply++
 			r.writeApplicationPreview(value, vacancyURL, &selectedResume, prep.Prepared.CoverLetter, solutions)
+			trace.WouldApply = true
+			finish(trace, TerminalAIMatch, "dry-run application preview")
 			continue
 		}
 		if budget.recordExecution(submissionResult.Execution) {
@@ -216,20 +339,27 @@ func (r *HHAIResponder) ApplyVacancies() error {
 		if sendErr != nil {
 			if strings.Contains(sendErr.Error(), "negotiations-limit-exceeded") {
 				logger.Warn("Negotiations limit exceeded!")
-				return nil
+				summary.Errors++
+				r.writeApplicationError(value, vacancyURL, &selectedResume, sendErr)
+				finish(trace, TerminalError, sendErr.Error())
+				dispatchBlocked = true
+				continue
 			}
 			summary.Errors++
 			r.writeApplicationError(value, vacancyURL, &selectedResume, sendErr)
+			finish(trace, TerminalError, sendErr.Error())
 			continue
 		}
 		if submissionResult.Status == applicationsubmission.StatusSubmitted {
 			successfulApplicationsInRun++
 			summary.Applied++
 			r.writeApplicationSuccess(value, vacancyURL, &selectedResume, prep.Prepared.CoverLetter, solutions)
+			finish(trace, TerminalAIMatch, "application submitted")
 			continue
 		}
 		summary.Errors++
 		r.writeApplicationError(value, vacancyURL, &selectedResume, errors.New(submissionResult.Reason))
+		finish(trace, TerminalError, submissionResult.Reason)
 	}
 	logger.Info("Finished processing!")
 	return nil
@@ -257,7 +387,13 @@ func (r *HHAIResponder) writeApplicationReview(value Vacancy, url string, prep a
 }
 
 func (r *HHAIResponder) writeApplicationError(value Vacancy, url string, resume *ResumeItem, err error) {
-	r.writeEvent(ErrorResult{Type: "application_error", Context: map[string]any{"vacancy_id": value.ID, "vacancy_name": value.Name, "url": url, "resume": r.resumeHash, "resume_title": resume.Title}, Error: err.Error(), Time: time.Now()})
+	resumeHash := ""
+	resumeTitle := ""
+	if resume != nil {
+		resumeHash = resume.Hash
+		resumeTitle = resume.Title
+	}
+	r.writeEvent(ErrorResult{Type: "application_error", Context: map[string]any{"vacancy_id": value.ID, "vacancy_name": value.Name, "url": url, "resume": resumeHash, "resume_title": resumeTitle}, Error: err.Error(), Time: time.Now()})
 }
 
 func (r *HHAIResponder) writeApplicationPreview(value Vacancy, url string, resume *ResumeItem, letter string, solutions []QAPair) {
@@ -266,7 +402,7 @@ func (r *HHAIResponder) writeApplicationPreview(value Vacancy, url string, resum
 		v := value.TotalResponsesCount + 1
 		count = &v
 	}
-	r.writeEvent(ApplyResult{Type: "application_preview", Resume: r.resumeHash, ResumeTitle: resume.Title, VacancyID: value.ID, URL: url, Name: value.Name, Letter: letter, AppliedAt: time.Now(), ResponsesCount: count, TestSolutions: solutions})
+	r.writeEvent(ApplyResult{Type: "application_preview", Resume: resume.Hash, ResumeTitle: resume.Title, VacancyID: value.ID, URL: url, Name: value.Name, Letter: letter, AppliedAt: time.Now(), ResponsesCount: count, TestSolutions: solutions})
 }
 
 func (r *HHAIResponder) writeApplicationSuccess(value Vacancy, url string, resume *ResumeItem, letter string, solutions []QAPair) {
@@ -275,5 +411,5 @@ func (r *HHAIResponder) writeApplicationSuccess(value Vacancy, url string, resum
 		v := value.TotalResponsesCount + 1
 		count = &v
 	}
-	r.writeEvent(ApplyResult{Type: "application", Resume: r.resumeHash, ResumeTitle: resume.Title, VacancyID: value.ID, URL: url, Name: value.Name, Letter: letter, AppliedAt: time.Now(), ResponsesCount: count, TestSolutions: solutions})
+	r.writeEvent(ApplyResult{Type: "application", Resume: resume.Hash, ResumeTitle: resume.Title, VacancyID: value.ID, URL: url, Name: value.Name, Letter: letter, AppliedAt: time.Now(), ResponsesCount: count, TestSolutions: solutions})
 }

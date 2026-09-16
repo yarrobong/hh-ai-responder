@@ -57,6 +57,30 @@ func TestPlanSearchesKeepsSameQueryWhenResumeFilterDiffers(t *testing.T) {
 	}
 }
 
+func TestPlanSearchesRoundRobinsEnabledResumesBeforeSecondDirection(t *testing.T) {
+	resumes := []ResumeProfile{
+		{ID: "support", Hash: "support-hash", Title: "Technical support", SearchHints: []string{"application support"}, Enabled: true},
+		{ID: "python", Hash: "python-hash", Title: "Python backend", SearchHints: []string{"Django backend"}, Enabled: true},
+		{ID: "integration", Hash: "integration-hash", Title: "Integration specialist", SearchHints: []string{"API integration"}, Enabled: true},
+	}
+	profiles := PlanSearches(resumes, CandidateSignals{}, SearchConstraints{MaxProfiles: 5})
+	if len(profiles) != 5 {
+		t.Fatalf("profiles=%d, want 5: %+v", len(profiles), profiles)
+	}
+	seenResumes := map[string]bool{}
+	for _, profile := range profiles[:3] {
+		seenResumes[profile.ResumeID] = true
+	}
+	if len(seenResumes) != 3 {
+		t.Fatalf("profile budget was dominated by one resume: %+v", profiles)
+	}
+	for _, profile := range profiles {
+		if profile.Reason == "" {
+			t.Fatalf("profile reason is empty: %+v", profile)
+		}
+	}
+}
+
 func TestPlanSearchesCarriesConstraintsAndSkipsExcludedQuery(t *testing.T) {
 	profiles := PlanSearches([]ResumeProfile{{ID: "r1", Title: "Python developer", Enabled: true}}, CandidateSignals{}, SearchConstraints{MaxProfiles: 8, SearchPeriodDays: 3, IncludeKeywords: []string{"Django"}, ExcludeKeywords: []string{"developer"}})
 	for _, profile := range profiles {
@@ -89,6 +113,35 @@ func TestRouteResumePrefersHardSkillAndReviewsCloseChoice(t *testing.T) {
 	}
 	if noSignal := RouteResume(VacancyInput{ID: 13, Title: "Unrelated role"}, resumes); noSignal.Status != RouteReviewRequired {
 		t.Fatalf("unrelated role should require review: %+v", noSignal)
+	}
+}
+
+func TestRouteResumeDoesNotLetExplicitHardBlockerLoseToScore(t *testing.T) {
+	resumes := []ResumeProfile{
+		{ID: "blocked", Title: "Python backend", Skills: []string{"Python"}, ExcludeKeywords: []string{"office"}, Enabled: true},
+		{ID: "compatible", Title: "Python backend", Skills: []string{"Python"}, Enabled: true},
+	}
+	decision := RouteResume(VacancyInput{ID: 99, Title: "Python backend", Description: "office role"}, resumes)
+	if decision.Status != RouteSelected || decision.SelectedResumeID != "compatible" {
+		t.Fatalf("hard-blocked high score won routing: %+v", decision)
+	}
+	for _, score := range decision.AlternativeScores {
+		if score.ResumeID == "blocked" && len(score.HardBlockers) == 0 {
+			t.Fatalf("hard blocker was not retained in alternatives: %+v", decision)
+		}
+	}
+	for _, resume := range resumes {
+		resume.Enabled = false
+		if got := RouteResume(VacancyInput{ID: 100, Title: "Python backend"}, []ResumeProfile{resume}); got.Status != RouteNoResume {
+			t.Fatalf("disabled resume was selectable: %+v", got)
+		}
+	}
+}
+
+func TestRouteResumeDoesNotInferRelocationIncompatibilityFromResumeCity(t *testing.T) {
+	decision := RouteResume(VacancyInput{ID: 101, Title: "Python backend", Location: "Москва"}, []ResumeProfile{{ID: "r", Title: "Python backend", Location: "Екатеринбург", Skills: []string{"Python"}, Enabled: true}})
+	if decision.Status != RouteSelected {
+		t.Fatalf("resume city was incorrectly treated as a hard blocker: %+v", decision)
 	}
 }
 

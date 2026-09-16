@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"hh-ai-responder/internal/careeragent"
 )
 
 func TestCandidateContextKeepsSalaryAndExperienceMapping(t *testing.T) {
@@ -935,20 +937,29 @@ func TestDryRunVacancyAboveThresholdProducesPreviewWithoutWrite(t *testing.T) {
 
 	ctx := context.Background()
 	r := &HHAIResponder{
-		ctx:           ctx,
-		baseURL:       mustURL(t, hhServer.URL),
-		requester:     NewHHRequester(ctx, hhServer.Client(), 0),
-		ai:            NewAIClient(ctx, aiServer.URL, "test-model", "", time.Second, time.Second, 1),
-		autoApply:     true,
-		dryRun:        true,
-		resumeHash:    "resume-hash",
-		resumes:       []ResumeItem{{Hash: "resume-hash", Title: "Python developer", Skills: "Python, SQL"}},
-		minMatchScore: 65,
-		eventWriter:   &events,
+		ctx:                ctx,
+		baseURL:            mustURL(t, hhServer.URL),
+		requester:          NewHHRequester(ctx, hhServer.Client(), 0),
+		ai:                 NewAIClient(ctx, aiServer.URL, "test-model", "", time.Second, time.Second, 1),
+		autoApply:          true,
+		dryRun:             false,
+		hhWriteEnabled:     true,
+		autoChat:           true,
+		autoTouch:          true,
+		autoJobStatus:      true,
+		careerAgentMode:    "shadow",
+		careerAgentResumes: []careeragent.ResumeProfile{{ID: "current", Hash: "resume-hash", Title: "Python developer", Skills: []string{"Python", "SQL"}, Enabled: true}},
+		resumeHash:         "resume-hash",
+		resumes:            []ResumeItem{{Hash: "resume-hash", Title: "Python developer", Skills: "Python, SQL"}},
+		minMatchScore:      65,
+		eventWriter:        &events,
 	}
 
 	if err := r.ApplyVacancies(); err != nil {
 		t.Fatal(err)
+	}
+	if !r.dryRun || r.hhWriteEnabled || r.autoChat || r.autoTouch || r.autoJobStatus || r.chatMode != "off" {
+		t.Fatalf("shadow mode did not override conflicting mutation flags: dry_run=%t write=%t chat=%t touch=%t status=%t mode=%q", r.dryRun, r.hhWriteEnabled, r.autoChat, r.autoTouch, r.autoJobStatus, r.chatMode)
 	}
 	if got := hhCalls.Load(); got != 4 {
 		t.Fatalf("unexpected number of HH read requests: got %d, want 4", got)

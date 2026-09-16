@@ -171,6 +171,7 @@ func (e rootApplicationExecutor) SubmitApplication(ctx context.Context, request 
 	if e.responder == nil {
 		return applicationsubmission.ExecutionResult{Outcome: applicationsubmission.ExecutionNotSent}, errors.New("HH responder is not configured")
 	}
+	e.responder.careerAgentWriteCount++
 	service, err := e.responder.newLegacyWriteService()
 	if err != nil {
 		return applicationsubmission.ExecutionResult{Outcome: applicationsubmission.ExecutionNotSent}, err
