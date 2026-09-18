@@ -26,6 +26,7 @@ import (
 
 	hhreadadapter "hh-ai-responder/internal/adapters/hh/read"
 	openaillm "hh-ai-responder/internal/adapters/llm/openai"
+	"hh-ai-responder/internal/browsersession"
 	"hh-ai-responder/internal/careeragent"
 	appconfig "hh-ai-responder/internal/config"
 	attemptport "hh-ai-responder/internal/ports/applicationattempt"
@@ -88,6 +89,10 @@ type Config struct {
 	CareerAgentFeedbackPath      string
 	ResumeRegistryPath           string
 	CookiesPath                  string
+	BrowserProfilePath           string
+	BrowserTraceVacancyURL       string
+	BrowserTransport             string
+	BrowserHeadless              bool
 	LogLevel                     string
 	Resume                       string
 	MaxResponses                 int
@@ -1179,6 +1184,8 @@ type HHAIResponder struct {
 	ignoredChatTriggers          map[string]struct{}
 	preflightCache               map[int]VacancyPreflight
 	readClient                   *HHAIResponderReadClient
+	browserSource                browsersession.BrowserPageSource
+	browserClose                 func() error
 
 	eventWriter        io.Writer
 	eventMu            sync.Mutex
@@ -1552,6 +1559,7 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 	var closeCandidate func()
 	var careerRepositories CareerRepositories
 	var closeCareer func()
+	var closeBrowser func() error
 	resourcesReady := false
 	defer func() {
 		if resourcesReady {
@@ -1562,6 +1570,9 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 		}
 		if closeCandidate != nil {
 			closeCandidate()
+		}
+		if closeBrowser != nil {
+			_ = closeBrowser()
 		}
 	}()
 	if backend == storageBackendPostgres {
@@ -1702,6 +1713,15 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 		responder.baseURL = &url.URL{Scheme: "https", Host: host}
 	}
 	logger.Debug("baseURL resolved to %s", responder.baseURL.String())
+	if shouldUseBrowserTransport(cfg, responder.baseURL) {
+		browser, browserErr := browsersession.NewPlaywrightAdapter(ctx, browsersession.PlaywrightOptions{CookiePath: cfg.CookiesPath, Headless: cfg.BrowserHeadless, HHURL: responder.baseURL.String()})
+		if browserErr != nil {
+			return nil, fmt.Errorf("initialize BrowserHHClient: %w", browserErr)
+		}
+		responder.browserSource = browser
+		responder.browserClose = browser.Close
+		closeBrowser = browser.Close
+	}
 
 	if err := responder.LoadProfileData(); err != nil {
 		return nil, err
@@ -1752,6 +1772,24 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 	resourcesReady = true
 
 	return responder, nil
+}
+
+func shouldUseBrowserTransport(cfg Config, baseURL *url.URL) bool {
+	mode := strings.ToLower(strings.TrimSpace(cfg.BrowserTransport))
+	if mode == "http" {
+		return false
+	}
+	if baseURL == nil || !isHHHost(baseURL.Hostname()) {
+		return false
+	}
+	if mode == "browser" {
+		return true
+	}
+	if strings.TrimSpace(cfg.CookiesPath) == "" {
+		return false
+	}
+	_, err := os.Stat(cfg.CookiesPath)
+	return err == nil
 }
 
 func buildVacancySearchProfiles(searchURLs []string) ([]vacancySearchProfile, *url.URL, error) {
@@ -2185,22 +2223,31 @@ func (r *HHAIResponder) LoadProfileData() error {
 	if err := r.ctx.Err(); err != nil {
 		return err
 	}
-
-	req, err := r.buildRequest(http.MethodGet, "/applicant/my_resumes", nil, nil)
-	if err != nil {
-		return err
+	var bodyText string
+	if r.browserSource != nil && r.baseURL != nil && isHHHost(r.baseURL.Hostname()) {
+		state, err := r.browserSource.GetPage(r.ctx, r.ResolveURL("/applicant/my_resumes"))
+		if err != nil {
+			return err
+		}
+		finalURL := strings.ToLower(state.FinalURL)
+		if state.Challenge || strings.Contains(finalURL, "/account/captcha") || strings.Contains(finalURL, "/account/login") || !state.Authenticated {
+			return errors.New("HH browser session is not authenticated; replace cookies.txt and run again")
+		}
+		bodyText = state.HTML
+	} else {
+		req, err := r.buildRequest(http.MethodGet, "/applicant/my_resumes", nil, nil)
+		if err != nil {
+			return err
+		}
+		resp, err := r.requester.Do(req)
+		if err != nil {
+			return err
+		}
+		if resp.Status != http.StatusOK {
+			return r.profileReadAccessError(*resp)
+		}
+		bodyText = string(resp.Body)
 	}
-
-	resp, err := r.requester.Do(req)
-	if err != nil {
-		return err
-	}
-
-	if resp.Status != http.StatusOK {
-		return r.profileReadAccessError(*resp)
-	}
-
-	bodyText := string(resp.Body)
 
 	if strings.Contains(bodyText, "{&#34;") {
 		bodyText = html.UnescapeString(bodyText)
@@ -2625,6 +2672,25 @@ func (r *HHAIResponder) fetchVacancyPageContext(ctx context.Context, searchParam
 	reader := r.hhReadClient()
 	if reader == nil {
 		return nil, errors.New("HH responder is not configured")
+	}
+	if reader.browser != nil && baseURL != nil && isHHHost(baseURL.Hostname()) {
+		browserReader, browserErr := hhreadadapter.NewBrowserHHReader(reader.browser, baseURL, searchParams)
+		if browserErr != nil {
+			return nil, browserErr
+		}
+		pageValue, browserErr := browserReader.ReadVacancies(ctx, strconv.Itoa(page))
+		if browserErr != nil {
+			return nil, browserErr
+		}
+		values := make([]Vacancy, 0, len(pageValue.Items))
+		for _, record := range pageValue.Items {
+			value, mapErr := mapHHVacancy(record)
+			if mapErr != nil {
+				return nil, mapErr
+			}
+			values = append(values, value)
+		}
+		return values, nil
 	}
 	adapter, err := reader.readAdapter()
 	if err != nil {
@@ -3127,6 +3193,10 @@ func legacyConfigFromPackage(value appconfig.Config) Config {
 		CareerAgentFeedbackPath:      value.CareerAgentFeedbackPath,
 		ResumeRegistryPath:           value.ResumeRegistryPath,
 		CookiesPath:                  value.CookiesPath,
+		BrowserProfilePath:           value.BrowserProfilePath,
+		BrowserTraceVacancyURL:       value.BrowserTraceVacancyURL,
+		BrowserTransport:             value.BrowserTransport,
+		BrowserHeadless:              value.BrowserHeadless,
 		LogLevel:                     value.LogLevel,
 		Resume:                       value.Resume,
 		MaxResponses:                 value.MaxResponses,
@@ -3325,6 +3395,11 @@ func (r *HHAIResponder) closeResources() {
 	if r.candidateClose != nil {
 		r.candidateClose()
 		r.candidateClose = nil
+	}
+	if r.browserClose != nil {
+		_ = r.browserClose()
+		r.browserClose = nil
+		r.browserSource = nil
 	}
 }
 

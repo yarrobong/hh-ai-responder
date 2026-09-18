@@ -1,5 +1,7 @@
 /.env
 /cookies.txt
+/.hh-browser-profile/
+/out/
 /search.html
 /resumes.html
 /hh-ai-responder

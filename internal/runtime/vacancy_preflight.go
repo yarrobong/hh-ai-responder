@@ -169,6 +169,22 @@ func (r *HHAIResponder) getVacancyPreflightContext(ctx context.Context, vacancy 
 		return VacancyPreflight{}, err
 	}
 	responseURL := r.ResolveURL(fmt.Sprintf("/applicant/vacancy_response?vacancyId=%d&startedWithQuestion=false&hhtmFrom=vacancy", vacancy.ID))
+	if r.browserSource != nil && r.baseURL != nil && isHHHost(r.baseURL.Hostname()) {
+		state, browserErr := r.browserSource.GetPage(ctx, responseURL)
+		if browserErr != nil {
+			return VacancyPreflight{}, browserErr
+		}
+		finalURL := strings.ToLower(state.FinalURL)
+		if state.Challenge || strings.Contains(finalURL, "/account/captcha") || strings.Contains(finalURL, "/account/login") || !state.Authenticated {
+			return VacancyPreflight{VacancyID: vacancy.ID, ResponseURL: responseURL, AlreadyRespondedEvidence: AlreadyRespondedEvidence{Value: AlreadyRespondedUnknown, EvidenceCode: EvidenceAuthFailure}}, nil
+		}
+		preflight, parseErr := parseVacancyPreflight([]byte(state.HTML), vacancy, responseURL)
+		if parseErr != nil {
+			return VacancyPreflight{}, parseErr
+		}
+		r.rememberVacancyPreflight(preflight)
+		return preflight, nil
+	}
 	req, err := r.buildRequest(http.MethodGet, responseURL, nil, nil)
 	if err != nil {
 		return VacancyPreflight{}, err

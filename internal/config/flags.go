@@ -116,6 +116,23 @@ func Load(args []string, lookup LookupEnv, workingDir string) (Config, error) {
 	if !flags["resume-registry"] {
 		cfg.ResumeRegistryPath = get("HH_RESUME_REGISTRY", cfg.ResumeRegistryPath)
 	}
+	if !flags["browser-profile"] {
+		cfg.BrowserProfilePath = get("HH_BROWSER_PROFILE", cfg.BrowserProfilePath)
+	}
+	if !flags["browser-trace-vacancy"] {
+		cfg.BrowserTraceVacancyURL = get("HH_BROWSER_TRACE_VACANCY", cfg.BrowserTraceVacancyURL)
+	}
+	if !flags["browser-transport"] {
+		cfg.BrowserTransport = get("HH_BROWSER_TRANSPORT", cfg.BrowserTransport)
+	}
+	if !flags["browser-headless"] {
+		if cfg.BrowserHeadless, err = getBool("HH_BROWSER_HEADLESS", cfg.BrowserHeadless); err != nil {
+			return Config{}, err
+		}
+	}
+	if cfg.BrowserTransport, err = NormalizeBrowserTransport(cfg.BrowserTransport); err != nil {
+		return Config{}, err
+	}
 	if !flags["hh-read-concurrency"] {
 		if raw, ok := lookupValue("HH_READ_CONCURRENCY"); ok && raw != "" {
 			cfg.HHReadConcurrency, err = atoiEnv(raw, "HH_READ_CONCURRENCY")
@@ -389,6 +406,10 @@ func registerFlags(fs *flag.FlagSet, cfg *Config, includeKeywordsRaw, excludeKey
 	fs.StringVar(&cfg.CareerAgentResultPath, "career-agent-result", filepath.Join(wd, "career_agent_latest.json"), "Последний Career Agent shadow report")
 	fs.StringVar(&cfg.CareerAgentFeedbackPath, "career-agent-feedback", filepath.Join(wd, "career_agent_feedback.json"), "Career Agent feedback store")
 	fs.StringVar(&cfg.ResumeRegistryPath, "resume-registry", filepath.Join(wd, "resume_registry.json"), "Локальные enabled/disabled overrides резюме")
+	fs.StringVar(&cfg.BrowserProfilePath, "browser-profile", filepath.Join(wd, DefaultProfileDir), "Persistent headed Chromium profile for HH session")
+	fs.StringVar(&cfg.BrowserTraceVacancyURL, "browser-trace-vacancy", "", "One safe vacancy URL for browser/HTTP read trace")
+	fs.StringVar(&cfg.BrowserTransport, "browser-transport", DefaultBrowserTransport, "HH web read transport: auto, browser, or http")
+	fs.BoolVar(&cfg.BrowserHeadless, "browser-headless", false, "Run Playwright browser headless")
 	fs.StringVar(&cfg.HHSyncStatePath, "hh-sync-state", filepath.Join(wd, "hh_sync_state.json"), "Состояние read-only синхронизации HH")
 	fs.DurationVar(&cfg.MonitorInterval, "sync-interval", DefaultMonitorInterval, "Интервал background monitor")
 	fs.StringVar(&cfg.MonitorQuietHours, "quiet-hours", "", "Тихие часы уведомлений, например 23:00-07:00")

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	hhreadadapter "hh-ai-responder/internal/adapters/hh/read"
+	"hh-ai-responder/internal/browsersession"
 	"hh-ai-responder/internal/hhread"
 	"hh-ai-responder/internal/platform"
 	hhreadports "hh-ai-responder/internal/ports/hhread"
@@ -600,11 +601,13 @@ func (s *HHReadSyncService) GetCandidateInbox() (CandidateInbox, error) {
 type HHAIResponderReadClient struct {
 	responder *HHAIResponder
 	adapter   *hhreadadapter.Client
+	browser   browsersession.BrowserPageSource
 }
 
 func NewHHAIResponderReadClient(responder *HHAIResponder) *HHAIResponderReadClient {
 	client := &HHAIResponderReadClient{responder: responder}
 	if responder != nil {
+		client.browser = responder.browserSource
 		responder.readClient = client
 	}
 	return client
@@ -806,6 +809,13 @@ func (c *HHAIResponderReadClient) readAdapter() (*hhreadadapter.Client, error) {
 }
 
 func (c *HHAIResponderReadClient) ReadVacancies(ctx context.Context, cursor string) (HHVacancyPage, error) {
+	if c != nil && c.browser != nil && c.responder != nil {
+		reader, err := hhreadadapter.NewBrowserHHReader(c.browser, c.responder.baseURL, c.responder.searchParams)
+		if err != nil {
+			return HHVacancyPage{}, err
+		}
+		return reader.ReadVacancies(ctx, cursor)
+	}
 	adapter, err := c.readAdapter()
 	if err != nil {
 		return HHVacancyPage{}, err
@@ -814,6 +824,13 @@ func (c *HHAIResponderReadClient) ReadVacancies(ctx context.Context, cursor stri
 }
 
 func (c *HHAIResponderReadClient) ReadVacancyDetail(ctx context.Context, id int) (HHVacancyRecord, error) {
+	if c != nil && c.browser != nil && c.responder != nil {
+		reader, err := hhreadadapter.NewBrowserHHReader(c.browser, c.responder.baseURL, nil)
+		if err != nil {
+			return HHVacancyRecord{}, err
+		}
+		return reader.ReadVacancyDetail(ctx, id)
+	}
 	adapter, err := c.readAdapter()
 	if err != nil {
 		return HHVacancyRecord{}, err
@@ -822,6 +839,13 @@ func (c *HHAIResponderReadClient) ReadVacancyDetail(ctx context.Context, id int)
 }
 
 func (c *HHAIResponderReadClient) ReadApplications(ctx context.Context, cursor string) (HHApplicationPage, error) {
+	if c != nil && c.browser != nil && c.responder != nil {
+		reader, err := hhreadadapter.NewBrowserHHReader(c.browser, c.responder.baseURL, nil)
+		if err != nil {
+			return HHApplicationPage{}, err
+		}
+		return reader.ReadApplications(ctx, cursor)
+	}
 	adapter, err := c.readAdapter()
 	if err != nil {
 		return HHApplicationPage{}, err

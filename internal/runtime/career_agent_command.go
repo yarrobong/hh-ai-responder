@@ -30,6 +30,13 @@ type CareerAgentRunReport struct {
 }
 
 func runCareerAgentCommand(args []string, cfg Config, stdout, stderr io.Writer) error {
+	friendlyRun := len(args) > 0 && (args[0] == "run" || args[0] == "autopilot")
+	if len(args) > 0 && args[0] == "browser-session" {
+		return runBrowserSessionCommand(args[1:], cfg, stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == "browser-doctor" {
+		return runBrowserDoctorCommand(args[1:], cfg, stdout, stderr)
+	}
 	if len(args) > 0 && args[0] == "feedback" {
 		return runCareerAgentFeedback(args[1:], cfg, stdout)
 	}
@@ -44,6 +51,14 @@ func runCareerAgentCommand(args []string, cfg Config, stdout, stderr io.Writer) 
 	}
 	if len(args) > 0 && args[0] == "web-trace" {
 		return runCareerAgentWebTraceCommand(args[1:], cfg, stdout, stderr)
+	}
+	if len(args) > 0 && (args[0] == "run" || args[0] == "autopilot") {
+		if cfg.BrowserTransport != "http" && browserDoctorRequestedFor(cfg.SearchURL) {
+			if err := runBrowserDoctorCommand(nil, cfg, stdout, stderr); err != nil {
+				return err
+			}
+		}
+		args = append([]string{"--shadow"}, args[1:]...)
 	}
 	// Accept both the flag spelling documented for automation and the
 	// subcommand spelling used by operators. Keeping both avoids making the
@@ -132,8 +147,31 @@ func runCareerAgentCommand(args []string, cfg Config, stdout, stderr io.Writer) 
 			return err
 		}
 	}
+	if friendlyRun {
+		_, err = io.WriteString(stdout, renderCareerAgentStatus(report))
+		return err
+	}
 	_, err = stdout.Write(append(raw, '\n'))
 	return err
+}
+
+func renderCareerAgentStatus(report CareerAgentRunReport) string {
+	var builder strings.Builder
+	summary := report.Summary
+	fmt.Fprintf(&builder, "HH session: OK\nVacancies found: %d\nNew vacancies: %d\nAnalyzed: %d\nGood matches: %d\nAlready applied: %d\nNeed review: %d\n", summary.VacanciesFetchedRaw, summary.VacanciesAfterDedup-summary.PreviouslyRespondedSkipped, summary.AIEvaluated, summary.Matched, summary.PreviouslyRespondedSkipped, summary.ReviewRequired)
+	best := CareerAgentVacancyResult{}
+	for _, vacancy := range report.Vacancies {
+		if vacancy.TerminalOutcome == TerminalAIMatch || vacancy.WouldApply {
+			best = vacancy
+			break
+		}
+	}
+	if best.VacancyID > 0 {
+		fmt.Fprintf(&builder, "\nBest candidate:\n%s\n%s\nResume: %s\nStatus: READY_FOR_EXPLICIT_SEND\n", best.Title, best.Company, firstNonEmpty(best.SelectedResumeTitle, best.SelectedResume))
+	} else {
+		builder.WriteString("\nBest candidate: NONE\nStatus: NONE\n")
+	}
+	return builder.String()
 }
 
 func renderCareerAgentHumanReport(report CareerAgentRunReport) string {

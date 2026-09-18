@@ -21,6 +21,19 @@ func NormalizeStorageBackend(value string) (string, error) {
 	}
 }
 
+func NormalizeBrowserTransport(value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return DefaultBrowserTransport, nil
+	}
+	switch value {
+	case "auto", "browser", "http":
+		return value, nil
+	default:
+		return "", fmt.Errorf("unsupported browser transport %q: use auto, browser, or http", value)
+	}
+}
+
 func ParseNonNegativeInt(value, name string, fallback int) (int, error) {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
@@ -206,6 +219,9 @@ func Validate(c Config) error {
 		return errors.New("max-search-profiles must be greater than 0")
 	}
 	if _, err := NormalizeAutoApplyMode(c.AutoApplyMode); err != nil {
+		return err
+	}
+	if _, err := NormalizeBrowserTransport(c.BrowserTransport); err != nil {
 		return err
 	}
 	if c.AIAttempts < 1 {

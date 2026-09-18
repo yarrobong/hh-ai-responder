@@ -481,6 +481,9 @@ func runHHDoctor(cfg Config, stdout, stderr io.Writer) error {
 	}
 	fmt.Fprintln(stdout, "Writes: DISABLED")
 	fmt.Fprintln(stdout, "HH writes attempted: 0")
+	if profileClass != "OK" {
+		return fmt.Errorf("hh-doctor authenticated read classification=%s", profileClass)
+	}
 	return nil
 }
 

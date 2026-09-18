@@ -37,6 +37,10 @@ type Config struct {
 	CareerAgentFeedbackPath      string
 	ResumeRegistryPath           string
 	CookiesPath                  string
+	BrowserProfilePath           string
+	BrowserTraceVacancyURL       string
+	BrowserTransport             string
+	BrowserHeadless              bool
 	LogLevel                     string
 	Resume                       string
 	MaxResponses                 int

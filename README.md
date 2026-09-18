@@ -22,7 +22,36 @@ go build ./cmd/hh-ai-responder
 
 В [релизах](https://github.com/s3rgeym/hh-ai-responder/releases/latest) можно скачать готовую версию под все целевые платформы: Windows, Linux, Darwin (Mac) и Android (для запуска через Termux).
 
-Для начала установите расширение `Get cookies.txt LOCALLY` для [Chrome](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc) или [Firefox](https://addons.mozilla.org/en-US/firefox/addon/get-cookies-txt-locally/), а затем экспортируйте cookies с `hh.ru` в `cookies.txt` (приложение по умолчанию ищет этот файл в текущем рабочем каталоге).
+Для работы с HH нужен только актуальный экспорт авторизованной web-сессии:
+`cookies.txt` в Netscape format. Программа загружает cookies в Playwright
+browser context до первой навигации; значения cookies не выводятся и не
+сохраняются обратно из браузера.
+
+Сначала запустите read-only browser doctor:
+
+```sh
+./hh-ai-responder career-agent browser-doctor --headed
+```
+
+Doctor проверяет HH home/account, `/applicant/my_resumes` и одну vacancy page
+только через GET/navigation. При истёкшей или challenged-сессии он завершает
+работу сообщением:
+
+```sh
+HH session requires refresh.
+Replace cookies.txt with a fresh authenticated export and run again.
+```
+
+После `AUTH_OK` запускайте безопасный bounded pipeline:
+
+```sh
+HH_DRY_RUN=true HH_WRITE_ENABLED=false STORAGE_BACKEND=json \
+  ./hh-ai-responder career-agent run
+```
+
+Для диагностики headless/headed используйте `--headless` и `--headed`. Если
+headless получает challenge, оставьте `HH_BROWSER_HEADLESS=false` и используйте
+обычный headed Chromium/Chrome; никаких обходов challenge программа не делает.
 
 Для запуска приложения можно указать ссылку для поиска по вакансиям:
 
@@ -92,8 +121,10 @@ HH_DRY_RUN=true HH_WRITE_ENABLED=false STORAGE_BACKEND=json \
 HH_DRY_RUN=true HH_WRITE_ENABLED=false ./hh-ai-responder hh-doctor
 ```
 
-`hh-doctor` выполняет только два bounded GET: публичный vacancy search и
-authenticated `GET /applicant/my_resumes`. Он показывает безопасные metadata
+`hh-doctor` — legacy HTTP diagnostic, выполняющий только два bounded GET:
+публичный vacancy search и authenticated `GET /applicant/my_resumes`. Для
+основного HH web transport используйте `career-agent browser-doctor`. `hh-doctor`
+показывает безопасные metadata
 запроса, redirect chain, status, content type, размер ответа, классификацию
 403 и только имена cookies; значения cookies и секретные headers не выводятся.
 При недоступном authenticated read `career-agent --shadow` останавливается до
@@ -136,6 +167,10 @@ cp example.env .env
 | `HH_SEARCH_URLS`       | —                    | Несколько URL поиска через `||`; если пусто, используется `HH_SEARCH_URL`. Параметры `area` и `resume` каждого URL сохраняются; задаются также `order_by=publication_time`, `search_period=7`, `items_on_page=50`. |
 | `HH_SEARCH_PERIOD_DAYS` | `--search-period-days` | Период свежести автоматически построенного и manual HH search profile; по умолчанию `7`. |
 | `HH_MAX_SEARCH_PROFILES` | `--max-search-profiles` | Верхняя граница автоматически построенных search profiles; по умолчанию `16`. |
+| `HH_BROWSER_PROFILE`    | `--browser-profile` | Persistent headed Chrome/Chromium profile; по умолчанию `.hh-browser-profile`, файл не коммитится. |
+| `HH_BROWSER_TRACE_VACANCY` | `--browser-trace-vacancy` | Одна явно заданная HTTPS vacancy URL для безопасного Browser/Go HTTP trace. |
+| `HH_BROWSER_TRANSPORT` | `--browser-transport` | `auto` (browser для реального hh.ru с cookies), `browser` или legacy `http`. |
+| `HH_BROWSER_HEADLESS` | `--browser-headless` | Запуск Playwright browser headless; по умолчанию `false`. |
 | `HH_AI_BASE_URL`       | `-ai-base-url`       | Базовый URL OpenAI-compatible API.                                     |
 | `HH_AI_MODEL`          | `-ai-model`          | Модель AI.                                                             |
 | `HH_AI_API_KEY`        | `-ai-api-key`        | API key для OpenAI-compatible API.                                     |

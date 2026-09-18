@@ -45,6 +45,9 @@ func TestLoadSafeDefaults(t *testing.T) {
 	if cfg.MaxConversationsPerRun != 0 {
 		t.Fatalf("MaxConversationsPerRun = %d, want 0", cfg.MaxConversationsPerRun)
 	}
+	if cfg.BrowserProfilePath == "" || filepath.Base(cfg.BrowserProfilePath) != DefaultProfileDir {
+		t.Fatalf("BrowserProfilePath = %q, want %q", cfg.BrowserProfilePath, DefaultProfileDir)
+	}
 	if cfg.SearchPeriodDays != DefaultSearchPeriodDays || cfg.CareerAgentMaxSearchProfiles != DefaultCareerAgentMaxSearchProfiles || cfg.AutoApplyMode != "off" {
 		t.Fatalf("unexpected Career Agent defaults: period=%d profiles=%d mode=%q", cfg.SearchPeriodDays, cfg.CareerAgentMaxSearchProfiles, cfg.AutoApplyMode)
 	}
