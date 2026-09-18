@@ -49,8 +49,8 @@ Application POST: 0
 The generated machine-readable report is `career_agent_latest.json`; it was
 not staged as a source artifact.
 
-Final commit: `fe15ef0ff9386be5ef2b2a878996aad952d161ef` (base commit; changes are
-currently uncommitted).
-origin/main: `fe15ef0ff9386be5ef2b2a878996aad952d161ef`.
+RESET-1 implementation commit: `cfaacbf9d81b53ca8fa2616b9d42ad36c25c488c`.
+This is the commit from which RESET-2 validation started.
+origin/main at RESET-2 start: `cfaacbf9d81b53ca8fa2616b9d42ad36c25c488c`.
 Working tree: dirty by the implementation and validation changes; `out/` remains
 untracked and untouched.

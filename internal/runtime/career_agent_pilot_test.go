@@ -93,6 +93,8 @@ func TestPilotPreflightBlockReasonFailsClosed(t *testing.T) {
 		{"active unknown", VacancyPreflight{AlreadyRespondedKnown: true, AlreadyRespondedEvidence: AlreadyRespondedEvidence{Value: AlreadyRespondedNo, EvidenceCode: EvidenceExplicitNotResponded}, CanApply: true, CanApplyKnown: true}, "VACANCY_ACTIVE_UNKNOWN"},
 		{"inactive", VacancyPreflight{AlreadyRespondedKnown: true, AlreadyRespondedEvidence: AlreadyRespondedEvidence{Value: AlreadyRespondedNo, EvidenceCode: EvidenceExplicitNotResponded}, CanApply: true, CanApplyKnown: true, Archived: true, ArchivedKnown: true}, "VACANCY_INACTIVE"},
 		{"test required", VacancyPreflight{AlreadyRespondedKnown: true, AlreadyRespondedEvidence: AlreadyRespondedEvidence{Value: AlreadyRespondedNo, EvidenceCode: EvidenceExplicitNotResponded}, CanApply: true, CanApplyKnown: true, ArchivedKnown: true, TestPresent: true, TestPresentKnown: true}, "TEST_REQUIRED_UNSUPPORTED"},
+		{"letter allowed unknown", VacancyPreflight{AlreadyRespondedKnown: true, AlreadyRespondedEvidence: AlreadyRespondedEvidence{Value: AlreadyRespondedNo, EvidenceCode: EvidenceExplicitNotResponded}, CanApply: true, CanApplyKnown: true, ArchivedKnown: true, TestPresentKnown: true, LetterRequired: true, LetterRequiredKnown: true}, "COVER_LETTER_ALLOWED_UNKNOWN"},
+		{"letter not allowed", VacancyPreflight{AlreadyRespondedKnown: true, AlreadyRespondedEvidence: AlreadyRespondedEvidence{Value: AlreadyRespondedNo, EvidenceCode: EvidenceExplicitNotResponded}, CanApply: true, CanApplyKnown: true, ArchivedKnown: true, TestPresentKnown: true, LetterRequired: true, LetterRequiredKnown: true, LetterAllowedKnown: true}, "COVER_LETTER_NOT_ALLOWED"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -101,7 +103,7 @@ func TestPilotPreflightBlockReasonFailsClosed(t *testing.T) {
 			}
 		})
 	}
-	if got := pilotPreflightBlockReason(VacancyPreflight{AlreadyResponded: responded, AlreadyRespondedKnown: true, AlreadyRespondedEvidence: AlreadyRespondedEvidence{Value: AlreadyRespondedNo, EvidenceCode: EvidenceExplicitNotResponded}, CanApply: canApply, CanApplyKnown: true, ArchivedKnown: true, TestPresent: testRequired, TestPresentKnown: true, LetterRequired: letterRequired, LetterRequiredKnown: true}); got != "" {
+	if got := pilotPreflightBlockReason(VacancyPreflight{AlreadyResponded: responded, AlreadyRespondedKnown: true, AlreadyRespondedEvidence: AlreadyRespondedEvidence{Value: AlreadyRespondedNo, EvidenceCode: EvidenceExplicitNotResponded}, CanApply: canApply, CanApplyKnown: true, ArchivedKnown: true, TestPresent: testRequired, TestPresentKnown: true, LetterRequired: letterRequired, LetterRequiredKnown: true, LetterAllowed: true, LetterAllowedKnown: true}); got != "" {
 		t.Fatalf("eligible preflight reason=%q", got)
 	}
 }

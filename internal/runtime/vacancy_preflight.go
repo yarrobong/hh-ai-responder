@@ -29,6 +29,8 @@ type VacancyPreflight struct {
 	TestPresentKnown             bool
 	LetterRequired               bool
 	LetterRequiredKnown          bool
+	LetterAllowed                bool
+	LetterAllowedKnown           bool
 	Area                         string
 	AreaKnown                    bool
 	WorkSchedule                 string
@@ -40,7 +42,33 @@ type VacancyPreflight struct {
 	ResponseURL                  string
 	ResponseIdentifierPresent    bool
 	NegotiationIdentifierPresent bool
+	ActiveState                  VacancyActiveState
+	ActiveEvidence               []VacancyActiveEvidenceCode
 }
+
+type VacancyActiveState string
+
+const (
+	VacancyActiveStateActive   VacancyActiveState = "ACTIVE"
+	VacancyActiveStateInactive VacancyActiveState = "INACTIVE"
+	VacancyActiveStateUnknown  VacancyActiveState = "UNKNOWN"
+)
+
+type VacancyActiveEvidenceCode string
+
+const (
+	ActiveEvidenceNone                        VacancyActiveEvidenceCode = "NO_ACTIVE_EVIDENCE"
+	ActiveEvidenceArchiveMarker               VacancyActiveEvidenceCode = "EXPLICIT_ARCHIVE_MARKER"
+	ActiveEvidenceProviderArchivedTrue        VacancyActiveEvidenceCode = "PROVIDER_ARCHIVED_TRUE"
+	ActiveEvidenceProviderArchivedFalse       VacancyActiveEvidenceCode = "PROVIDER_ARCHIVED_FALSE"
+	ActiveEvidenceVacancyApplyAction          VacancyActiveEvidenceCode = "VACANCY_SCOPED_APPLY_ACTION"
+	ActiveEvidenceResponseLink                VacancyActiveEvidenceCode = "VACANCY_SCOPED_RESPONSE_LINK"
+	ActiveEvidenceApplicationForm             VacancyActiveEvidenceCode = "VACANCY_SCOPED_APPLICATION_FORM"
+	ActiveEvidenceProviderCanApply            VacancyActiveEvidenceCode = "PROVIDER_CAN_APPLY"
+	ActiveEvidenceProviderClosedForApplicants VacancyActiveEvidenceCode = "PROVIDER_CLOSED_FOR_APPLICANTS"
+	ActiveEvidenceAuthFailure                 VacancyActiveEvidenceCode = "AUTH_FAILURE"
+	ActiveEvidenceContradiction               VacancyActiveEvidenceCode = "ACTIVE_INACTIVE_CONTRADICTION"
+)
 
 // AlreadyRespondedValue is the bounded, provider-evidence-backed state used
 // for the response decision. The legacy bool/known pair remains in the public
@@ -88,15 +116,23 @@ type VacancyPreflightResult struct {
 	TestPresentKnown             bool                     `json:"test_present_known"`
 	LetterRequired               *bool                    `json:"letter_required"`
 	LetterRequiredKnown          bool                     `json:"letter_required_known"`
+	LetterAllowed                *bool                    `json:"letter_allowed"`
+	LetterAllowedKnown           bool                     `json:"letter_allowed_known"`
 	CanApply                     *bool                    `json:"can_apply"`
 	CanApplyKnown                bool                     `json:"can_apply_known"`
 	Area                         string                   `json:"area,omitempty"`
 	WorkSchedule                 string                   `json:"work_schedule,omitempty"`
 	WorkExperience               string                   `json:"work_experience,omitempty"`
+	Active                       string                   `json:"active"`
+	ActiveEvidence               []string                 `json:"active_evidence,omitempty"`
 }
 
 func (p VacancyPreflight) event() VacancyPreflightResult {
 	evidence := p.alreadyRespondedEvidence()
+	activeEvidence := make([]string, 0, len(p.ActiveEvidence))
+	for _, code := range p.ActiveEvidence {
+		activeEvidence = append(activeEvidence, string(code))
+	}
 	return VacancyPreflightResult{
 		Type:                         "vacancy_preflight",
 		VacancyID:                    p.VacancyID,
@@ -112,11 +148,95 @@ func (p VacancyPreflight) event() VacancyPreflightResult {
 		TestPresentKnown:             p.TestPresentKnown,
 		LetterRequired:               knownBoolPointer(p.LetterRequired, p.LetterRequiredKnown),
 		LetterRequiredKnown:          p.LetterRequiredKnown,
+		LetterAllowed:                knownBoolPointer(p.LetterAllowed, p.LetterAllowedKnown),
+		LetterAllowedKnown:           p.LetterAllowedKnown,
 		CanApply:                     knownBoolPointer(p.CanApply, p.CanApplyKnown),
 		CanApplyKnown:                p.CanApplyKnown,
 		Area:                         p.Area,
 		WorkSchedule:                 p.WorkSchedule,
 		WorkExperience:               p.WorkExperience,
+		Active:                       string(p.activeState()),
+		ActiveEvidence:               activeEvidence,
+	}
+}
+
+func (p VacancyPreflight) activeState() VacancyActiveState {
+	if p.ActiveState == VacancyActiveStateActive || p.ActiveState == VacancyActiveStateInactive {
+		return p.ActiveState
+	}
+	return VacancyActiveStateUnknown
+}
+
+func appendActiveEvidence(preflight *VacancyPreflight, code VacancyActiveEvidenceCode) {
+	if preflight == nil || code == "" {
+		return
+	}
+	for _, existing := range preflight.ActiveEvidence {
+		if existing == code {
+			return
+		}
+	}
+	preflight.ActiveEvidence = append(preflight.ActiveEvidence, code)
+}
+
+func containsActiveEvidence(preflight *VacancyPreflight, code VacancyActiveEvidenceCode) bool {
+	if preflight == nil {
+		return false
+	}
+	for _, existing := range preflight.ActiveEvidence {
+		if existing == code {
+			return true
+		}
+	}
+	return false
+}
+
+func setActiveEvidence(preflight *VacancyPreflight, state VacancyActiveState, code VacancyActiveEvidenceCode) {
+	if preflight == nil {
+		return
+	}
+	if preflight.ActiveState == "" {
+		preflight.ActiveState = VacancyActiveStateUnknown
+	}
+	if state == VacancyActiveStateUnknown {
+		appendActiveEvidence(preflight, code)
+		return
+	}
+	if len(preflight.ActiveEvidence) > 0 {
+		filtered := preflight.ActiveEvidence[:0]
+		for _, existing := range preflight.ActiveEvidence {
+			if existing != ActiveEvidenceNone {
+				filtered = append(filtered, existing)
+			}
+		}
+		preflight.ActiveEvidence = filtered
+	}
+	if preflight.ActiveState == VacancyActiveStateUnknown {
+		if containsActiveEvidence(preflight, ActiveEvidenceContradiction) {
+			return
+		}
+		preflight.ActiveState = state
+	} else if preflight.ActiveState != state {
+		preflight.ActiveState = VacancyActiveStateUnknown
+		appendActiveEvidence(preflight, ActiveEvidenceContradiction)
+		appendActiveEvidence(preflight, code)
+		return
+	}
+	appendActiveEvidence(preflight, code)
+	if state == VacancyActiveStateActive {
+		if preflight.ArchivedKnown && preflight.Archived {
+			preflight.ActiveState = VacancyActiveStateUnknown
+			appendActiveEvidence(preflight, ActiveEvidenceContradiction)
+			return
+		}
+		preflight.Archived, preflight.ArchivedKnown = false, true
+	} else if state == VacancyActiveStateInactive {
+		if preflight.ArchivedKnown && !preflight.Archived {
+			preflight.ActiveState = VacancyActiveStateUnknown
+			appendActiveEvidence(preflight, ActiveEvidenceContradiction)
+			return
+		}
+		preflight.Archived, preflight.ArchivedKnown = true, true
 	}
 }
 
@@ -170,18 +290,29 @@ func (r *HHAIResponder) getVacancyPreflightContext(ctx context.Context, vacancy 
 	}
 	responseURL := r.ResolveURL(fmt.Sprintf("/applicant/vacancy_response?vacancyId=%d&startedWithQuestion=false&hhtmFrom=vacancy", vacancy.ID))
 	if r.browserSource != nil && r.baseURL != nil && isHHHost(r.baseURL.Hostname()) {
+		vacancyURL := r.ResolveURL(fmt.Sprintf("/vacancy/%d", vacancy.ID))
+		vacancyState, browserErr := r.browserSource.GetPage(ctx, vacancyURL)
+		if browserErr != nil {
+			return VacancyPreflight{}, browserErr
+		}
+		vacancyFinalURL := strings.ToLower(vacancyState.FinalURL)
+		if vacancyState.Challenge || strings.Contains(vacancyFinalURL, "/account/captcha") || strings.Contains(vacancyFinalURL, "/account/login") || !vacancyState.Authenticated {
+			return VacancyPreflight{VacancyID: vacancy.ID, ResponseURL: responseURL, ActiveState: VacancyActiveStateUnknown, ActiveEvidence: []VacancyActiveEvidenceCode{ActiveEvidenceAuthFailure}, AlreadyRespondedEvidence: AlreadyRespondedEvidence{Value: AlreadyRespondedUnknown, EvidenceCode: EvidenceAuthFailure}}, nil
+		}
 		state, browserErr := r.browserSource.GetPage(ctx, responseURL)
 		if browserErr != nil {
 			return VacancyPreflight{}, browserErr
 		}
 		finalURL := strings.ToLower(state.FinalURL)
 		if state.Challenge || strings.Contains(finalURL, "/account/captcha") || strings.Contains(finalURL, "/account/login") || !state.Authenticated {
-			return VacancyPreflight{VacancyID: vacancy.ID, ResponseURL: responseURL, AlreadyRespondedEvidence: AlreadyRespondedEvidence{Value: AlreadyRespondedUnknown, EvidenceCode: EvidenceAuthFailure}}, nil
+			return VacancyPreflight{VacancyID: vacancy.ID, ResponseURL: responseURL, ActiveState: VacancyActiveStateUnknown, ActiveEvidence: []VacancyActiveEvidenceCode{ActiveEvidenceAuthFailure}, AlreadyRespondedEvidence: AlreadyRespondedEvidence{Value: AlreadyRespondedUnknown, EvidenceCode: EvidenceAuthFailure}}, nil
 		}
 		preflight, parseErr := parseVacancyPreflight([]byte(state.HTML), vacancy, responseURL)
 		if parseErr != nil {
 			return VacancyPreflight{}, parseErr
 		}
+		activeState, activeEvidence := parseVacancyActiveState([]byte(vacancyState.HTML), vacancy.ID, webTraceVacancy)
+		mergeVacancyActiveEvidence(&preflight, activeState, activeEvidence)
 		r.rememberVacancyPreflight(preflight)
 		return preflight, nil
 	}
@@ -247,7 +378,7 @@ func (r *HHAIResponder) requireLiveApplicationPreflight(vacancyID int) error {
 }
 
 func parseVacancyPreflight(data []byte, vacancy Vacancy, responseURL string) (VacancyPreflight, error) {
-	preflight := VacancyPreflight{VacancyID: vacancy.ID, ResponseURL: responseURL, ResponseIdentifierPresent: strings.TrimSpace(responseURL) != ""}
+	preflight := VacancyPreflight{VacancyID: vacancy.ID, ResponseURL: responseURL, ResponseIdentifierPresent: strings.TrimSpace(responseURL) != "", ActiveState: VacancyActiveStateUnknown}
 	state, stateErr := embeddedVacancyState(data)
 	if stateErr == nil {
 		populateVacancyPreflightFromState(&preflight, state, vacancy.ID)
@@ -290,7 +421,91 @@ func parseVacancyPreflight(data []byte, vacancy Vacancy, responseURL string) (Va
 	if preflight.AlreadyRespondedEvidence.EvidenceCode == "" {
 		setAlreadyRespondedEvidence(&preflight, AlreadyRespondedUnknown, EvidenceAmbiguousPage)
 	}
+	if len(preflight.ActiveEvidence) == 0 {
+		appendActiveEvidence(&preflight, ActiveEvidenceNone)
+	}
 	return preflight, nil
+}
+
+func parseVacancyActiveState(data []byte, vacancyID int, requestKind string) (VacancyActiveState, []VacancyActiveEvidenceCode) {
+	preflight := VacancyPreflight{VacancyID: vacancyID, ActiveState: VacancyActiveStateUnknown}
+	if looksLikeAuthFailure(data) {
+		setActiveEvidence(&preflight, VacancyActiveStateUnknown, ActiveEvidenceAuthFailure)
+		return preflight.activeState(), preflight.ActiveEvidence
+	}
+	inspection := inspectHHWebPage(data, vacancyID, requestKind)
+	if inspection.ArchivedMarkerVacancyScoped || inspection.Class == WebPageVacancyArchived {
+		setActiveEvidence(&preflight, VacancyActiveStateInactive, ActiveEvidenceArchiveMarker)
+	}
+	if inspection.ApplicationFormPresent && inspection.FormVacancyIDMatches {
+		setActiveEvidence(&preflight, VacancyActiveStateActive, ActiveEvidenceApplicationForm)
+	}
+	if inspection.ExplicitApplyAction {
+		code := ActiveEvidenceResponseLink
+		if requestKind == webTraceVacancy {
+			code = ActiveEvidenceVacancyApplyAction
+		}
+		setActiveEvidence(&preflight, VacancyActiveStateActive, code)
+	}
+	if inspection.StateCanApplyPresent && inspection.StateCanApply {
+		setActiveEvidence(&preflight, VacancyActiveStateActive, ActiveEvidenceProviderCanApply)
+	}
+	if archived, known := providerArchivedValue(data, vacancyID); known {
+		if archived {
+			setActiveEvidence(&preflight, VacancyActiveStateInactive, ActiveEvidenceProviderArchivedTrue)
+		} else {
+			setActiveEvidence(&preflight, VacancyActiveStateActive, ActiveEvidenceProviderArchivedFalse)
+		}
+	}
+	if len(preflight.ActiveEvidence) == 0 {
+		appendActiveEvidence(&preflight, ActiveEvidenceNone)
+	}
+	return preflight.activeState(), preflight.ActiveEvidence
+}
+
+func providerArchivedValue(data []byte, vacancyID int) (bool, bool) {
+	state, err := embeddedVacancyState(data)
+	if err != nil {
+		return false, false
+	}
+	candidates := []map[string]any{state}
+	for _, key := range []string{"redirectConfig", "vacancyView", "vacancyResponse", "response", "vacancy"} {
+		value, ok := directStateValue(state, key)
+		if !ok {
+			continue
+		}
+		object, ok := value.(map[string]any)
+		if !ok || !responseStateMatchesVacancy(object, vacancyID) {
+			continue
+		}
+		candidates = append(candidates, object)
+	}
+	for _, candidate := range candidates {
+		value, ok := directStateValue(candidate, "archived", "isArchived")
+		if !ok {
+			continue
+		}
+		return stateBool(value)
+	}
+	return false, false
+}
+
+func mergeVacancyActiveEvidence(preflight *VacancyPreflight, state VacancyActiveState, evidence []VacancyActiveEvidenceCode) {
+	if preflight == nil || state == VacancyActiveStateUnknown && len(evidence) == 0 {
+		return
+	}
+	for _, code := range evidence {
+		if code == ActiveEvidenceNone {
+			continue
+		}
+		setActiveEvidence(preflight, state, code)
+		if state == VacancyActiveStateActive && (code == ActiveEvidenceVacancyApplyAction || code == ActiveEvidenceResponseLink || code == ActiveEvidenceApplicationForm || code == ActiveEvidenceProviderCanApply) {
+			preflight.CanApply, preflight.CanApplyKnown, preflight.Available = true, true, true
+			if preflight.AlreadyRespondedEvidence.EvidenceCode == "" || preflight.AlreadyRespondedEvidence.Value == AlreadyRespondedUnknown {
+				setAlreadyRespondedEvidence(preflight, AlreadyRespondedNo, EvidenceApplyActionAvailable)
+			}
+		}
+	}
 }
 
 func (p VacancyPreflight) hasAnyReliableState() bool {
@@ -301,13 +516,31 @@ func (p VacancyPreflight) hasAnyReliableState() bool {
 
 func embeddedVacancyState(data []byte) (map[string]any, error) {
 	text := html.UnescapeString(string(data))
-	for _, marker := range []string{`{"redirectConfig":`, `{"vacancyView":`, `{"vacancyResponse":`, `{"vacancyTests":`, `{"vacancy":`, `{"response":`} {
+	for _, marker := range []string{`{"redirectConfig":`, `{"vacancyView":`, `{"vacancyResponse":`, `{"vacancyTests":`, `{"vacancy":`, `{"response":`, `{"applicantVacancyResponseStatuses":`, `{"vacancyResponsePopup":`} {
 		idx := strings.Index(text, marker)
 		if idx < 0 {
 			continue
 		}
 		var state map[string]any
 		decoder := json.NewDecoder(strings.NewReader(text[idx:]))
+		if err := decoder.Decode(&state); err == nil {
+			return state, nil
+		}
+	}
+	// Some pages place the response-state key after unrelated root fields, so
+	// the exact {"key": marker is absent. Use the nearest containing object
+	// only as a fallback after the stable root markers above were exhausted.
+	for _, key := range []string{`"applicantVacancyResponseStatuses":`, `"vacancyResponsePopup":`} {
+		keyIndex := strings.Index(text, key)
+		if keyIndex < 0 {
+			continue
+		}
+		start := strings.LastIndex(text[:keyIndex], "{")
+		if start < 0 {
+			continue
+		}
+		var state map[string]any
+		decoder := json.NewDecoder(strings.NewReader(text[start:]))
 		if err := decoder.Decode(&state); err == nil {
 			return state, nil
 		}
@@ -331,6 +564,11 @@ func populateVacancyPreflightFromState(preflight *VacancyPreflight, state map[st
 	if value, ok := archivedValue, archivedOK; ok {
 		if parsed, parsedOK := stateBool(value); parsedOK {
 			preflight.Archived, preflight.ArchivedKnown = parsed, true
+			if parsed {
+				setActiveEvidence(preflight, VacancyActiveStateInactive, ActiveEvidenceProviderArchivedTrue)
+			} else {
+				setActiveEvidence(preflight, VacancyActiveStateActive, ActiveEvidenceProviderArchivedFalse)
+			}
 		}
 	}
 	// Only explicit response-state fields from the provider's response-state
@@ -352,6 +590,9 @@ func populateVacancyPreflightFromState(preflight *VacancyPreflight, state map[st
 		if parsed, parsedOK := stateBool(value); parsedOK {
 			preflight.CanApply, preflight.CanApplyKnown = parsed, true
 			preflight.Available = parsed
+			if parsed {
+				setActiveEvidence(preflight, VacancyActiveStateActive, ActiveEvidenceProviderCanApply)
+			}
 		}
 	}
 	if value, ok := directResponseStateValue(responseState, responseStateOK, "available", "isAvailable"); ok {
@@ -359,6 +600,47 @@ func populateVacancyPreflightFromState(preflight *VacancyPreflight, state map[st
 			preflight.Available = parsed
 			if !preflight.CanApplyKnown {
 				preflight.CanApply, preflight.CanApplyKnown = parsed, true
+			}
+			if parsed {
+				setActiveEvidence(preflight, VacancyActiveStateActive, ActiveEvidenceProviderCanApply)
+			}
+		}
+	}
+	if value, ok := directResponseStateValue(responseState, responseStateOK, "responseImpossible"); ok {
+		if impossible, known := stateBool(value); known {
+			preflight.CanApply, preflight.CanApplyKnown, preflight.Available = !impossible, true, !impossible
+			if !impossible {
+				setActiveEvidence(preflight, VacancyActiveStateActive, ActiveEvidenceProviderCanApply)
+			}
+		}
+	}
+	if value, ok := directResponseStateValue(responseState, responseStateOK, "alreadyApplied"); ok {
+		if applied, known := stateBool(value); known {
+			if applied {
+				setAlreadyRespondedEvidence(preflight, AlreadyRespondedYes, EvidenceExplicitRespondedMarker)
+			} else {
+				setAlreadyRespondedEvidence(preflight, AlreadyRespondedNo, EvidenceExplicitNotResponded)
+			}
+		}
+	}
+	if value, ok := directResponseStateValue(responseState, responseStateOK, "closedForApplicants"); ok {
+		if closed, known := stateBool(value); known {
+			if closed {
+				setActiveEvidence(preflight, VacancyActiveStateInactive, ActiveEvidenceProviderClosedForApplicants)
+			} else {
+				setActiveEvidence(preflight, VacancyActiveStateActive, ActiveEvidenceProviderArchivedFalse)
+			}
+		}
+	}
+	if value, ok := directResponseStateValue(responseState, responseStateOK, "letterMaxLength"); ok {
+		if maxLength, known := stateNumber(value); known {
+			preflight.LetterAllowed, preflight.LetterAllowedKnown = maxLength > 0, true
+		}
+	}
+	if value, ok := directResponseStateValue(responseState, responseStateOK, "test"); ok {
+		if testObject, objectOK := value.(map[string]any); objectOK {
+			if hasTests, known := stateBool(testObject["hasTests"]); known {
+				preflight.TestPresent, preflight.TestPresentKnown = hasTests, true
 			}
 		}
 	}
@@ -386,6 +668,9 @@ func populateVacancyPreflightFromState(preflight *VacancyPreflight, state map[st
 
 func populateVacancyPreflightFromHTML(preflight *VacancyPreflight, data []byte) {
 	inspection := inspectHHWebPage(data, preflight.VacancyID, webTraceResponse)
+	if inspection.ArchivedMarkerVacancyScoped || inspection.Class == WebPageVacancyArchived {
+		setActiveEvidence(preflight, VacancyActiveStateInactive, ActiveEvidenceArchiveMarker)
+	}
 	if inspection.DisabledApplyAction && preflight.CanApplyKnown {
 		// A disabled control is not proof of a provider-level NO. In
 		// particular, it can be a disabled generic component on a response
@@ -398,16 +683,18 @@ func populateVacancyPreflightFromHTML(preflight *VacancyPreflight, data []byte) 
 	if preflight.AlreadyRespondedEvidence.EvidenceCode == "" && inspection.ExplicitRespondedMarker {
 		setAlreadyRespondedEvidence(preflight, AlreadyRespondedYes, EvidenceExplicitRespondedMarker)
 	}
-	if !preflight.ArchivedKnown && inspection.Class == WebPageVacancyArchived {
+	if !preflight.ArchivedKnown && (inspection.ArchivedMarkerVacancyScoped || inspection.Class == WebPageVacancyArchived) {
 		preflight.Archived, preflight.ArchivedKnown = true, true
 	}
 	if inspection.ApplicationFormPresent && inspection.FormVacancyIDMatches {
 		preflight.CanApply, preflight.CanApplyKnown = true, true
 		preflight.Available = true
+		setActiveEvidence(preflight, VacancyActiveStateActive, ActiveEvidenceApplicationForm)
 		setAlreadyRespondedEvidence(preflight, AlreadyRespondedNo, EvidenceApplyActionAvailable)
 	} else if inspection.ExplicitApplyAction {
 		preflight.CanApply, preflight.CanApplyKnown = true, true
 		preflight.Available = true
+		setActiveEvidence(preflight, VacancyActiveStateActive, ActiveEvidenceResponseLink)
 		if preflight.AlreadyRespondedEvidence.EvidenceCode == "" {
 			setAlreadyRespondedEvidence(preflight, AlreadyRespondedNo, EvidenceApplyActionAvailable)
 		}
@@ -415,6 +702,22 @@ func populateVacancyPreflightFromHTML(preflight *VacancyPreflight, data []byte) 
 }
 
 func directResponseState(state map[string]any, vacancyID int) (map[string]any, bool) {
+	if statuses, ok := directStateValue(state, "applicantVacancyResponseStatuses"); ok {
+		if statusMap, ok := statuses.(map[string]any); ok {
+			if object, ok := statusMap[strconv.Itoa(vacancyID)].(map[string]any); ok {
+				return object, true
+			}
+		}
+	}
+	if popup, ok := directStateValue(state, "vacancyResponsePopup"); ok {
+		if popupObject, ok := popup.(map[string]any); ok {
+			if vacancy, ok := directStateValue(popupObject, "vacancy"); ok {
+				if object, ok := vacancy.(map[string]any); ok && responseStateMatchesVacancy(object, vacancyID) {
+					return object, true
+				}
+			}
+		}
+	}
 	for _, key := range []string{"redirectConfig", "vacancyResponse", "response"} {
 		value, ok := directStateValue(state, key)
 		if !ok {
@@ -436,7 +739,15 @@ func directResponseStateValue(state map[string]any, stateOK bool, keys ...string
 	if !stateOK {
 		return nil, false
 	}
-	return directStateValue(state, keys...)
+	if value, ok := directStateValue(state, keys...); ok {
+		return value, true
+	}
+	if shortVacancy, ok := directStateValue(state, "shortVacancy"); ok {
+		if object, ok := shortVacancy.(map[string]any); ok {
+			return directStateValue(object, keys...)
+		}
+	}
+	return nil, false
 }
 
 func directStateStringField(state map[string]any, stateOK bool, keys ...string) (string, bool) {
@@ -480,8 +791,68 @@ func directStateValue(state map[string]any, keys ...string) (any, bool) {
 }
 
 func looksLikeAuthFailure(data []byte) bool {
-	text := strings.ToLower(string(data))
-	return containsAny(text, "/account/login", "supernova-login-wrapper", "forbiddenpage", "captcha-container", "cf-chl-", "cloudflare challenge", "ddos-guard challenge", "access denied")
+	document, err := xhtml.Parse(strings.NewReader(string(data)))
+	if err != nil {
+		return false
+	}
+	if visibleHTMLAuthMarker(document) {
+		return true
+	}
+	text := strings.ToLower(normalizeVisibleHTMLText(document))
+	return containsAny(text, "/account/login", "cloudflare challenge", "ddos-guard challenge", "access denied")
+}
+
+func visibleHTMLAuthMarker(root *xhtml.Node) bool {
+	if root == nil {
+		return false
+	}
+	if root.Type == xhtml.ElementNode {
+		switch strings.ToLower(root.Data) {
+		case "script", "style", "noscript", "template":
+			return false
+		}
+		attributes := make([]string, 0, len(root.Attr)*2)
+		for _, attribute := range root.Attr {
+			attributes = append(attributes, strings.ToLower(attribute.Key), strings.ToLower(attribute.Val))
+		}
+		if containsAny(strings.Join(attributes, " "), " /account/login", "/account/login", "supernova-login-wrapper", "forbiddenpage", "captcha-container", "cf-chl-", "cloudflare challenge", "ddos-guard challenge") {
+			return true
+		}
+	}
+	for child := root.FirstChild; child != nil; child = child.NextSibling {
+		if visibleHTMLAuthMarker(child) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeVisibleHTMLText(root *xhtml.Node) string {
+	if root == nil {
+		return ""
+	}
+	var builder strings.Builder
+	var visit func(*xhtml.Node)
+	visit = func(node *xhtml.Node) {
+		if node == nil {
+			return
+		}
+		if node.Type == xhtml.ElementNode {
+			switch strings.ToLower(node.Data) {
+			case "script", "style", "noscript", "template":
+				return
+			}
+		}
+		if node.Type == xhtml.TextNode {
+			builder.WriteString(node.Data)
+			builder.WriteByte(' ')
+		}
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			visit(child)
+		}
+	}
+	visit(root)
+	return normalizeHTMLText(builder.String())
 }
 
 func hasHTMLAttr(node *xhtml.Node, key string) bool {
@@ -515,6 +886,21 @@ func stateBool(value any) (bool, bool) {
 		}
 	}
 	return false, false
+}
+
+func stateNumber(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return typed, true
+	case json.Number:
+		parsed, err := typed.Float64()
+		return parsed, err == nil
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
 }
 
 func stateStringValue(value any) (string, bool) {

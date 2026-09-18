@@ -44,6 +44,8 @@ type WebPageInspection struct {
 	ExplicitRespondedMarker      bool
 	ExplicitApplyAction          bool
 	DisabledApplyAction          bool
+	ArchivedMarkerPresent        bool
+	ArchivedMarkerVacancyScoped  bool
 	ApplicationFormPresent       bool
 	FormVacancyIDMatches         bool
 	FormMethod                   string
@@ -264,7 +266,8 @@ func inspectHHWebPage(data []byte, vacancyID int, requestKind string) WebPageIns
 	}
 	inspection.TestMarkerPresent = inspection.StateTestMarkerPresent
 	inspection.TestMarkerVacancyScoped = inspection.StateTestMarkerVacancyScoped
-	text := strings.ToLower(normalizeHTMLText(htmlNodeText(document)))
+	text := strings.ToLower(normalizeVisibleHTMLText(document))
+	inspection.ArchivedMarkerPresent, inspection.ArchivedMarkerVacancyScoped = visibleVacancyArchiveMarker(document, vacancyID, requestKind)
 	inspection.ExplicitRespondedMarker = containsAny(text, "вы уже откликались", "отклик отправлен", "отклик уже отправлен")
 	if requestKind == webTraceNegotiation {
 		inspection.NegotiationVacancyScoped = htmlContainsVacancyID(document, vacancyID)
@@ -333,10 +336,68 @@ func inspectHHWebPage(data []byte, vacancyID int, requestKind string) WebPageIns
 		inspection.Class = WebPageVacancyActive
 		return inspection
 	}
-	if containsAny(text, "вакансия в архиве", "вакансия закрыта") {
+	if inspection.ArchivedMarkerVacancyScoped {
 		inspection.Class = WebPageVacancyArchived
 	}
 	return inspection
+}
+
+func visibleVacancyArchiveMarker(document *xhtml.Node, vacancyID int, requestKind string) (bool, bool) {
+	if document == nil {
+		return false, false
+	}
+	present := false
+	scopedFound := false
+	unscopedFound := false
+	for _, node := range findHTMLNodes(document, func(node *xhtml.Node) bool {
+		return node.Type == xhtml.ElementNode
+	}) {
+		text := strings.ToLower(normalizeVisibleHTMLText(node))
+		if !containsAny(text, "вакансия в архиве", "вакансия закрыта") {
+			continue
+		}
+		present = true
+		if scopedVacancyID, found := ancestorVacancyID(node); found {
+			scopedFound = true
+			if scopedVacancyID == vacancyID {
+				return true, true
+			}
+			continue
+		}
+		unscopedFound = true
+	}
+	if scopedFound {
+		return present, false
+	}
+	if requestKind == webTraceVacancy && unscopedFound {
+		return true, true
+	}
+	return present, false
+}
+
+func ancestorVacancyID(node *xhtml.Node) (int, bool) {
+	for current := node; current != nil; current = current.Parent {
+		for _, key := range []string{"data-vacancy-id", "data-vacancyid"} {
+			if value := strings.TrimSpace(htmlAttr(current, key)); value != "" {
+				if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
+					return parsed, true
+				}
+			}
+		}
+		if href := htmlAttr(current, "href"); href != "" {
+			if parsed, err := url.Parse(href); err == nil {
+				if value := parsed.Query().Get("vacancyId"); value != "" {
+					if id, err := strconv.Atoi(value); err == nil && id > 0 {
+						return id, true
+					}
+				}
+				if id := vacancyIDFromCanonicalPath(parsed.Path); id > 0 {
+					return id, true
+				}
+			}
+		}
+	}
+	return 0, false
 }
 
 func directStateInt(state map[string]any, keys ...string) (int, bool) {

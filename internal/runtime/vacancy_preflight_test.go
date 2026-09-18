@@ -147,6 +147,93 @@ func TestAlreadyRespondedEvidenceIsFailClosed(t *testing.T) {
 	}
 }
 
+func TestLooksLikeAuthFailureIgnoresJavaScriptOnlyMarkers(t *testing.T) {
+	body := `<html><head><script>const loginPath = "/account/login";</script></head><body><a data-qa="vacancy-response-link-top" href="/applicant/vacancy_response?vacancyId=42">Откликнуться</a></body></html>`
+	if looksLikeAuthFailure([]byte(body)) {
+		t.Fatal("JavaScript-only login marker was treated as an auth failure")
+	}
+}
+
+func TestInspectHHWebPageUsesVisibleApplyEvidence(t *testing.T) {
+	body := `<html><head><script>const stale = "Отклик отправлен Вакансия в архиве";</script></head><body><a data-qa="vacancy-response-link-top" role="button" href="/applicant/vacancy_response?vacancyId=42">Откликнуться</a></body></html>`
+	inspection := inspectHHWebPage([]byte(body), 42, webTraceVacancy)
+	if !inspection.ExplicitApplyAction || inspection.Class != WebPageVacancyActive {
+		t.Fatalf("inspection=%+v, want active apply action", inspection)
+	}
+	if inspection.ExplicitRespondedMarker {
+		t.Fatal("JavaScript-only responded marker was treated as visible evidence")
+	}
+}
+
+func TestParseVacancyActiveStateUsesScopedEvidence(t *testing.T) {
+	tests := []struct {
+		name      string
+		body      string
+		request   string
+		wantState VacancyActiveState
+		wantCode  VacancyActiveEvidenceCode
+	}{
+		{name: "explicit archive marker", body: `<body>Вакансия в архиве</body>`, request: webTraceVacancy, wantState: VacancyActiveStateInactive, wantCode: ActiveEvidenceArchiveMarker},
+		{name: "provider archived true", body: `{"redirectConfig":{"archived":true}}`, request: webTraceVacancy, wantState: VacancyActiveStateInactive, wantCode: ActiveEvidenceProviderArchivedTrue},
+		{name: "same vacancy apply action", body: `<a data-qa="vacancy-response-link-top" role="button" href="/applicant/vacancy_response?vacancyId=42">Откликнуться</a>`, request: webTraceVacancy, wantState: VacancyActiveStateActive, wantCode: ActiveEvidenceVacancyApplyAction},
+		{name: "response link", body: `<a data-qa="vacancy-response-link" href="/applicant/vacancy_response?vacancyId=42">Продолжить отклик</a>`, request: webTraceResponse, wantState: VacancyActiveStateActive, wantCode: ActiveEvidenceResponseLink},
+		{name: "provider archived false", body: `{"redirectConfig":{"archived":false}}`, request: webTraceVacancy, wantState: VacancyActiveStateActive, wantCode: ActiveEvidenceProviderArchivedFalse},
+		{name: "normal page without evidence", body: `<body>Python-разработчик</body>`, request: webTraceVacancy, wantState: VacancyActiveStateUnknown, wantCode: ActiveEvidenceNone},
+		{name: "challenge", body: `<div class="captcha-container">challenge</div>`, request: webTraceVacancy, wantState: VacancyActiveStateUnknown, wantCode: ActiveEvidenceAuthFailure},
+		{name: "login", body: `<a href="/account/login">Войти</a>`, request: webTraceVacancy, wantState: VacancyActiveStateUnknown, wantCode: ActiveEvidenceAuthFailure},
+		{name: "archive for another vacancy", body: `<div data-vacancy-id="99">Вакансия в архиве</div>`, request: webTraceVacancy, wantState: VacancyActiveStateUnknown, wantCode: ActiveEvidenceNone},
+		{name: "active and archive contradiction", body: `<div>Вакансия в архиве</div><a data-qa="vacancy-response-link-top" role="button" href="/applicant/vacancy_response?vacancyId=42">Откликнуться</a>`, request: webTraceVacancy, wantState: VacancyActiveStateUnknown, wantCode: ActiveEvidenceContradiction},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			state, evidence := parseVacancyActiveState([]byte(test.body), 42, test.request)
+			if state != test.wantState {
+				t.Fatalf("state=%s, want %s; evidence=%v", state, test.wantState, evidence)
+			}
+			found := false
+			for _, code := range evidence {
+				if code == test.wantCode {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("evidence=%v, want %s", evidence, test.wantCode)
+			}
+		})
+	}
+}
+
+func TestMergeVacancyApplyEvidenceCompletesFreshPreflightState(t *testing.T) {
+	preflight := VacancyPreflight{VacancyID: 42, ActiveState: VacancyActiveStateUnknown, ActiveEvidence: []VacancyActiveEvidenceCode{ActiveEvidenceNone}, AlreadyRespondedEvidence: AlreadyRespondedEvidence{Value: AlreadyRespondedUnknown, EvidenceCode: EvidenceAmbiguousPage}}
+	mergeVacancyActiveEvidence(&preflight, VacancyActiveStateActive, []VacancyActiveEvidenceCode{ActiveEvidenceVacancyApplyAction})
+	if preflight.activeState() != VacancyActiveStateActive || !preflight.ArchivedKnown || preflight.Archived || !preflight.CanApplyKnown || !preflight.CanApply {
+		t.Fatalf("preflight=%+v, want active/apply-known state", preflight)
+	}
+	if preflight.alreadyRespondedEvidence().Value != AlreadyRespondedNo {
+		t.Fatalf("responded evidence=%+v, want NO", preflight.alreadyRespondedEvidence())
+	}
+	for _, code := range preflight.ActiveEvidence {
+		if code == ActiveEvidenceNone {
+			t.Fatal("stale NO_ACTIVE_EVIDENCE was retained after active evidence")
+		}
+	}
+}
+
+func TestParseVacancyPreflightReadsScopedResponseStatus(t *testing.T) {
+	body := `<script>window.__INITIAL_STATE__={"page":"response","applicantVacancyResponseStatuses":{"42":{"alreadyApplied":false,"responseImpossible":false,"letterMaxLength":10000,"test":{"hasTests":false},"shortVacancy":{"vacancyId":42,"@responseLetterRequired":false,"closedForApplicants":false}}}}</script>`
+	preflight, err := parseVacancyPreflight([]byte(body), Vacancy{ID: 42}, "https://hh.example/applicant/vacancy_response?vacancyId=42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preflight.alreadyRespondedEvidence().Value != AlreadyRespondedNo || !preflight.CanApplyKnown || !preflight.CanApply || !preflight.TestPresentKnown || preflight.TestPresent || !preflight.LetterRequiredKnown || preflight.LetterRequired || !preflight.LetterAllowedKnown || !preflight.LetterAllowed {
+		t.Fatalf("preflight=%+v, want scoped provider state", preflight)
+	}
+	if preflight.activeState() != VacancyActiveStateActive {
+		t.Fatalf("active=%s evidence=%v, want ACTIVE", preflight.activeState(), preflight.ActiveEvidence)
+	}
+}
+
 func TestKnownNegotiationForSameVacancyIsPositiveEvidence(t *testing.T) {
 	preflight := VacancyPreflight{VacancyID: 42, AlreadyRespondedEvidence: AlreadyRespondedEvidence{Value: AlreadyRespondedUnknown, EvidenceCode: EvidenceAmbiguousPage}}
 	applyApplicationHistoryEvidence(&preflight, []HHApplicationRecord{{VacancyID: 41, ExternalID: "other"}, {VacancyID: 42, ExternalID: "negotiation-42"}})

@@ -699,7 +699,10 @@ func pilotPreflightBlockReason(preflight VacancyPreflight) string {
 	if !preflight.LetterRequiredKnown {
 		return "COVER_LETTER_REQUIREMENT_UNKNOWN"
 	}
-	if preflight.LetterRequired && preflight.CanApplyKnown && !preflight.CanApply {
+	if preflight.LetterRequired && !preflight.LetterAllowedKnown {
+		return "COVER_LETTER_ALLOWED_UNKNOWN"
+	}
+	if preflight.LetterRequired && !preflight.LetterAllowed {
 		return "COVER_LETTER_NOT_ALLOWED"
 	}
 	return ""
@@ -753,7 +756,7 @@ func pilotPreviewBlockedReason(preview PilotPreview, minScore int) string {
 
 func pilotPreflightSnapshot(value VacancyPreflight) PilotPreflightSnapshot {
 	evidence := value.alreadyRespondedEvidence()
-	return PilotPreflightSnapshot{ObservedAt: time.Now().UTC(), Active: knownBoolPointer(!value.Archived, value.ArchivedKnown), AlreadyResponded: knownBoolPointer(evidence.Value == AlreadyRespondedYes, evidence.Value != AlreadyRespondedUnknown), AlreadyRespondedValue: string(evidence.Value), AlreadyRespondedEvidenceCode: string(evidence.EvidenceCode), CanApply: knownBoolPointer(value.CanApply, value.CanApplyKnown), TestRequired: knownBoolPointer(value.TestPresent, value.TestPresentKnown), CoverLetterRequired: knownBoolPointer(value.LetterRequired, value.LetterRequiredKnown), CoverLetterAllowed: knownBoolPointer(value.CanApply, value.CanApplyKnown && value.CanApply), ResponseURL: value.ResponseURL, Area: value.Area, WorkSchedule: value.WorkSchedule, WorkExperience: value.WorkExperience}
+	return PilotPreflightSnapshot{ObservedAt: time.Now().UTC(), Active: knownBoolPointer(!value.Archived, value.ArchivedKnown), AlreadyResponded: knownBoolPointer(evidence.Value == AlreadyRespondedYes, evidence.Value != AlreadyRespondedUnknown), AlreadyRespondedValue: string(evidence.Value), AlreadyRespondedEvidenceCode: string(evidence.EvidenceCode), CanApply: knownBoolPointer(value.CanApply, value.CanApplyKnown), TestRequired: knownBoolPointer(value.TestPresent, value.TestPresentKnown), CoverLetterRequired: knownBoolPointer(value.LetterRequired, value.LetterRequiredKnown), CoverLetterAllowed: knownBoolPointer(value.LetterAllowed, value.LetterAllowedKnown), ResponseURL: value.ResponseURL, Area: value.Area, WorkSchedule: value.WorkSchedule, WorkExperience: value.WorkExperience}
 }
 
 func validatePilotCoverLetter(letter string) error {
