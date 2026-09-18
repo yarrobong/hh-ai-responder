@@ -38,16 +38,32 @@ const (
 	EvidenceAbsent EvidenceStrength = "ABSENT"
 )
 
+const EvidenceSourceManualProviderVerification = "MANUAL_PROVIDER_VERIFICATION"
+
 // ReconciliationEvidence records the latest bounded read observation. It is
 // additive so R14.1 JSON records remain loadable.
 type ReconciliationEvidence struct {
-	Kind                  EvidenceKind     `json:"kind,omitempty"`
-	Strength              EvidenceStrength `json:"strength,omitempty"`
-	Source                string           `json:"source,omitempty"`
-	ProviderApplicationID string           `json:"provider_application_id,omitempty"`
-	ProviderNegotiationID string           `json:"provider_negotiation_id,omitempty"`
-	ProviderResponseAt    *time.Time       `json:"provider_response_at,omitempty"`
-	ObservedAt            time.Time        `json:"observed_at,omitempty"`
+	Kind                   EvidenceKind             `json:"kind,omitempty"`
+	Strength               EvidenceStrength         `json:"strength,omitempty"`
+	Source                 string                   `json:"source,omitempty"`
+	ConfirmationSource     string                   `json:"confirmation_source,omitempty"`
+	ProviderApplicationID  string                   `json:"provider_application_id,omitempty"`
+	ProviderNegotiationID  string                   `json:"provider_negotiation_id,omitempty"`
+	ProviderConversationID string                   `json:"provider_conversation_id,omitempty"`
+	ProviderIdentities     []ProviderIdentity       `json:"provider_identities,omitempty"`
+	History                []ReconciliationEvidence `json:"history,omitempty"`
+	ProviderResponseAt     *time.Time               `json:"provider_response_at,omitempty"`
+	ObservedAt             time.Time                `json:"observed_at,omitempty"`
+}
+
+// ProviderIdentity keeps provider identifiers typed and source-bound. A
+// negotiation/topic id and a conversation/chat id are different identities;
+// they must not be compared as if they were one generic provider id.
+type ProviderIdentity struct {
+	Type      string `json:"type"`
+	Value     string `json:"value"`
+	Source    string `json:"source"`
+	VacancyID int    `json:"vacancy_id"`
 }
 
 var (
@@ -183,6 +199,10 @@ func (a Attempt) WithReconciliation(evidence ReconciliationEvidence, now time.Ti
 			strings.TrimSpace(evidence.ProviderNegotiationID) != "" && a.Reconciliation.ProviderNegotiationID != evidence.ProviderNegotiationID {
 			return Attempt{}, fmt.Errorf("%w: provider negotiation identity changed", ErrInvalidTransition)
 		}
+		if a.Reconciliation != nil && strings.TrimSpace(a.Reconciliation.ProviderConversationID) != "" &&
+			strings.TrimSpace(evidence.ProviderConversationID) != "" && a.Reconciliation.ProviderConversationID != evidence.ProviderConversationID {
+			return Attempt{}, fmt.Errorf("%w: provider conversation identity changed", ErrInvalidTransition)
+		}
 		if a.Reconciliation != nil {
 			if evidence.ProviderApplicationID == "" {
 				evidence.ProviderApplicationID = a.Reconciliation.ProviderApplicationID
@@ -193,11 +213,27 @@ func (a Attempt) WithReconciliation(evidence ReconciliationEvidence, now time.Ti
 			if evidence.ProviderResponseAt == nil {
 				evidence.ProviderResponseAt = a.Reconciliation.ProviderResponseAt
 			}
+			if evidence.ConfirmationSource == "" {
+				evidence.ConfirmationSource = a.Reconciliation.ConfirmationSource
+			}
+			if len(evidence.ProviderIdentities) == 0 {
+				evidence.ProviderIdentities = append([]ProviderIdentity(nil), a.Reconciliation.ProviderIdentities...)
+			}
+		}
+		if a.Reconciliation != nil {
+			previous := *a.Reconciliation
+			previous.History = nil
+			evidence.History = append(append([]ReconciliationEvidence(nil), a.Reconciliation.History...), previous)
 		}
 		a.Reconciliation = &evidence
 	} else if a.State != StateTargetResponseConfirmed {
 		// Keep unresolved attempts blocking. This records the latest observation
 		// without turning absence or uncertainty into NOT_SENT.
+		if a.Reconciliation != nil {
+			previous := *a.Reconciliation
+			previous.History = nil
+			evidence.History = append(append([]ReconciliationEvidence(nil), a.Reconciliation.History...), previous)
+		}
 		a.Reconciliation = &evidence
 	}
 	a.UpdatedAt = now.UTC()

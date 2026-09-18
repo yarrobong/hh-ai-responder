@@ -68,7 +68,7 @@ func (r rootApplicationEvidenceReader) readApplicationEvidence(ctx context.Conte
 				continue
 			}
 			result = append(result, applicationreconciliation.ProviderResponse{
-				VacancyID: item.VacancyID, NegotiationID: strings.TrimSpace(item.ExternalID),
+				VacancyID: item.VacancyID, NegotiationID: strings.TrimSpace(item.ExternalID), ConversationID: strings.TrimSpace(item.ConversationExternal), Source: "negotiations_page",
 				ResponseByApplicant: item.Metadata["delivery_confirmed"] == "true",
 				ProviderResponseAt:  providerResponseTime(item),
 			})

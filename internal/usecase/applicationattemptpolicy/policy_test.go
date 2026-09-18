@@ -79,3 +79,28 @@ func TestGateTreatsMissingAndStoreFailureDifferently(t *testing.T) {
 		t.Fatalf("failure decision=%+v err=%v", decision, err)
 	}
 }
+
+func TestGateSkipsUnknownReconciliationResidue(t *testing.T) {
+	attempt := policyAttempt(t, domain.StateAccepted)
+	attempt.Reconciliation = &domain.ReconciliationEvidence{Kind: domain.EvidenceConflicting, Strength: domain.EvidenceAbsent, Source: "provider identities conflict"}
+	decision, err := NewGate(blockingReaderFake{attempt: attempt}).Evaluate(context.Background(), attempt.VacancyID)
+	if err != nil || decision.Classification != BlockingConfirmed || decision.Attempt == nil {
+		t.Fatalf("unknown reconciliation residue became replayable: decision=%+v err=%v", decision, err)
+	}
+}
+
+func TestGateBlocksConfirmedManualProviderVerification(t *testing.T) {
+	attempt := policyAttempt(t, domain.StateAccepted)
+	attempt, err := attempt.WithReconciliation(domain.ReconciliationEvidence{
+		Kind: domain.EvidenceConfirmedResponseExists, Strength: domain.EvidenceStrong,
+		Source:             domain.EvidenceSourceManualProviderVerification,
+		ConfirmationSource: domain.EvidenceSourceManualProviderVerification,
+	}, attempt.UpdatedAt.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := NewGate(blockingReaderFake{attempt: attempt}).Evaluate(context.Background(), attempt.VacancyID)
+	if err != nil || decision.Classification != BlockingConfirmed || decision.Attempt.State != domain.StateTargetResponseConfirmed {
+		t.Fatalf("manual provider verification did not block duplicate application: decision=%+v err=%v", decision, err)
+	}
+}

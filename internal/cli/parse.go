@@ -124,7 +124,7 @@ func validateCommandArgs(command CommandKind, args []string) error {
 		if args[0] == "reliability" && len(args) > 1 && !strings.HasPrefix(args[1], "-") && !known(args[1], "applications", "autochat") {
 			return fmt.Errorf("unknown hh reliability target %q", args[1])
 		}
-		if args[0] == "reliability" && len(args) > 2 && !strings.HasPrefix(args[2], "-") && args[2] != "reconcile" {
+		if args[0] == "reliability" && len(args) > 2 && !strings.HasPrefix(args[2], "-") && !known(args[2], "reconcile", "manual-confirm") {
 			return fmt.Errorf("unknown hh reliability action %q", args[2])
 		}
 	case CommandCandidate:

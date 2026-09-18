@@ -20,6 +20,7 @@ func TestParseSupportedInvocations(t *testing.T) {
 		{name: "hh write status", args: []string{"hh", "write-status"}, command: CommandHH, subcommand: "write-status", commandArgs: []string{"write-status"}},
 		{name: "hh reliability applications", args: []string{"hh", "reliability", "applications", "--limit", "5"}, command: CommandHH, subcommand: "reliability", commandArgs: []string{"reliability", "applications", "--limit", "5"}},
 		{name: "hh reliability applications reconcile", args: []string{"hh", "reliability", "applications", "reconcile", "attempt-1"}, command: CommandHH, subcommand: "reliability", commandArgs: []string{"reliability", "applications", "reconcile", "attempt-1"}},
+		{name: "hh reliability applications manual confirmation", args: []string{"hh", "reliability", "applications", "manual-confirm", "attempt-1"}, command: CommandHH, subcommand: "reliability", commandArgs: []string{"reliability", "applications", "manual-confirm", "attempt-1"}},
 		{name: "candidate", args: []string{"candidate", "semantic", "search", "python"}, command: CommandCandidate, subcommand: "semantic", commandArgs: []string{"semantic", "search", "python"}},
 		{name: "profile", args: []string{"profile", "communication"}, command: CommandProfile, subcommand: "communication", commandArgs: []string{"communication"}},
 		{name: "storage", args: []string{"storage", "migrate-postgres"}, command: CommandStorage, subcommand: "migrate-postgres", commandArgs: []string{"migrate-postgres"}},

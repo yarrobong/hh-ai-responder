@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	applicationattempt "hh-ai-responder/internal/applicationattempt"
 	autochatattempt "hh-ai-responder/internal/autochatattempt"
 	applicationreconciliation "hh-ai-responder/internal/usecase/applicationreconciliation"
 	autochatreconciliation "hh-ai-responder/internal/usecase/autochatreconciliation"
@@ -31,6 +32,9 @@ func runReliabilityCommand(args []string, cfg Config, stdout io.Writer) error {
 	}
 	if len(args) > 1 && args[1] == "reconcile" {
 		return runReliabilityReconcileCommand(target, args[2:], cfg, stdout)
+	}
+	if len(args) > 1 && args[1] == "manual-confirm" {
+		return runReliabilityManualConfirmCommand(target, args[2:], cfg, stdout)
 	}
 	fs := flag.NewFlagSet("hh reliability "+target, flag.ContinueOnError)
 	fs.SetOutput(stdout)
@@ -158,8 +162,12 @@ func runReliabilityReconcileCommand(target string, args []string, cfg Config, st
 			return errors.New("application reconciliation store is unavailable")
 		}
 		service := applicationreconciliation.NewService(applicationreconciliation.Dependencies{Attempts: attemptStore, Reader: operatorApplicationEvidenceReader{source: readClient}, Notifications: responder.reliabilityNotifications})
-		result, reconcileErr := service.Reconcile(context.Background(), attemptID)
-		if err := writeReliabilityReconcileOutput(stdout, reliabilityReconcileOutput{Workflow: "application", AttemptID: result.Attempt.AttemptID, PreviousState: result.PreviousState, NewState: result.Attempt.State, Status: string(result.Status), EvidenceKind: string(result.Evidence.Kind), EvidenceSource: result.Evidence.Source, ProviderApplicationID: result.Evidence.ProviderApplicationID, ProviderNegotiationID: result.Evidence.ProviderNegotiationID, ObservedAt: result.Evidence.ObservedAt, Reason: result.Reason, CausalityNote: "Отклик подтверждён на HH; принадлежность именно этой попытке не установлена автоматически."}, *jsonOutput); err != nil {
+		result, reconcileErr := service.ReconcileBounded(context.Background(), attemptID, applicationreconciliation.DefaultMaxReconciliationPasses)
+		causalityNote := "Provider-side delivery remains unresolved; no retry is allowed."
+		if result.Status == applicationreconciliation.StatusConfirmed {
+			causalityNote = "Отклик подтверждён на HH; принадлежность именно этой попытке не установлена автоматически."
+		}
+		if err := writeReliabilityReconcileOutput(stdout, reliabilityReconcileOutput{Workflow: "application", AttemptID: result.Attempt.AttemptID, PreviousState: result.PreviousState, NewState: result.Attempt.State, Status: string(result.Status), EvidenceKind: string(result.Evidence.Kind), EvidenceSource: result.Evidence.Source, ConfirmationSource: result.Evidence.ConfirmationSource, ProviderApplicationID: result.Evidence.ProviderApplicationID, ProviderNegotiationID: result.Evidence.ProviderNegotiationID, ProviderConversationID: result.Evidence.ProviderConversationID, ProviderIdentities: result.Evidence.ProviderIdentities, ObservedAt: result.Evidence.ObservedAt, Reason: result.Reason, CausalityNote: causalityNote}, *jsonOutput); err != nil {
 			return err
 		}
 		return reconcileErr
@@ -188,21 +196,75 @@ func runReliabilityReconcileCommand(target string, args []string, cfg Config, st
 	return reconcileErr
 }
 
+func runReliabilityManualConfirmCommand(target string, args []string, cfg Config, stdout io.Writer) error {
+	if target != "applications" {
+		return errors.New("manual-confirm is available only for applications")
+	}
+	fs := flag.NewFlagSet("hh reliability applications manual-confirm", flag.ContinueOnError)
+	fs.SetOutput(stdout)
+	negotiationID := fs.String("negotiation-id", "", "provider negotiation ID confirmed by the operator")
+	conversationID := fs.String("conversation-id", "", "provider conversation ID confirmed by the operator")
+	jsonOutput := fs.Bool("json", false, "machine-readable JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 || strings.TrimSpace(fs.Arg(0)) == "" {
+		return errors.New("usage: hh reliability applications manual-confirm <attempt-id> --negotiation-id ID --conversation-id ID [--json]")
+	}
+	if strings.TrimSpace(*negotiationID) == "" || strings.TrimSpace(*conversationID) == "" {
+		return errors.New("--negotiation-id and --conversation-id are required")
+	}
+	backend, err := normalizeStorageBackend(cfg.StorageBackend)
+	if err != nil {
+		return err
+	}
+	var closePool func()
+	var pool *pgxpool.Pool
+	if backend == storageBackendPostgres {
+		opened, openErr := OpenPostgres(context.Background(), PostgresConfig{DatabaseURL: cfg.DatabaseURL})
+		if openErr != nil {
+			return openErr
+		}
+		pool, closePool = opened, opened.Close
+	} else {
+		closePool = func() {}
+	}
+	defer closePool()
+	store, err := buildApplicationAttemptReconciliationStore(cfg, backend, pool)
+	if err != nil {
+		return err
+	}
+	attemptStore, ok := store.(applicationreconciliation.AttemptStore)
+	if !ok {
+		return errors.New("application reconciliation store is unavailable")
+	}
+	service := applicationreconciliation.NewService(applicationreconciliation.Dependencies{Attempts: attemptStore})
+	result, confirmErr := service.ConfirmManual(context.Background(), strings.TrimSpace(fs.Arg(0)), applicationreconciliation.ManualConfirmation{ProviderNegotiationID: *negotiationID, ProviderConversationID: *conversationID})
+	output := reliabilityReconcileOutput{Workflow: "application", AttemptID: result.Attempt.AttemptID, PreviousState: result.PreviousState, NewState: result.Attempt.State, Status: string(result.Status), EvidenceKind: string(result.Evidence.Kind), EvidenceSource: result.Evidence.Source, ConfirmationSource: result.Evidence.ConfirmationSource, ProviderNegotiationID: result.Evidence.ProviderNegotiationID, ProviderConversationID: result.Evidence.ProviderConversationID, ProviderIdentities: result.Evidence.ProviderIdentities, ObservedAt: result.Evidence.ObservedAt, Reason: result.Reason, CausalityNote: "Operator manually verified the HH application and exact cover letter; no HH write was performed."}
+	if err := writeReliabilityReconcileOutput(stdout, output, *jsonOutput); err != nil {
+		return err
+	}
+	return confirmErr
+}
+
 type reliabilityReconcileOutput struct {
-	Workflow                  string    `json:"workflow"`
-	AttemptID                 string    `json:"attempt_id"`
-	PreviousState             any       `json:"previous_state"`
-	NewState                  any       `json:"new_state"`
-	Status                    string    `json:"status"`
-	EvidenceKind              string    `json:"evidence_kind,omitempty"`
-	EvidenceSource            string    `json:"evidence_source,omitempty"`
-	ProviderApplicationID     string    `json:"provider_application_id,omitempty"`
-	ProviderNegotiationID     string    `json:"provider_negotiation_id,omitempty"`
-	ProviderMessageID         string    `json:"provider_message_id,omitempty"`
-	ProviderOutgoingMessageID string    `json:"provider_outgoing_message_id,omitempty"`
-	ObservedAt                time.Time `json:"observed_at,omitempty"`
-	Reason                    string    `json:"reason,omitempty"`
-	CausalityNote             string    `json:"causality_note,omitempty"`
+	Workflow                  string                                `json:"workflow"`
+	AttemptID                 string                                `json:"attempt_id"`
+	PreviousState             any                                   `json:"previous_state"`
+	NewState                  any                                   `json:"new_state"`
+	Status                    string                                `json:"status"`
+	EvidenceKind              string                                `json:"evidence_kind,omitempty"`
+	EvidenceSource            string                                `json:"evidence_source,omitempty"`
+	ConfirmationSource        string                                `json:"confirmation_source,omitempty"`
+	ProviderApplicationID     string                                `json:"provider_application_id,omitempty"`
+	ProviderNegotiationID     string                                `json:"provider_negotiation_id,omitempty"`
+	ProviderConversationID    string                                `json:"provider_conversation_id,omitempty"`
+	ProviderIdentities        []applicationattempt.ProviderIdentity `json:"provider_identities,omitempty"`
+	ProviderMessageID         string                                `json:"provider_message_id,omitempty"`
+	ProviderOutgoingMessageID string                                `json:"provider_outgoing_message_id,omitempty"`
+	ObservedAt                time.Time                             `json:"observed_at,omitempty"`
+	Reason                    string                                `json:"reason,omitempty"`
+	CausalityNote             string                                `json:"causality_note,omitempty"`
 }
 
 func writeReliabilityReconcileOutput(out io.Writer, value reliabilityReconcileOutput, jsonOutput bool) error {
@@ -210,8 +272,14 @@ func writeReliabilityReconcileOutput(out io.Writer, value reliabilityReconcileOu
 		return writeJSON(out, value)
 	}
 	_, err := fmt.Fprintf(out, "workflow=%s attempt=%s previous=%v new=%v status=%s evidence=%s source=%s observed=%s\nreason=%s\n", value.Workflow, value.AttemptID, value.PreviousState, value.NewState, value.Status, value.EvidenceKind, value.EvidenceSource, value.ObservedAt.Format(time.RFC3339), value.Reason)
-	if value.ProviderApplicationID != "" || value.ProviderNegotiationID != "" || value.ProviderMessageID != "" || value.ProviderOutgoingMessageID != "" {
-		_, _ = fmt.Fprintf(out, "provider_application=%s provider_negotiation=%s provider_message=%s provider_outgoing=%s\n", value.ProviderApplicationID, value.ProviderNegotiationID, value.ProviderMessageID, value.ProviderOutgoingMessageID)
+	if value.ProviderApplicationID != "" || value.ProviderNegotiationID != "" || value.ProviderConversationID != "" || value.ProviderMessageID != "" || value.ProviderOutgoingMessageID != "" {
+		_, _ = fmt.Fprintf(out, "provider_application=%s provider_negotiation=%s provider_conversation=%s provider_message=%s provider_outgoing=%s\n", value.ProviderApplicationID, value.ProviderNegotiationID, value.ProviderConversationID, value.ProviderMessageID, value.ProviderOutgoingMessageID)
+	}
+	if value.ProviderIdentities != nil {
+		_, _ = fmt.Fprintf(out, "provider_identities=%v\n", value.ProviderIdentities)
+	}
+	if value.ConfirmationSource != "" {
+		_, _ = fmt.Fprintf(out, "confirmation_source=%s\n", value.ConfirmationSource)
 	}
 	if value.CausalityNote != "" {
 		_, _ = fmt.Fprintf(out, "causality=%s\n", value.CausalityNote)

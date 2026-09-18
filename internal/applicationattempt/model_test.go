@@ -45,6 +45,37 @@ func TestReconciliationConfirmsTargetWithoutClaimingAttemptCausality(t *testing.
 	}
 }
 
+func TestManualProviderVerificationConfirmsAndPreservesPreviousEvidence(t *testing.T) {
+	before := testAttempt(StateAccepted)
+	observed := before.UpdatedAt.Add(time.Minute)
+	previous := ReconciliationEvidence{
+		Kind: EvidenceConflicting, Strength: EvidenceAbsent, Source: "automatic-preflight-vs-negotiation",
+		ProviderNegotiationID: "5587518503", ProviderConversationID: "5641842900", ObservedAt: observed.Add(-time.Minute),
+	}
+	before.Reconciliation = &previous
+	after, err := before.WithReconciliation(ReconciliationEvidence{
+		Kind: EvidenceConfirmedResponseExists, Strength: EvidenceStrong, Source: EvidenceSourceManualProviderVerification,
+		ConfirmationSource:    EvidenceSourceManualProviderVerification,
+		ProviderNegotiationID: "5587518503", ProviderConversationID: "5641842900",
+		ProviderIdentities: []ProviderIdentity{
+			{Type: "negotiation", Value: "5587518503", Source: EvidenceSourceManualProviderVerification, VacancyID: 42},
+			{Type: "conversation", Value: "5641842900", Source: EvidenceSourceManualProviderVerification, VacancyID: 42},
+		},
+	}, observed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.State != StateTargetResponseConfirmed || after.Reconciliation == nil || after.Reconciliation.Source != EvidenceSourceManualProviderVerification {
+		t.Fatalf("manual confirmation did not become terminal confirmation: %+v", after)
+	}
+	if after.Reconciliation == nil || len(after.Reconciliation.History) != 1 || after.Reconciliation.History[0].Kind != EvidenceConflicting {
+		t.Fatalf("previous automatic evidence was not preserved: %+v", after.Reconciliation)
+	}
+	if after.Reconciliation.ProviderNegotiationID != "5587518503" || after.Reconciliation.ProviderConversationID != "5641842900" {
+		t.Fatalf("typed provider identities were not preserved: %+v", after.Reconciliation)
+	}
+}
+
 func TestOutcomePreservesIdentity(t *testing.T) {
 	before := testAttempt(StateSending)
 	after, err := before.WithOutcome(StateAccepted, before.UpdatedAt.Add(time.Minute), 200, "")

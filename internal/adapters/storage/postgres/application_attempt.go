@@ -2,6 +2,7 @@ package postgresstorage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -14,7 +15,7 @@ import (
 	attemptport "hh-ai-responder/internal/ports/applicationattempt"
 )
 
-const applicationAttemptColumns = "attempt_id, vacancy_id, resume_id, state, created_at, updated_at, provider_status, error_class, reconciliation_kind, reconciliation_strength, reconciliation_source, provider_application_id, provider_negotiation_id, provider_response_at, reconciliation_observed_at"
+const applicationAttemptColumns = "attempt_id, vacancy_id, resume_id, state, created_at, updated_at, provider_status, error_class, reconciliation_kind, reconciliation_strength, reconciliation_source, provider_application_id, provider_negotiation_id, provider_conversation_id, reconciliation_confirmation_source, reconciliation_provider_identities, provider_response_at, reconciliation_observed_at, reconciliation_history"
 
 type ApplicationAttemptRepository struct {
 	pool *pgxpool.Pool
@@ -40,7 +41,7 @@ func (r *ApplicationAttemptRepository) Reserve(ctx context.Context, value domain
 		ON CONFLICT DO NOTHING
 		RETURNING `+applicationAttemptColumns,
 		value.AttemptID, value.VacancyID, value.ResumeID, string(value.State), value.CreatedAt, value.UpdatedAt, value.ProviderStatus, value.ErrorClass,
-		"", "", "", "", "", nil, nil,
+		"", "", "", "", "", "", "", []byte("[]"), nil, nil, []byte("[]"),
 	))
 	if err == nil {
 		// The initial reservation has no reconciliation evidence.
@@ -139,17 +140,25 @@ func (r *ApplicationAttemptRepository) RecordReconciliation(ctx context.Context,
 	}
 	var providerResponseAt any
 	var observedAt any
+	history, marshalErr := json.Marshal(nilSafeHistory(updated.Reconciliation))
+	if marshalErr != nil {
+		return fmt.Errorf("marshal application attempt reconciliation history: %w", marshalErr)
+	}
+	identities, marshalErr := json.Marshal(nilSafeIdentities(updated.Reconciliation))
+	if marshalErr != nil {
+		return fmt.Errorf("marshal application attempt provider identities: %w", marshalErr)
+	}
 	if updated.Reconciliation != nil {
 		providerResponseAt = updated.Reconciliation.ProviderResponseAt
 		observedAt = updated.Reconciliation.ObservedAt
 	}
-	_, err = tx.Exec(ctx, `UPDATE automatic_application_attempts SET state=$2, updated_at=$3, reconciliation_kind=$4, reconciliation_strength=$5, reconciliation_source=$6, provider_application_id=$7, provider_negotiation_id=$8, provider_response_at=$9, reconciliation_observed_at=$10 WHERE attempt_id=$1`,
+	_, err = tx.Exec(ctx, `UPDATE automatic_application_attempts SET state=$2, updated_at=$3, reconciliation_kind=$4, reconciliation_strength=$5, reconciliation_source=$6, provider_application_id=$7, provider_negotiation_id=$8, provider_conversation_id=$9, reconciliation_confirmation_source=$10, reconciliation_provider_identities=$11, provider_response_at=$12, reconciliation_observed_at=$13, reconciliation_history=$14 WHERE attempt_id=$1`,
 		attemptID, string(updated.State), updated.UpdatedAt,
 		valueString(updated.Reconciliation, func(v *domain.ReconciliationEvidence) string { return string(v.Kind) }),
 		valueString(updated.Reconciliation, func(v *domain.ReconciliationEvidence) string { return string(v.Strength) }),
 		valueString(updated.Reconciliation, func(v *domain.ReconciliationEvidence) string { return v.Source }),
 		valueString(updated.Reconciliation, func(v *domain.ReconciliationEvidence) string { return v.ProviderApplicationID }),
-		valueString(updated.Reconciliation, func(v *domain.ReconciliationEvidence) string { return v.ProviderNegotiationID }), providerResponseAt, observedAt)
+		valueString(updated.Reconciliation, func(v *domain.ReconciliationEvidence) string { return v.ProviderNegotiationID }), valueString(updated.Reconciliation, func(v *domain.ReconciliationEvidence) string { return v.ProviderConversationID }), valueString(updated.Reconciliation, func(v *domain.ReconciliationEvidence) string { return v.ConfirmationSource }), identities, providerResponseAt, observedAt, history)
 	if err != nil {
 		return fmt.Errorf("record application attempt reconciliation: %w", err)
 	}
@@ -249,21 +258,48 @@ type attemptRow interface{ Scan(...any) error }
 func scanAttempt(row attemptRow) (domain.Attempt, error) {
 	var value domain.Attempt
 	var state string
-	var kind, strength, source, providerApplicationID, providerNegotiationID *string
+	var kind, strength, source, providerApplicationID, providerNegotiationID, providerConversationID, confirmationSource *string
 	var providerResponseAt, observedAt *time.Time
+	var identitiesRaw, historyRaw []byte
 	err := row.Scan(&value.AttemptID, &value.VacancyID, &value.ResumeID, &state, &value.CreatedAt, &value.UpdatedAt, &value.ProviderStatus, &value.ErrorClass,
-		&kind, &strength, &source, &providerApplicationID, &providerNegotiationID, &providerResponseAt, &observedAt)
+		&kind, &strength, &source, &providerApplicationID, &providerNegotiationID, &providerConversationID, &confirmationSource, &identitiesRaw, &providerResponseAt, &observedAt, &historyRaw)
 	if err != nil {
 		return domain.Attempt{}, err
 	}
 	value.State = domain.State(state)
-	if kind != nil || strength != nil || source != nil || providerApplicationID != nil || providerNegotiationID != nil || observedAt != nil {
-		value.Reconciliation = &domain.ReconciliationEvidence{Kind: domain.EvidenceKind(stringValue(kind)), Strength: domain.EvidenceStrength(stringValue(strength)), Source: stringValue(source), ProviderApplicationID: stringValue(providerApplicationID), ProviderNegotiationID: stringValue(providerNegotiationID), ProviderResponseAt: providerResponseAt}
+	var history []domain.ReconciliationEvidence
+	if len(historyRaw) > 0 {
+		if err := json.Unmarshal(historyRaw, &history); err != nil {
+			return domain.Attempt{}, fmt.Errorf("decode application attempt reconciliation history: %w", err)
+		}
+	}
+	var identities []domain.ProviderIdentity
+	if len(identitiesRaw) > 0 {
+		if err := json.Unmarshal(identitiesRaw, &identities); err != nil {
+			return domain.Attempt{}, fmt.Errorf("decode application attempt provider identities: %w", err)
+		}
+	}
+	if kind != nil || strength != nil || source != nil || providerApplicationID != nil || providerNegotiationID != nil || providerConversationID != nil || confirmationSource != nil || len(identities) > 0 || observedAt != nil {
+		value.Reconciliation = &domain.ReconciliationEvidence{Kind: domain.EvidenceKind(stringValue(kind)), Strength: domain.EvidenceStrength(stringValue(strength)), Source: stringValue(source), ConfirmationSource: stringValue(confirmationSource), ProviderApplicationID: stringValue(providerApplicationID), ProviderNegotiationID: stringValue(providerNegotiationID), ProviderConversationID: stringValue(providerConversationID), ProviderIdentities: identities, History: history, ProviderResponseAt: providerResponseAt}
 		if observedAt != nil {
 			value.Reconciliation.ObservedAt = *observedAt
 		}
 	}
 	return value, nil
+}
+
+func nilSafeIdentities(value *domain.ReconciliationEvidence) []domain.ProviderIdentity {
+	if value == nil || value.ProviderIdentities == nil {
+		return []domain.ProviderIdentity{}
+	}
+	return value.ProviderIdentities
+}
+
+func nilSafeHistory(value *domain.ReconciliationEvidence) []domain.ReconciliationEvidence {
+	if value == nil || value.History == nil {
+		return []domain.ReconciliationEvidence{}
+	}
+	return value.History
 }
 
 func stringValue(value *string) string {

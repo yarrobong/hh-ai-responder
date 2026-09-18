@@ -50,6 +50,20 @@ type evidenceReaderFake struct {
 	calls    int
 }
 
+type sequenceEvidenceReader struct {
+	snapshots []EvidenceSnapshot
+	calls     int
+}
+
+func (f *sequenceEvidenceReader) ReadVacancyResponseEvidence(context.Context, Target) (EvidenceSnapshot, error) {
+	index := f.calls
+	f.calls++
+	if index >= len(f.snapshots) {
+		index = len(f.snapshots) - 1
+	}
+	return f.snapshots[index], nil
+}
+
 func (f *evidenceReaderFake) ReadVacancyResponseEvidence(context.Context, Target) (EvidenceSnapshot, error) {
 	f.calls++
 	return f.snapshot, f.err
@@ -81,6 +95,113 @@ func TestServiceConfirmsFreshPositiveEvidenceWithoutWriter(t *testing.T) {
 	}
 	if result.Evidence.ProviderNegotiationID != "topic-42" {
 		t.Fatalf("provider id not preserved: %+v", result.Evidence)
+	}
+}
+
+func TestServiceManualProviderVerificationConfirmsWithoutProviderRead(t *testing.T) {
+	attempt := reconcileAttemptFixture(t, domain.StateAccepted)
+	reader := &evidenceReaderFake{}
+	store := &attemptStoreFake{attempt: attempt}
+	result, err := NewService(Dependencies{Attempts: store, Reader: reader}).ConfirmManual(context.Background(), attempt.AttemptID, ManualConfirmation{
+		ProviderNegotiationID:  "5587518503",
+		ProviderConversationID: "5641842900",
+	})
+	if err != nil || result.Status != StatusConfirmed || result.Attempt.State != domain.StateTargetResponseConfirmed || result.ReadAttempted || reader.calls != 0 || store.writes != 1 {
+		t.Fatalf("manual confirmation was not local-only and terminal: result=%+v err=%v reads=%d writes=%d", result, err, reader.calls, store.writes)
+	}
+	if result.Evidence.Source != domain.EvidenceSourceManualProviderVerification || result.Evidence.ConfirmationSource != domain.EvidenceSourceManualProviderVerification {
+		t.Fatalf("manual provenance missing: %+v", result.Evidence)
+	}
+	if result.Evidence.ProviderNegotiationID != "5587518503" || result.Evidence.ProviderConversationID != "5641842900" || len(result.Evidence.ProviderIdentities) != 2 {
+		t.Fatalf("typed provider identities missing: %+v", result.Evidence)
+	}
+}
+
+func TestServiceManualProviderVerificationPreservesConflictHistory(t *testing.T) {
+	attempt := reconcileAttemptFixture(t, domain.StateAccepted)
+	conflict := domain.ReconciliationEvidence{Kind: domain.EvidenceConflicting, Strength: domain.EvidenceAbsent, Source: "automatic-conflict", ObservedAt: attempt.UpdatedAt}
+	attempt.Reconciliation = &conflict
+	store := &attemptStoreFake{attempt: attempt}
+	result, err := NewService(Dependencies{Attempts: store}).ConfirmManual(context.Background(), attempt.AttemptID, ManualConfirmation{
+		ProviderNegotiationID: "5587518503", ProviderConversationID: "5641842900",
+	})
+	if err != nil || result.Attempt.State != domain.StateTargetResponseConfirmed || result.Attempt.Reconciliation == nil || len(result.Attempt.Reconciliation.History) != 1 || result.Attempt.Reconciliation.History[0].Source != "automatic-conflict" {
+		t.Fatalf("manual confirmation erased automatic audit history: result=%+v err=%v", result, err)
+	}
+}
+
+func TestServiceIgnoresRepeatedSameNegotiationIdentity(t *testing.T) {
+	attempt := reconcileAttemptFixture(t, domain.StateAccepted)
+	reader := &evidenceReaderFake{snapshot: EvidenceSnapshot{
+		VacancyID: 42, PreflightAvailable: true, ApplicationsAvailable: true,
+		Applications: []ProviderResponse{
+			{VacancyID: 42, NegotiationID: "topic-42", ResponseByApplicant: true},
+			{VacancyID: 42, NegotiationID: "topic-42", ResponseByApplicant: true},
+		},
+	}}
+	store := &attemptStoreFake{attempt: attempt}
+	result, err := NewService(Dependencies{Attempts: store, Reader: reader}).Reconcile(context.Background(), attempt.AttemptID)
+	if err != nil || result.Status != StatusConfirmed || result.Attempt.State != domain.StateTargetResponseConfirmed {
+		t.Fatalf("repeated identity was treated as conflict: result=%+v err=%v", result, err)
+	}
+}
+
+func TestServiceReconcileBoundedStopsAfterConfirmation(t *testing.T) {
+	attempt := reconcileAttemptFixture(t, domain.StateAccepted)
+	reader := &sequenceEvidenceReader{snapshots: []EvidenceSnapshot{
+		{VacancyID: 42, PreflightAvailable: true, ApplicationsAvailable: true, Preflight: PreflightEvidence{AlreadyRespondedKnown: true, AlreadyResponded: false}},
+		{VacancyID: 42, PreflightAvailable: true, ApplicationsAvailable: true, Applications: []ProviderResponse{{VacancyID: 42, NegotiationID: "topic-42", Source: "negotiations_page", ResponseByApplicant: true}}},
+		{VacancyID: 42, PreflightAvailable: true, ApplicationsAvailable: true, Applications: []ProviderResponse{{VacancyID: 42, NegotiationID: "topic-43", Source: "negotiations_page", ResponseByApplicant: true}}},
+	}}
+	store := &attemptStoreFake{attempt: attempt}
+	result, err := NewService(Dependencies{Attempts: store, Reader: reader}).ReconcileBounded(context.Background(), attempt.AttemptID, 3)
+	if err != nil || result.Status != StatusConfirmed || reader.calls != 2 || result.Attempt.State != domain.StateTargetResponseConfirmed {
+		t.Fatalf("bounded reconciliation did not stop on confirmation: result=%+v err=%v calls=%d", result, err, reader.calls)
+	}
+}
+
+func TestServiceReconcileBoundedStopsAtPassLimitWithoutReleasingAttempt(t *testing.T) {
+	attempt := reconcileAttemptFixture(t, domain.StateAccepted)
+	reader := &sequenceEvidenceReader{snapshots: []EvidenceSnapshot{{
+		VacancyID: 42, PreflightAvailable: true, ApplicationsAvailable: true,
+		Preflight: PreflightEvidence{AlreadyRespondedKnown: true, AlreadyResponded: false},
+	}}}
+	store := &attemptStoreFake{attempt: attempt}
+	result, err := NewService(Dependencies{Attempts: store, Reader: reader}).ReconcileBounded(context.Background(), attempt.AttemptID, 3)
+	if err != nil || result.Status != StatusInsufficient || reader.calls != 3 || result.Attempt.State != domain.StateAccepted || !domain.IsBlocking(result.Attempt.State) {
+		t.Fatalf("bounded unresolved reconciliation was not fail-closed: result=%+v err=%v calls=%d", result, err, reader.calls)
+	}
+}
+
+func TestServiceDoesNotConflictAcrossTypedProviderIdentities(t *testing.T) {
+	attempt := reconcileAttemptFixture(t, domain.StateAccepted)
+	reader := &evidenceReaderFake{snapshot: EvidenceSnapshot{
+		VacancyID: 42, PreflightAvailable: true, ApplicationsAvailable: true,
+		Applications: []ProviderResponse{
+			{VacancyID: 42, NegotiationID: "topic-42", Source: "negotiations_page", ResponseByApplicant: true},
+			{VacancyID: 42, ConversationID: "chat-42", Source: "conversation_page", ResponseByApplicant: true},
+		},
+	}}
+	store := &attemptStoreFake{attempt: attempt}
+	result, err := NewService(Dependencies{Attempts: store, Reader: reader}).Reconcile(context.Background(), attempt.AttemptID)
+	if err != nil || result.Status != StatusConfirmed || result.Evidence.ProviderNegotiationID != "topic-42" || result.Evidence.ProviderConversationID != "chat-42" {
+		t.Fatalf("different typed identities were treated as conflict: result=%+v err=%v", result, err)
+	}
+}
+
+func TestServiceConflictsDifferentValuesOfSameIdentityType(t *testing.T) {
+	attempt := reconcileAttemptFixture(t, domain.StateAccepted)
+	reader := &evidenceReaderFake{snapshot: EvidenceSnapshot{
+		VacancyID: 42, PreflightAvailable: true, ApplicationsAvailable: true,
+		Applications: []ProviderResponse{
+			{VacancyID: 42, NegotiationID: "topic-42", Source: "negotiations_page", ResponseByApplicant: true},
+			{VacancyID: 42, NegotiationID: "topic-43", Source: "negotiations_page", ResponseByApplicant: true},
+		},
+	}}
+	store := &attemptStoreFake{attempt: attempt}
+	result, err := NewService(Dependencies{Attempts: store, Reader: reader}).Reconcile(context.Background(), attempt.AttemptID)
+	if err != nil || result.Status != StatusConflicting || result.Evidence.Kind != domain.EvidenceConflicting || len(result.Evidence.ProviderIdentities) != 2 {
+		t.Fatalf("same-type identity conflict was not preserved: result=%+v err=%v", result, err)
 	}
 }
 

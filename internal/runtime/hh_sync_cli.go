@@ -18,7 +18,7 @@ import (
 
 func runHHCommand(args []string, cfg Config, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: hh sync [vacancies|applications|conversations] | hh sync conversation <conversation-id-or-chat-id> | hh inbox | hh workflow | hh draft <conversation-id> | hh pilot-candidates | hh pilot-shortlist | hh pilot-show <conversation-id> | hh write-status | hh eligible | hh eligibility-report | hh eligibility-summary | hh quality-report | hh action preflight|request-preview <action-id> | hh reliability applications|autochat [--limit N] [--state STATE] [--all] [--json] | hh reliability applications|autochat reconcile <attempt-id> [--json]")
+		return errors.New("usage: hh sync [vacancies|applications|conversations] | hh sync conversation <conversation-id-or-chat-id> | hh inbox | hh workflow | hh draft <conversation-id> | hh pilot-candidates | hh pilot-shortlist | hh pilot-show <conversation-id> | hh write-status | hh eligible | hh eligibility-report | hh eligibility-summary | hh quality-report | hh action preflight|request-preview <action-id> | hh reliability applications|autochat [--limit N] [--state STATE] [--all] [--json] | hh reliability applications|autochat reconcile <attempt-id> [--json] | hh reliability applications manual-confirm <attempt-id> --negotiation-id ID --conversation-id ID")
 	}
 	if args[0] == "reliability" {
 		return runReliabilityCommand(args[1:], cfg, stdout)

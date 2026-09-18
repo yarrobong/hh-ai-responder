@@ -27,6 +27,9 @@ type ProviderResponse struct {
 	VacancyID           int
 	ApplicationID       string
 	NegotiationID       string
+	ConversationID      string
+	Source              string
+	Identities          []domain.ProviderIdentity
 	ResponseByApplicant bool
 	ProviderResponseAt  *time.Time
 }
@@ -71,4 +74,12 @@ type Result struct {
 	Evidence      domain.ReconciliationEvidence
 	ReadAttempted bool
 	Reason        string
+}
+
+// ManualConfirmation is an operator assertion obtained by opening HH and
+// visually verifying the submitted application and exact cover letter. It is
+// local provenance only and never grants access to an HH writer.
+type ManualConfirmation struct {
+	ProviderNegotiationID  string
+	ProviderConversationID string
 }

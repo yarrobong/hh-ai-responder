@@ -50,25 +50,29 @@ const (
 )
 
 type ApplicationAttemptReadModel struct {
-	AttemptID             string                              `json:"attempt_id"`
-	VacancyID             int                                 `json:"vacancy_id"`
-	ResumeID              string                              `json:"resume_id"`
-	State                 applicationattempt.State            `json:"state"`
-	Classification        Classification                      `json:"classification"`
-	DisplayLabel          string                              `json:"display_label"`
-	Reason                string                              `json:"reason,omitempty"`
-	CreatedAt             time.Time                           `json:"created_at"`
-	UpdatedAt             time.Time                           `json:"updated_at"`
-	ProviderStatus        int                                 `json:"provider_status,omitempty"`
-	ErrorClass            string                              `json:"error_class,omitempty"`
-	ProviderApplicationID string                              `json:"provider_application_id,omitempty"`
-	ProviderNegotiationID string                              `json:"provider_negotiation_id,omitempty"`
-	EvidenceKind          applicationattempt.EvidenceKind     `json:"evidence_kind,omitempty"`
-	EvidenceSource        string                              `json:"evidence_source,omitempty"`
-	EvidenceStrength      applicationattempt.EvidenceStrength `json:"evidence_strength,omitempty"`
-	ObservedAt            *time.Time                          `json:"observed_at,omitempty"`
-	ProviderResponseAt    *time.Time                          `json:"provider_response_at,omitempty"`
-	CausalityNote         string                              `json:"causality_note,omitempty"`
+	AttemptID              string                                      `json:"attempt_id"`
+	VacancyID              int                                         `json:"vacancy_id"`
+	ResumeID               string                                      `json:"resume_id"`
+	State                  applicationattempt.State                    `json:"state"`
+	Classification         Classification                              `json:"classification"`
+	DisplayLabel           string                                      `json:"display_label"`
+	Reason                 string                                      `json:"reason,omitempty"`
+	CreatedAt              time.Time                                   `json:"created_at"`
+	UpdatedAt              time.Time                                   `json:"updated_at"`
+	ProviderStatus         int                                         `json:"provider_status,omitempty"`
+	ErrorClass             string                                      `json:"error_class,omitempty"`
+	ProviderApplicationID  string                                      `json:"provider_application_id,omitempty"`
+	ProviderNegotiationID  string                                      `json:"provider_negotiation_id,omitempty"`
+	ProviderConversationID string                                      `json:"provider_conversation_id,omitempty"`
+	ProviderIdentities     []applicationattempt.ProviderIdentity       `json:"provider_identities,omitempty"`
+	EvidenceKind           applicationattempt.EvidenceKind             `json:"evidence_kind,omitempty"`
+	EvidenceSource         string                                      `json:"evidence_source,omitempty"`
+	ConfirmationSource     string                                      `json:"confirmation_source,omitempty"`
+	EvidenceStrength       applicationattempt.EvidenceStrength         `json:"evidence_strength,omitempty"`
+	ReconciliationHistory  []applicationattempt.ReconciliationEvidence `json:"reconciliation_history,omitempty"`
+	ObservedAt             *time.Time                                  `json:"observed_at,omitempty"`
+	ProviderResponseAt     *time.Time                                  `json:"provider_response_at,omitempty"`
+	CausalityNote          string                                      `json:"causality_note,omitempty"`
 }
 
 type AutoChatAttemptReadModel struct {
@@ -256,9 +260,13 @@ func applicationModel(value applicationattempt.Attempt) ApplicationAttemptReadMo
 	if value.Reconciliation != nil {
 		model.ProviderApplicationID = value.Reconciliation.ProviderApplicationID
 		model.ProviderNegotiationID = value.Reconciliation.ProviderNegotiationID
+		model.ProviderConversationID = value.Reconciliation.ProviderConversationID
+		model.ProviderIdentities = value.Reconciliation.ProviderIdentities
 		model.EvidenceKind = value.Reconciliation.Kind
 		model.EvidenceSource = value.Reconciliation.Source
+		model.ConfirmationSource = value.Reconciliation.ConfirmationSource
 		model.EvidenceStrength = value.Reconciliation.Strength
+		model.ReconciliationHistory = value.Reconciliation.History
 		if !value.Reconciliation.ObservedAt.IsZero() {
 			observed := value.Reconciliation.ObservedAt
 			model.ObservedAt = &observed

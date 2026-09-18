@@ -69,7 +69,7 @@ func readOperatorApplicationEvidence(ctx context.Context, reader interface {
 			if item.VacancyID != vacancyID || item.Metadata["delivery_confirmed"] != "true" {
 				continue
 			}
-			response := applicationreconciliation.ProviderResponse{VacancyID: item.VacancyID, NegotiationID: strings.TrimSpace(item.ExternalID), ResponseByApplicant: true}
+			response := applicationreconciliation.ProviderResponse{VacancyID: item.VacancyID, NegotiationID: strings.TrimSpace(item.ExternalID), ConversationID: strings.TrimSpace(item.ConversationExternal), Source: "negotiations_page", ResponseByApplicant: true}
 			if !item.UpdatedAt.IsZero() {
 				at := item.UpdatedAt.UTC()
 				response.ProviderResponseAt = &at
