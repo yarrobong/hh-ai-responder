@@ -140,7 +140,7 @@ func validateCommandArgs(command CommandKind, args []string) error {
 		}
 	case CommandHHAPI:
 		if !known(args[0], "auth", "doctor", "logout") {
-			return fmt.Errorf("unknown hh-api command %q", args[0])
+			return errors.New("unknown hh-api subcommand")
 		}
 		for _, arg := range args[1:] {
 			if !strings.HasPrefix(arg, "-") {

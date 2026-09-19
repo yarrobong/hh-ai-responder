@@ -178,7 +178,7 @@ func runHHAPIDoctor(ctx context.Context, cfg Config, stdout io.Writer, deps HHAP
 	_, _ = fmt.Fprintln(stdout, "Token expired: no")
 
 	oauthConfig := hhAPIReadOAuthConfig(cfg)
-	_, client, err := newHHAPIClientWithStore(cfg, oauthConfig, deps, tokenStore)
+	_, client, err := newHHAPIClientWithStore(cfg, oauthConfig, deps, hhAPINoRefreshTokenStore{tokens: tokens})
 	if err != nil {
 		return err
 	}
@@ -209,6 +209,36 @@ func runHHAPIDoctor(ctx context.Context, cfg Config, stdout io.Writer, deps HHAP
 	_, _ = fmt.Fprintln(stdout, "Vacancy read: OK")
 	_, _ = fmt.Fprintln(stdout, "Overall: AUTH_OK")
 	return nil
+}
+
+// hhAPINoRefreshTokenStore gives doctor a read-only view of the already
+// inspected token pair. Removing the refresh token from this view prevents
+// APIHHClient's normal 401 refresh path and makes token-file mutation
+// impossible during diagnostics.
+type hhAPINoRefreshTokenStore struct {
+	tokens hhapi.OAuthTokens
+}
+
+var _ hhapi.TokenStore = (*hhAPINoRefreshTokenStore)(nil)
+
+func (s hhAPINoRefreshTokenStore) Load(ctx context.Context) (hhapi.OAuthTokens, error) {
+	if ctx == nil {
+		return hhapi.OAuthTokens{}, errors.New("doctor token context is invalid")
+	}
+	if err := ctx.Err(); err != nil {
+		return hhapi.OAuthTokens{}, err
+	}
+	tokens := s.tokens
+	tokens.RefreshToken = ""
+	return tokens, nil
+}
+
+func (hhAPINoRefreshTokenStore) Save(context.Context, hhapi.OAuthTokens) error {
+	return errors.New("doctor token storage is disabled")
+}
+
+func (hhAPINoRefreshTokenStore) Delete(context.Context) error {
+	return errors.New("doctor token deletion is disabled")
 }
 
 func runHHAPILogout(ctx context.Context, cfg Config, stdout io.Writer) error {

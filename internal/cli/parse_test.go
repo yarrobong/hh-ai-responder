@@ -59,9 +59,24 @@ func TestParseSupportedInvocations(t *testing.T) {
 }
 
 func TestParseRejectsUnknownCommands(t *testing.T) {
-	for _, args := range [][]string{{"unknown"}, {"hh", "unknown"}, {"hh-api", "unknown"}} {
+	for _, args := range [][]string{{"unknown"}, {"hh", "unknown"}} {
 		if _, err := Parse(args); err == nil {
 			t.Fatalf("Parse(%#v) accepted an unsupported command", args)
+		}
+	}
+}
+
+func TestParseHHAPIUnknownSubcommandRedactsRawArgument(t *testing.T) {
+	for _, code := range []string{"authorization-code-cli-sentinel", "unknown-hh-api-sentinel"} {
+		_, err := Parse([]string{"hh-api", code})
+		if err == nil {
+			t.Fatalf("Parse accepted unknown hh-api subcommand %q", code)
+		}
+		if got, want := err.Error(), "unknown hh-api subcommand"; got != want {
+			t.Fatalf("error = %q, want fixed redacted error %q", got, want)
+		}
+		if strings.Contains(err.Error(), code) {
+			t.Fatalf("error exposed raw subcommand %q: %v", code, err)
 		}
 	}
 }

@@ -242,6 +242,64 @@ func TestHHAPIDoctorReportsMissingTokenWithoutNetworkAccess(t *testing.T) {
 	assertHHAPISafeOutput(t, out.String()+errOut.String())
 }
 
+func TestHHAPIDoctorDoesNotRefreshOrSaveAfterAuthFailure(t *testing.T) {
+	var methods []string
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		methods = append(methods, r.Method)
+		mu.Unlock()
+		switch r.URL.Path {
+		case "/me":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = io.WriteString(w, `{"error":"token_expired"}`)
+		case "/token":
+			writeHHAPIJSON(t, w, map[string]any{
+				"access_token":  "rotated-access-token-task6-sentinel",
+				"refresh_token": "rotated-refresh-token-task6-sentinel",
+				"token_type":    "bearer",
+				"expires_in":    3600,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	tokenFile := filepath.Join(t.TempDir(), "api-token.json")
+	if err := hhapi.NewFileTokenStore(tokenFile).Save(context.Background(), hhapi.OAuthTokens{
+		AccessToken: hhAPIAccessTokenSentinel, RefreshToken: hhAPIRefreshTokenSentinel, TokenType: "bearer", ExpiresAt: time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(tokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := testHHAPIConfig(t, server.URL, server.URL+"/token", tokenFile, "https://operator.example/callback")
+	var out, errOut bytes.Buffer
+	if err := runHHAPICommandWithDeps(context.Background(), []string{"doctor"}, cfg, strings.NewReader(""), &out, &errOut, HHAPICommandDeps{}); err == nil {
+		t.Fatal("doctor succeeded after API auth failure")
+	}
+	after, err := os.ReadFile(tokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("doctor changed the token file after an auth failure")
+	}
+	mu.Lock()
+	gotMethods := append([]string(nil), methods...)
+	mu.Unlock()
+	for _, method := range gotMethods {
+		if method != http.MethodGet {
+			t.Fatalf("doctor issued non-GET request after auth failure: %v", gotMethods)
+		}
+	}
+	assertHHAPISafeOutput(t, out.String()+errOut.String())
+}
+
 func TestHHAPILogoutDeletesOnlyConfiguredTokenFile(t *testing.T) {
 	dir := t.TempDir()
 	tokenFile := filepath.Join(dir, "configured-token.json")
