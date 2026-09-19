@@ -552,12 +552,12 @@ func (r *HHAIResponder) buildCareerAgentPilotPreviewFromState(value Vacancy, pre
 		preview.Reasons = append(preview.Reasons, "resume router requires review: "+strings.Join(route.Reasons, "; "))
 		return preview, nil
 	}
-	selectedHash := r.resumeHashForProfile(route.SelectedResumeID)
-	if selectedHash == "" {
+	selectedIdentifier := r.resumeIdentifierForProfile(route.SelectedResumeID)
+	if selectedIdentifier == "" {
 		preview.Reasons = append(preview.Reasons, "selected resume is not available in the fresh resume read")
 		return preview, nil
 	}
-	selectedResume, candidate, resolver, err := r.activateResume(selectedHash)
+	selectedResume, candidate, resolver, err := r.activateResume(selectedIdentifier)
 	if err != nil {
 		return PilotPreview{}, fmt.Errorf("pilot selected resume read failed: %w", err)
 	}
@@ -1022,7 +1022,7 @@ func (r *HHAIResponder) buildCareerAgentPilotIdentity(vacancyID int, contentHash
 	if route.Status != careeragent.RouteSelected {
 		return applicationpilot.CurrentIdentity{}, errors.New("fresh resume router no longer selects the approved resume")
 	}
-	selectedHash := r.resumeHashForProfile(route.SelectedResumeID)
+	selectedIdentifier := r.resumeIdentifierForProfile(route.SelectedResumeID)
 	preflight, err := r.GetVacancyPreflight(value)
 	if err != nil {
 		return applicationpilot.CurrentIdentity{}, err
@@ -1030,7 +1030,7 @@ func (r *HHAIResponder) buildCareerAgentPilotIdentity(vacancyID int, contentHash
 	if preflight.ArchivedKnown && preflight.Archived || preflight.alreadyRespondedEvidence().Value != AlreadyRespondedNo || preflight.CanApplyKnown && !preflight.CanApply || preflight.TestPresentKnown && preflight.TestPresent {
 		return applicationpilot.CurrentIdentity{}, errors.New("fresh pilot preflight blocks the approved application")
 	}
-	return applicationpilot.CurrentIdentity{VacancyID: value.ID, ResumeID: selectedHash, ContentHash: contentHash}, nil
+	return applicationpilot.CurrentIdentity{VacancyID: value.ID, ResumeID: selectedIdentifier, ContentHash: contentHash}, nil
 }
 
 func markPilotNonceUsed(path string, artifact *PilotArtifact) error {

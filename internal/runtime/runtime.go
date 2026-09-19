@@ -1117,16 +1117,19 @@ type HHResponse struct {
 }
 
 type HHAIResponder struct {
-	ctx                          context.Context
-	baseURL                      *url.URL
-	searchParams                 url.Values
-	searchProfiles               []vacancySearchProfile
-	cookiesPath                  string
-	maxResponses                 int
-	client                       *http.Client
-	jar                          *MemoryPersistentJar
-	requester                    *HHRequester
-	resumeHash                   string
+	ctx            context.Context
+	baseURL        *url.URL
+	searchParams   url.Values
+	searchProfiles []vacancySearchProfile
+	cookiesPath    string
+	maxResponses   int
+	client         *http.Client
+	jar            *MemoryPersistentJar
+	requester      *HHRequester
+	resumeHash     string
+	// resumeIdentifier is the canonical provider resume ID for read-only
+	// transports. resumeHash remains reserved for browser/web resume hashes.
+	resumeIdentifier             string
 	resumeExperience             string
 	resumeFacts                  ResumeFacts
 	candidateProfile             CandidateProfile
@@ -1188,22 +1191,24 @@ type HHAIResponder struct {
 	careerAgentSearchSources     map[int][]careeragent.SearchProfileEvidence
 	careerAgentDetailCache       map[int]Vacancy
 	careerAgentWriteCount        int
-	resumeFactsByHash            map[string]ResumeFacts
-	vacancySearchSources         map[int][]string
-	alreadyRespondedStatePath    string
-	alreadyResponded             map[int]struct{}
-	chatURL                      string
-	resumeProfileFrontURL        string
-	ignoredChats                 []int64
-	ignoredChatTriggers          map[string]struct{}
-	preflightCache               map[int]VacancyPreflight
-	readClient                   *HHAIResponderReadClient
-	readSource                   hhreadports.HHReadSource
-	apiReadFactory               func(url.Values) (hhreadports.HHReadSource, error)
-	transport                    string
-	transportMetadata            TransportMetadata
-	browserSource                browsersession.BrowserPageSource
-	browserClose                 func() error
+	// Legacy field name; API entries are keyed by provider resume ID, while
+	// browser entries remain keyed by their resume hash.
+	resumeFactsByHash         map[string]ResumeFacts
+	vacancySearchSources      map[int][]string
+	alreadyRespondedStatePath string
+	alreadyResponded          map[int]struct{}
+	chatURL                   string
+	resumeProfileFrontURL     string
+	ignoredChats              []int64
+	ignoredChatTriggers       map[string]struct{}
+	preflightCache            map[int]VacancyPreflight
+	readClient                *HHAIResponderReadClient
+	readSource                hhreadports.HHReadSource
+	apiReadFactory            func(url.Values) (hhreadports.HHReadSource, error)
+	transport                 string
+	transportMetadata         TransportMetadata
+	browserSource             browsersession.BrowserPageSource
+	browserClose              func() error
 
 	eventWriter        io.Writer
 	eventMu            sync.Mutex
@@ -1804,7 +1809,7 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 
 	logger.Debug("HH profile loaded")
 
-	if responder.resumeHash == "" {
+	if responder.transport != transportAPI && responder.resumeHash == "" {
 		responder.resumeHash = responder.latestResumeHash
 	}
 
@@ -1825,7 +1830,7 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 	}
 	responder.resumeFacts = resumeFacts
 	responder.resumeExperience = resumeFacts.ExperienceText
-	responder.resumeFactsByHash = map[string]ResumeFacts{resume.Hash: resumeFacts}
+	responder.resumeFactsByHash = map[string]ResumeFacts{responder.resumeIdentifierForValue(*resume): resumeFacts}
 	if backend == storageBackendJSON && responder.candidateProfilePath != "" {
 		if fullName := strings.TrimSpace(responder.GetFullName()); fullName != "" && sourcePriority(responder.candidateProfile.Identity.FullName.Source) <= sourcePriority(CandidateSourceHHResume) {
 			responder.candidateProfile.Identity.FullName = ProfileStringFact{Value: fullName, ProfileFact: ProfileFact{Source: CandidateSourceHHResume, Confirmed: true, ConfirmedAt: time.Now(), Evidence: []string{"HH account profile"}}}
@@ -2019,8 +2024,12 @@ func (r *HHAIResponder) buildRequestAtBase(baseURL *url.URL, method, endpoint st
 // }
 
 func (r *HHAIResponder) GetCurrentResume() *ResumeItem {
+	identifier := strings.TrimSpace(r.resumeIdentifier)
+	if identifier == "" {
+		identifier = strings.TrimSpace(r.resumeHash)
+	}
 	for _, res := range r.resumes {
-		if res.Hash == r.resumeHash {
+		if r.resumeIdentifierForValue(res) == identifier {
 			return &res
 		}
 	}
@@ -2601,7 +2610,11 @@ func (r *HHAIResponder) GetResumeFacts() (ResumeFacts, error) {
 		return ResumeFacts{}, err
 	}
 	if r.transport == transportAPI {
-		if facts, ok := r.resumeFactsByHash[r.resumeHash]; ok {
+		identifier := strings.TrimSpace(r.resumeIdentifier)
+		if identifier == "" {
+			return ResumeFacts{}, &TransportError{Code: transportNotImplemented, Reason: "API resume identifier is unavailable"}
+		}
+		if facts, ok := r.resumeFactsByHash[identifier]; ok {
 			return facts, nil
 		}
 		return ResumeFacts{}, &TransportError{Code: transportNotImplemented, Reason: "API resume facts are unavailable for the selected resume"}

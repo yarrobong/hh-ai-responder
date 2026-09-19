@@ -297,12 +297,13 @@ type ResumeFacts struct {
 }
 
 type ResumeItem struct {
-	Id     int64
-	Hash   string
-	Title  string
-	Skills string
-	Area   string
-	Salary string
+	Id         int64
+	ProviderID string // Canonical provider resume identifier for read operations; Hash remains the legacy browser/web hash.
+	Hash       string
+	Title      string
+	Skills     string
+	Area       string
+	Salary     string
 }
 
 // Validate checks only aggregate invariants. It intentionally does not

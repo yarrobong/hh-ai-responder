@@ -291,13 +291,13 @@ func (r *HHAIResponder) ApplyVacancies() error {
 			summary.ResumeRouted++
 			summary.FinalRouted++
 			recordStage(stageStats, "resume_routing", "selected", false, true)
-			hash := r.resumeHashForProfile(route.SelectedResumeID)
-			if hash == "" {
-				hash = route.SelectedResumeID
+			identifier := r.resumeIdentifierForProfile(route.SelectedResumeID)
+			if identifier == "" {
+				identifier = route.SelectedResumeID
 			}
-			if hash != r.resumeHash {
+			if identifier != r.resumeIdentifierForValue(selectedResume) {
 				var activateErr error
-				selectedResume, selectedCandidate, selectedResolver, activateErr = r.activateResume(hash)
+				selectedResume, selectedCandidate, selectedResolver, activateErr = r.activateResume(identifier)
 				if activateErr != nil {
 					summary.ReviewRequired++
 					summary.ReviewAfterDetail++

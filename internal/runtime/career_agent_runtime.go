@@ -78,34 +78,44 @@ func (r *HHAIResponder) rebuildCareerAgentSearchProfiles(profiles []careeragent.
 	}
 }
 
-func (r *HHAIResponder) resumeProfileForHash(hash string) (careeragent.ResumeProfile, bool) {
+func (r *HHAIResponder) resumeProfileForIdentifier(identifier string) (careeragent.ResumeProfile, bool) {
 	for _, profile := range r.careerAgentResumes {
-		if profile.Hash == hash || profile.ID == hash {
+		if profile.ProviderID == identifier || profile.Hash == identifier || profile.ID == identifier {
 			return profile, profile.Enabled
 		}
 	}
 	return careeragent.ResumeProfile{}, false
 }
 
-func (r *HHAIResponder) resumeHashForProfile(id string) string {
+func (r *HHAIResponder) resumeIdentifierForProfile(id string) string {
 	for _, profile := range r.careerAgentResumes {
 		if profile.ID == id {
+			if value := strings.TrimSpace(profile.ProviderID); value != "" {
+				return value
+			}
 			return profile.Hash
 		}
 	}
 	return ""
 }
 
-func (r *HHAIResponder) resumeProfileID(hash string) string {
+func (r *HHAIResponder) resumeProfileID(identifier string) string {
 	if r == nil {
 		return ""
 	}
 	for _, profile := range r.careerAgentResumes {
-		if profile.ID == hash || profile.Hash == hash {
+		if profile.ID == identifier || profile.ProviderID == identifier || profile.Hash == identifier {
 			return profile.ID
 		}
 	}
 	return ""
+}
+
+func (r *HHAIResponder) resumeIdentifierForValue(value ResumeItem) string {
+	if providerID := strings.TrimSpace(value.ProviderID); providerID != "" {
+		return providerID
+	}
+	return strings.TrimSpace(value.Hash)
 }
 
 func (r *HHAIResponder) routeResumeForVacancy(value Vacancy) careeragent.RouteDecision {
@@ -249,27 +259,36 @@ func careerAgentEvidence(value Vacancy) []string {
 	return evidence
 }
 
-func (r *HHAIResponder) activateResume(hash string) (ResumeItem, LegacyCandidateContext, *CandidateContextResolver, error) {
+func (r *HHAIResponder) activateResume(identifier string) (ResumeItem, LegacyCandidateContext, *CandidateContextResolver, error) {
 	for _, value := range r.resumes {
-		if value.Hash != hash {
+		if r.resumeIdentifierForValue(value) != identifier {
 			continue
 		}
 		if r.resumeFactsByHash == nil {
 			r.resumeFactsByHash = map[string]ResumeFacts{}
 		}
-		facts, ok := r.resumeFactsByHash[hash]
+		facts, ok := r.resumeFactsByHash[identifier]
 		if !ok {
-			old := r.resumeHash
-			r.resumeHash = hash
+			oldHash, oldIdentifier := r.resumeHash, r.resumeIdentifier
+			if r.transport == transportAPI {
+				r.resumeIdentifier = identifier
+			} else {
+				r.resumeHash = identifier
+			}
 			loaded, err := r.GetResumeFacts()
-			r.resumeHash = old
+			r.resumeHash, r.resumeIdentifier = oldHash, oldIdentifier
 			if err != nil {
-				return ResumeItem{}, LegacyCandidateContext{}, nil, fmt.Errorf("load facts for resume %s: %w", hash, err)
+				return ResumeItem{}, LegacyCandidateContext{}, nil, fmt.Errorf("load facts for resume %s: %w", identifier, err)
 			}
 			facts, ok = loaded, true
-			r.resumeFactsByHash[hash] = facts
+			r.resumeFactsByHash[identifier] = facts
 		}
-		r.resumeHash, r.resumeFacts, r.resumeExperience = value.Hash, facts, facts.ExperienceText
+		if r.transport == transportAPI {
+			r.resumeIdentifier = r.resumeIdentifierForValue(value)
+		} else {
+			r.resumeHash = value.Hash
+		}
+		r.resumeFacts, r.resumeExperience = facts, facts.ExperienceText
 		legacy, resolver, err := r.canonicalCandidateContext(value)
 		if err != nil {
 			return ResumeItem{}, LegacyCandidateContext{}, nil, err

@@ -207,14 +207,63 @@ func TestBootstrapAPIResumePopulatesExistingResponderInputs(t *testing.T) {
 	if err := bootstrapAPIResumeData(context.Background(), responder, source, ""); err != nil {
 		t.Fatal(err)
 	}
-	if responder.userId != 77 || responder.resumeHash != "resume-hash" || len(responder.resumes) != 1 {
-		t.Fatalf("responder identity/resumes not populated: user=%d hash=%q resumes=%+v", responder.userId, responder.resumeHash, responder.resumes)
+	if responder.userId != 77 || responder.resumeHash != "" || responder.resumeIdentifier != "42" || len(responder.resumes) != 1 {
+		t.Fatalf("responder identity/resumes not populated: user=%d hash=%q identifier=%q resumes=%+v", responder.userId, responder.resumeHash, responder.resumeIdentifier, responder.resumes)
 	}
-	if got := responder.resumes[0]; got.Id != 42 || got.Title != "Python backend" || got.Skills != "Python, Django" || got.Area != "Екатеринбург" || got.Salary != "100000 RUR" {
+	if got := responder.resumes[0]; got.Id != 42 || got.ProviderID != "42" || got.Hash != "resume-hash" || got.Title != "Python backend" || got.Skills != "Python, Django" || got.Area != "Екатеринбург" || got.Salary != "100000 RUR" {
 		t.Fatalf("unexpected resume projection: %+v", got)
 	}
 	if responder.firstName != "" || responder.lastName != "" {
 		t.Fatalf("API bootstrap invented profile identity: %q %q", responder.firstName, responder.lastName)
+	}
+}
+
+func TestBootstrapAPIResumeUsesProviderIDWithoutBrowserHash(t *testing.T) {
+	responder := &HHAIResponder{}
+	source := &transportFakeResumeSource{
+		resumes: []hhread.ResumeRecord{{ID: "api-resume-id-123", Title: "Backend developer", Experience: "36"}},
+	}
+	if err := bootstrapAPIResumeDataForUser(context.Background(), responder, source, "", hhapi.UserMetadata{ID: "77", AuthType: "applicant"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(source.readResumeIDs) != 1 || source.readResumeIDs[0] != "api-resume-id-123" {
+		t.Fatalf("ReadResume IDs=%v, want [api-resume-id-123]", source.readResumeIDs)
+	}
+	if len(responder.resumes) != 1 || responder.resumes[0].Hash != "" {
+		t.Fatalf("API bootstrap fabricated a browser hash: %+v", responder.resumes)
+	}
+}
+
+func TestBootstrapAPIResumeRejectsMissingProviderID(t *testing.T) {
+	responder := &HHAIResponder{}
+	source := &transportFakeResumeSource{resumes: []hhread.ResumeRecord{{Title: "Backend developer"}}}
+	err := bootstrapAPIResumeDataForUser(context.Background(), responder, source, "", hhapi.UserMetadata{AuthType: "applicant"})
+	if err == nil || !strings.Contains(err.Error(), "API selected resume has no id") {
+		t.Fatalf("error=%v, want precise missing API resume id error", err)
+	}
+}
+
+func TestBootstrapAPIResumeSelectsConfiguredProviderIDAmongMultipleResumes(t *testing.T) {
+	responder := &HHAIResponder{}
+	source := &transportFakeResumeSource{resumes: []hhread.ResumeRecord{
+		{ID: "api-resume-id-123", Title: "Support specialist"},
+		{ID: "api-resume-id-456", Title: "Backend developer", Experience: "36"},
+	}}
+	if err := bootstrapAPIResumeDataForUser(context.Background(), responder, source, "api-resume-id-456", hhapi.UserMetadata{AuthType: "applicant"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(source.readResumeIDs) != 1 || source.readResumeIDs[0] != "api-resume-id-456" {
+		t.Fatalf("ReadResume IDs=%v, want configured provider ID", source.readResumeIDs)
+	}
+}
+
+func TestAPIResumeItemAcceptsOpaqueProviderIDWithoutHash(t *testing.T) {
+	item, err := apiResumeItem(hhread.ResumeRecord{ID: "api-resume-id-123", Title: "Backend developer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.ProviderID != "api-resume-id-123" || item.Hash != "" || item.Title != "Backend developer" {
+		t.Fatalf("item=%+v, want empty browser hash and preserved title", item)
 	}
 }
 
@@ -295,8 +344,9 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 type transportFakeResumeSource struct {
-	currentUser hhapi.UserMetadata
-	resumes     []hhread.ResumeRecord
+	currentUser   hhapi.UserMetadata
+	resumes       []hhread.ResumeRecord
+	readResumeIDs []string
 }
 
 func (f *transportFakeResumeSource) CurrentUser(context.Context) (hhapi.UserMetadata, error) {
@@ -308,6 +358,7 @@ func (f *transportFakeResumeSource) ReadResumes(context.Context) ([]hhread.Resum
 }
 
 func (f *transportFakeResumeSource) ReadResume(_ context.Context, id string) (hhread.ResumeRecord, error) {
+	f.readResumeIDs = append(f.readResumeIDs, id)
 	for _, resume := range f.resumes {
 		if resume.ID == id {
 			return resume, nil

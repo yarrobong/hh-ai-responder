@@ -266,12 +266,16 @@ func bootstrapAPIResumeDataForUser(ctx context.Context, responder *HHAIResponder
 		}
 		selected = 0
 	}
-	detail, err := source.ReadResume(ctx, resumes[selected].ID)
+	resumeID := strings.TrimSpace(resumes[selected].ID)
+	if resumeID == "" {
+		return errors.New("API selected resume has no id")
+	}
+	detail, err := source.ReadResume(ctx, resumeID)
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(detail.Hash) == "" {
-		return errors.New("API selected resume has no hash")
+	if strings.TrimSpace(detail.ID) == "" {
+		return errors.New("API selected resume has no id")
 	}
 	resumes[selected] = detail
 	responder.resumes = make([]ResumeItem, 0, len(resumes))
@@ -283,24 +287,26 @@ func bootstrapAPIResumeDataForUser(ctx context.Context, responder *HHAIResponder
 		responder.resumes = append(responder.resumes, item)
 	}
 	responder.userId, _ = strconv.ParseInt(strings.TrimSpace(user.ID), 10, 64)
-	responder.resumeHash = detail.Hash
-	responder.latestResumeHash = detail.Hash
+	responder.resumeHash = ""
+	responder.latestResumeHash = ""
+	responder.resumeIdentifier = strings.TrimSpace(detail.ID)
 	responder.resumeFacts = ResumeFacts{ExperienceText: detail.Experience, TotalExperienceMonths: detail.TotalExperienceMonths, TotalExperienceMonthsKnown: detail.TotalExperienceMonthsKnown}
 	responder.resumeExperience = responder.resumeFacts.ExperienceText
-	responder.resumeFactsByHash = map[string]ResumeFacts{detail.Hash: responder.resumeFacts}
+	responder.resumeFactsByHash = map[string]ResumeFacts{responder.resumeIdentifier: responder.resumeFacts}
 	return nil
 }
 
 func apiResumeItem(value hhread.ResumeRecord) (candidate.ResumeItem, error) {
-	id, err := strconv.ParseInt(strings.TrimSpace(value.ID), 10, 64)
-	if err != nil || id <= 0 {
-		return candidate.ResumeItem{}, errors.New("API resume has an invalid id")
+	providerID := strings.TrimSpace(value.ID)
+	if providerID == "" {
+		return candidate.ResumeItem{}, errors.New("API resume has no id")
 	}
+	id, _ := strconv.ParseInt(providerID, 10, 64)
 	salary := strings.TrimSpace(value.Salary)
 	if salary != "" && strings.TrimSpace(value.Currency) != "" {
 		salary += " " + strings.TrimSpace(value.Currency)
 	}
-	return candidate.ResumeItem{Id: id, Hash: strings.TrimSpace(value.Hash), Title: strings.TrimSpace(value.Title), Skills: strings.Join(value.Skills, ", "), Area: strings.TrimSpace(value.Area), Salary: salary}, nil
+	return candidate.ResumeItem{Id: id, ProviderID: providerID, Hash: strings.TrimSpace(value.Hash), Title: strings.TrimSpace(value.Title), Skills: strings.Join(value.Skills, ", "), Area: strings.TrimSpace(value.Area), Salary: salary}, nil
 }
 
 func newLegacyBrowserReadSource(responder *HHAIResponder) (hhreadport.HHReadSource, error) {

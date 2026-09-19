@@ -20,6 +20,19 @@ func TestNormalizeResumesUsesStableIDsAndRegistryOverrides(t *testing.T) {
 	}
 }
 
+func TestNormalizeResumesKeepsMultipleHashlessProviderIDsDistinct(t *testing.T) {
+	values := NormalizeResumes([]candidate.ResumeItem{
+		{ProviderID: "api-resume-id-123", Title: "Backend developer"},
+		{ProviderID: "api-resume-id-456", Title: "Backend developer"},
+	})
+	if len(values) != 2 {
+		t.Fatalf("normalized resumes=%+v, want two distinct provider resumes", values)
+	}
+	if values[0].ProviderID != "api-resume-id-123" || values[1].ProviderID != "api-resume-id-456" || values[0].Hash != "" || values[1].Hash != "" {
+		t.Fatalf("normalized provider identity was not preserved: %+v", values)
+	}
+}
+
 func TestPlanSearchesDeduplicatesQueriesAndSkipsDisabledResumes(t *testing.T) {
 	resumes := []ResumeProfile{{ID: "r1", Hash: "hash", Title: "Python Django developer", DesiredRole: "Python Django developer", Enabled: true}, {ID: "r2", Title: "Support", Enabled: false}}
 	profiles := PlanSearches(resumes, CandidateSignals{}, SearchConstraints{MaxProfiles: 8, SearchPeriodDays: 3})

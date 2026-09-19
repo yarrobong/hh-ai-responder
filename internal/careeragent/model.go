@@ -21,6 +21,7 @@ import (
 type ResumeProfile struct {
 	ID              string         `json:"id"`
 	HHID            int64          `json:"hh_id,omitempty"`
+	ProviderID      string         `json:"provider_id,omitempty"`
 	Hash            string         `json:"hash,omitempty"`
 	Title           string         `json:"title"`
 	DesiredRole     string         `json:"desired_role,omitempty"`
@@ -74,17 +75,27 @@ func StableResumeID(hash string, hhID int64, title string) string {
 	return "hh-resume-generated-" + hex.EncodeToString(sum[:8])
 }
 
+func stableResumeIDForProvider(providerID, hash string, hhID int64, title string) string {
+	if value := strings.TrimSpace(hash); value != "" {
+		return StableResumeID(value, hhID, title)
+	}
+	if value := strings.TrimSpace(providerID); value != "" {
+		return "hh-resume-provider-id-" + value
+	}
+	return StableResumeID("", hhID, title)
+}
+
 func NormalizeResumes(values []candidate.ResumeItem) []ResumeProfile {
 	result := make([]ResumeProfile, 0, len(values))
 	seen := map[string]bool{}
 	for _, value := range values {
-		id := StableResumeID(value.Hash, value.Id, value.Title)
+		id := stableResumeIDForProvider(value.ProviderID, value.Hash, value.Id, value.Title)
 		if seen[id] {
 			continue
 		}
 		seen[id] = true
 		profile := ResumeProfile{
-			ID: id, HHID: value.Id, Hash: strings.TrimSpace(value.Hash),
+			ID: id, HHID: value.Id, ProviderID: strings.TrimSpace(value.ProviderID), Hash: strings.TrimSpace(value.Hash),
 			Title: strings.TrimSpace(value.Title), DesiredRole: strings.TrimSpace(value.Title),
 			Skills: splitList(value.Skills), Location: strings.TrimSpace(value.Area), Salary: strings.TrimSpace(value.Salary), Enabled: true,
 		}
