@@ -5,6 +5,71 @@ import (
 	"time"
 )
 
+func TestDecodeVacancyRelationsPreservesProviderRelationIDs(t *testing.T) {
+	tests := []struct {
+		name    string
+		json    string
+		want    []string
+		wantNil bool
+	}{
+		{name: "provider relation IDs", json: `{"id":"42","relations":["favorited","got_response"]}`, want: []string{"favorited", "got_response"}},
+		{name: "empty array", json: `{"id":"42","relations":[]}`, want: []string{}},
+		{name: "null", json: `{"id":"42","relations":null}`, wantNil: true},
+		{name: "missing", json: `{"id":"42"}`, wantNil: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var value wireVacancy
+			if err := decodeWire([]byte(test.json), &value); err != nil {
+				t.Fatal(err)
+			}
+			if test.wantNil {
+				if value.Relations != nil {
+					t.Fatalf("relations=%#v, want nil", value.Relations)
+				}
+				return
+			}
+			if len(value.Relations) != len(test.want) {
+				t.Fatalf("relations=%#v, want %#v", value.Relations, test.want)
+			}
+			for index, relationID := range test.want {
+				if value.Relations[index] != relationID {
+					t.Fatalf("relations=%#v, want %#v", value.Relations, test.want)
+				}
+			}
+		})
+	}
+}
+
+func TestMapVacancyWireUsesGotResponseAsPositiveRelationEvidence(t *testing.T) {
+	var wireValue wireVacancy
+	if err := decodeWire([]byte(`{"id":"42","relations":["favorited","got_response"]}`), &wireValue); err != nil {
+		t.Fatal(err)
+	}
+	value, err := mapVacancyWire(wireValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.AlreadyResponded == nil || !*value.AlreadyResponded || value.AlreadyRespondedEvidence != "vacancy.relations.got_response" {
+		t.Fatalf("response relation was not mapped authoritatively: %+v", value)
+	}
+}
+
+func TestMapVacancyWireDoesNotFabricateNegativeRelationFromNonResponseIDs(t *testing.T) {
+	var wireValue wireVacancy
+	if err := decodeWire([]byte(`{"id":"42","relations":["favorited"]}`), &wireValue); err != nil {
+		t.Fatal(err)
+	}
+	value, err := mapVacancyWire(wireValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.AlreadyResponded != nil || value.AlreadyRespondedEvidence != "" {
+		t.Fatalf("non-response relation became a negative response state: %+v", value)
+	}
+}
+
 func TestMapVacancyWireNormalizesStructuredFields(t *testing.T) {
 	value, err := mapVacancyWire(wireVacancy{
 		ID: "7", Name: "Python backend", Description: "Integrations", Employer: wireNamed{Name: "Fixture employer"},

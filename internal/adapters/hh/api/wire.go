@@ -84,7 +84,7 @@ type wireVacancy struct {
 	AlreadyResponded       *bool           `json:"already_responded"`
 	Responded              *bool           `json:"responded"`
 	Relation               *wireRelation   `json:"relation"`
-	Relations              *wireRelation   `json:"relations"`
+	Relations              []string        `json:"relations"`
 }
 
 type wireRelation struct {

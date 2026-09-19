@@ -469,12 +469,30 @@ func TestAPIHHClientReadsVacanciesWithAPIQueryAndPagination(t *testing.T) {
 	}
 }
 
+func TestAPIHHClientReadsVacancySearchRelationsArray(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/vacancies" {
+			t.Fatalf("path=%q", r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"items":[{"id":"42","relations":["got_response"]}]}`)
+	}))
+	defer server.Close()
+
+	page, err := newAPIClient(t, server.URL, &memoryTokenStore{loaded: validTokens()}).ReadVacancies(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].ID != 42 || page.Items[0].AlreadyResponded == nil || !*page.Items[0].AlreadyResponded {
+		t.Fatalf("page=%+v", page)
+	}
+}
+
 func TestAPIHHClientReadsVacancyDetailWithExplicitRelation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/vacancies/42" {
 			t.Fatalf("path=%q", r.URL.Path)
 		}
-		_, _ = io.WriteString(w, `{"id":42,"name":"Integration specialist","description":"REST API automation","employer":{"name":"Fixture employer"},"area":{"name":"Yekaterinburg"},"address":{"raw":"Lenina street"},"salary_range":{"from":90000,"to":120000,"currency":"RUR"},"key_skills":[{"name":"Python"},{"name":"REST API"}],"professional_roles":[{"name":"Developer"}],"experience":{"id":"between1And3","name":"1-3 years"},"employment":{"name":"Full time"},"schedule":{"name":"Flexible"},"work_format":[{"id":"REMOTE","name":"Из дома"}],"workplace":{"code":"ON_SITE","name":"На месте работодателя"},"published_at":"2026-09-17T08:00:00Z","archived":null,"response_letter_required":true,"has_test":false,"relations":{"already_responded":false}}`)
+		_, _ = io.WriteString(w, `{"id":42,"name":"Integration specialist","description":"REST API automation","employer":{"name":"Fixture employer"},"area":{"name":"Yekaterinburg"},"address":{"raw":"Lenina street"},"salary_range":{"from":90000,"to":120000,"currency":"RUR"},"key_skills":[{"name":"Python"},{"name":"REST API"}],"professional_roles":[{"name":"Developer"}],"experience":{"id":"between1And3","name":"1-3 years"},"employment":{"name":"Full time"},"schedule":{"name":"Flexible"},"work_format":[{"id":"REMOTE","name":"Из дома"}],"workplace":{"code":"ON_SITE","name":"На месте работодателя"},"published_at":"2026-09-17T08:00:00Z","archived":null,"response_letter_required":true,"has_test":false,"relation":{"already_responded":false}}`)
 	}))
 	defer server.Close()
 
@@ -532,7 +550,7 @@ func TestAPIHHClientVacancyDetailMissingRelationRequiredCapabilityReturnsError(t
 
 func TestAPIHHClientVacancyDetailConflictingRelationRequiredCapabilityReturnsError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, `{"id":42,"name":"Integration specialist","relations":{"already_responded":false,"responded":true}}`)
+		_, _ = io.WriteString(w, `{"id":42,"name":"Integration specialist","relation":{"already_responded":false,"responded":true}}`)
 	}))
 	defer server.Close()
 

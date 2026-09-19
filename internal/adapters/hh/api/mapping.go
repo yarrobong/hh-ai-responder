@@ -153,7 +153,7 @@ func relationValue(value wireVacancy) (*bool, string, error) {
 	if value.Responded != nil {
 		candidates = append(candidates, candidate{*value.Responded, "vacancy.responded"})
 	}
-	for _, relation := range []*wireRelation{value.Relation, value.Relations} {
+	for _, relation := range []*wireRelation{value.Relation} {
 		if relation == nil {
 			continue
 		}
@@ -162,6 +162,12 @@ func relationValue(value wireVacancy) (*bool, string, error) {
 		}
 		if relation.Responded != nil {
 			candidates = append(candidates, candidate{*relation.Responded, "vacancy.relation.responded"})
+		}
+	}
+	for _, relationID := range value.Relations {
+		if strings.TrimSpace(relationID) == "got_response" {
+			candidates = append(candidates, candidate{true, "vacancy.relations.got_response"})
+			break
 		}
 	}
 	if len(candidates) == 0 {

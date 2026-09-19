@@ -231,6 +231,43 @@ func TestHHAPIDoctorReadsOnlySafeAPIEndpoints(t *testing.T) {
 	assertHHAPISafeOutput(t, out.String()+errOut.String())
 }
 
+func TestHHAPIDoctorClassifiesVacancyDecodeErrorAsReadError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/me":
+			writeHHAPIJSON(t, w, map[string]any{"id": "private-user-id", "auth_type": "applicant"})
+		case "/resumes/mine":
+			writeHHAPIJSON(t, w, map[string]any{"items": []any{map[string]any{"id": "resume-1", "title": "Backend"}}})
+		case "/vacancies":
+			_, _ = io.WriteString(w, `{"items":[{"id":"42","relations":[42]}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	tokenFile := filepath.Join(t.TempDir(), "api-token.json")
+	if err := hhapi.NewFileTokenStore(tokenFile).Save(context.Background(), hhapi.OAuthTokens{AccessToken: hhAPIAccessTokenSentinel, TokenType: "bearer", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testHHAPIConfig(t, server.URL, server.URL+"/token", tokenFile, "https://operator.example/callback")
+	var out, errOut bytes.Buffer
+	err := runHHAPICommandWithDeps(context.Background(), []string{"doctor"}, cfg, strings.NewReader(""), &out, &errOut, HHAPICommandDeps{})
+	if err == nil {
+		t.Fatal("doctor succeeded after vacancy decode error")
+	}
+	output := out.String()
+	for _, want := range []string{"/me: AUTH_OK", "Applicant resumes: OK", "Vacancy read: ERROR", "Overall: ERROR"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("doctor output=%q, missing %q", output, want)
+		}
+	}
+	if strings.Contains(output, "Overall: AUTH_REQUIRED") {
+		t.Fatalf("vacancy decode error was misclassified as auth failure: %q", output)
+	}
+	assertHHAPISafeOutput(t, output+errOut.String())
+}
+
 func TestHHAPIDoctorReportsMissingTokenWithoutNetworkAccess(t *testing.T) {
 	tokenFile := filepath.Join(t.TempDir(), "missing-token.json")
 	cfg := testHHAPIConfig(t, "http://127.0.0.1:1", "http://127.0.0.1:1/token", tokenFile, "https://operator.example/callback")

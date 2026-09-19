@@ -203,7 +203,7 @@ func runHHAPIDoctor(ctx context.Context, cfg Config, stdout io.Writer, deps HHAP
 	_, _ = fmt.Fprintln(stdout, "Applicant resumes: OK")
 	if err := readHHAPIDoctorVacancy(ctx, cfg, client); err != nil {
 		_, _ = fmt.Fprintln(stdout, "Vacancy read: ERROR")
-		_, _ = fmt.Fprintln(stdout, "Overall: AUTH_REQUIRED")
+		_, _ = fmt.Fprintln(stdout, "Overall: ERROR")
 		return fmt.Errorf("HH API doctor vacancy read failed: %w", err)
 	}
 	_, _ = fmt.Fprintln(stdout, "Vacancy read: OK")
