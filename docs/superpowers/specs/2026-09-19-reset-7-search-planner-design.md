@@ -90,10 +90,35 @@ text, area, resume, order_by, search_period, items_on_page
 Они могут появиться только отдельным изменением после проверки реального HH
 web transport и fixtures.
 
-Runtime последовательно запрашивает страницы, начиная с page `0`, пока HH не
-вернёт пустую страницу. Счётчик raw включает повторы между профилями и
-страницами. Dedup выполняется по vacancy ID, сохраняет first-seen порядок и
-добавляет все профили, через которые vacancy была найдена.
+Runtime сейчас последовательно запрашивает страницы, начиная с page `0`, и
+останавливается только после пустой страницы. В нормальном пути
+`fetchVacanciesFromSearchProfiles` передаёт `maxUnique=0`, поэтому
+`HH_MAX_VACANCIES_PER_RUN` ограничивает уже обработку после discovery, а не
+число provider search reads. Это означает, что увеличение числа profiles
+может создать фактически неограниченный fan-out browser GETs.
+
+RESET-7 вводит отдельный deterministic read-only cap, не связанный с
+application cap:
+
+```text
+HH_MAX_SEARCH_PAGES_PER_PROFILE=3
+HH_MAX_SEARCH_PAGES_PER_RUN=48
+```
+
+Параметры также доступны как `--max-search-pages-per-profile` и
+`--max-search-pages-per-run`. Значения положительные; defaults выбраны так,
+чтобы не урезать текущий baseline (в нём ни один profile не потребовал более
+двух страниц), но ограничить worst-case fan-out при budget `16`. Страница с
+индексом `0` считается первой. Остановка по cap до получения пустой страницы
+помечается как `truncated` с причиной `MAX_SEARCH_PAGES_PER_PROFILE` или
+`MAX_SEARCH_PAGES_PER_RUN`; это не считается полным discovery. Profiles,
+которые не были начаты из-за run cap, тоже получают явный статус.
+
+Счётчик raw включает provider hits, возвращённые профилем, включая повторы
+между страницами и профилями. Dedup выполняется по vacancy ID, сохраняет
+first-seen порядок и добавляет все профили, через которые vacancy была
+найдена. Cap не меняет HH write paths и не превращает обрезанный набор в
+complete/negative search result.
 
 ### Baseline run before RESET-7 changes
 
@@ -127,10 +152,13 @@ zero-write audit.
 |---|---:|
 | Enabled resumes | 4 |
 | Generated profiles | 7 |
-| Raw results | 209 |
-| Unique after dedup | 161 |
+| `raw_hits` | 209 |
+| `distinct_discovered` | 161 |
+| `processed_by_router` | 50 (detail requested and RESET-6 routing entered) |
+| `not_processed_due_to_run_cap` | 101 |
+| Other pre-router gates | 10 already responded; old schema did not isolate every other gate |
 | Duplicate contributions | 48 |
-| Final route reasons observed | `NO_SUITABLE_RESUME=5`, `ROLE_OUT_OF_SCOPE=5`, `ROUTE_AMBIGUOUS=13`, `ROUTE_LOW_EVIDENCE=14` |
+| Router outcomes among processed subset | `ROUTE_SELECTED=13`, `ROUTE_AMBIGUOUS=13`, `NO_SUITABLE_RESUME=5`, `ROLE_OUT_OF_SCOPE=5`, `ROUTE_LOW_EVIDENCE=14` |
 | AI evaluated | 10 |
 | MATCH | 0 |
 | Review required | 44 |
@@ -167,10 +195,10 @@ Generated profiles were:
 5. Current provenance is sufficient for weak router input, but profile
    reason/type, role family and per-profile outcome quality are not retained
    as first-class telemetry.
-6. Discovery raw volume is not relevance. The baseline reached 161 unique
-   vacancies but only 50 detail requests in the bounded processing path; the
-   search layer therefore needs better candidate-pool composition, not a
-   weaker RESET-6 route gate.
+6. Discovery raw volume is not relevance. The baseline reached 161 distinct
+   discovered vacancies but only 50 entered the bounded detail/router path;
+   the search layer therefore needs better candidate-pool composition and
+   explicit discovery coverage, not a weaker RESET-6 route gate.
 
 ## Goals
 
@@ -182,8 +210,8 @@ Generated profiles were:
   role strategy, and existing explicit search hints.
 - Generate bounded role-specific queries with separate strong role phrases,
   specific technology variants and generic supporting terms.
-- Allocate the existing `HH_MAX_SEARCH_PROFILES` budget fairly across enabled
-  primary families before variants and fallback.
+- Allocate the existing `HH_MAX_SEARCH_PROFILES` budget fairly across eligible
+  supported search families before variants and fallback.
 - Preserve broad discovery through a clearly labelled, limited fallback so
   unusual vacancy titles are not silently lost.
 - Preserve all existing deduplication, pagination, manual URL compatibility,
@@ -246,6 +274,33 @@ Unsupported RESET-6 families such as `SYSTEM_ADMIN`, `SYSTEM_ANALYST`, `ONE_C`,
 derives that family. A family inferred only from a generic skill such as Linux,
 Git, SQL, Docker, REST or API does not qualify.
 
+### Eligible search family
+
+Budget allocation must not depend only on the stored RESET-6
+`PrimaryRoleFamilies` list. The planner derives an `eligible search family`
+projection using the same `RoleFamily` vocabulary and canonical evidence, but
+checks all trusted enabled-resume sources:
+
+```text
+title
+desired role
+search hints
+strong role anchors
+core role-specific evidence
+```
+
+A family is eligible when these sources provide explicit, family-specific
+support. A family that RESET-6 stores as secondary can therefore receive a
+targeted slot: for example, `WEB_BACKEND` is eligible when a Python/backend
+resume also has trusted backend/web role evidence and core PHP/Laravel/Node or
+equivalent role-specific anchors. A generic or weak secondary signal does not
+become eligible automatically.
+
+The derivation is a planner-facing evidence projection, not a second set of
+role families and not a change to RESET-6 routing policy. It records the
+evidence sources that made the family eligible so fixtures and telemetry can
+explain every reserved slot.
+
 ### Vocabulary classes
 
 Each candidate query is assembled from one bounded role phrase plus zero or one
@@ -292,7 +347,7 @@ resume IDs are retained.
 
 ### Family-specific targeted profiles
 
-For every distinct enabled primary family, subject to budget, emit one
+For every distinct eligible search family, subject to budget, emit one
 `TARGETED / PRIMARY_ROLE` profile from the shortest trusted role phrase that
 retains the family anchor. Then emit bounded variants in deterministic order:
 
@@ -314,7 +369,7 @@ primary or adjacent profile for recall, but it cannot be the only query for a
 family that has additional trusted role anchors.
 
 Secondary role families emit `ADJACENT` profiles with reason
-`SECONDARY_ROLE` only after every eligible primary family has received its
+`SECONDARY_ROLE` only after every eligible search family has received its
 reserved slot. They use the same trusted-data and one-specific-anchor limits.
 
 ### Broad fallback
@@ -322,15 +377,19 @@ reserved slot. They use the same trusted-data and one-specific-anchor limits.
 The planner emits at most one `BROAD_FALLBACK` profile, and only after primary
 and useful variant slots have been allocated. Its query is built from up to
 three explicit trusted role phrases from Candidate Profile or enabled resume
-titles, joined with the literal provider query operator `OR`; this operator
-must be covered by a web fixture before live use. It contains
-no generic-only skill list and no unsupported family names. If no explicit
-career-relevant phrase exists, the fallback uses the shortest enabled primary
-role phrase rather than inventing `IT`, `specialist` or another generic role.
+titles. A literal query such as `phrase1 OR phrase2 OR phrase3` is not
+provider-safe merely because URL encoding or a mock fixture accepts it. Until
+a controlled read-only `BrowserHHClient` validation proves that HH applies the
+expected alternative semantics, the planner uses one proven trusted role
+phrase for `BROAD_FALLBACK`; if no such phrase exists, the fallback is
+omitted. After provider semantics are proven, a bounded literal `OR` query may
+be enabled as a separately validated behavior. The fallback never uses a
+generic-only skill list or unsupported family names. It never invents `IT`,
+`specialist` or another generic role.
 
 The fallback is labelled and measured separately. It is never allowed to take
-reserved primary-family slots and is omitted when the configured budget is too
-small to retain all primary family reservations.
+reserved eligible-family slots and is omitted when the configured budget is
+too small to retain all eligible-family reservations.
 
 ### Generic and negative terms
 
@@ -350,19 +409,23 @@ that the provider syntax is safe. No global `NOT Linux`, `NOT 1C`,
 `HH_MAX_SEARCH_PROFILES` remains the single upper bound for auto-generated
 profiles and keeps its current default `16`. Budget allocation is deterministic:
 
-1. collect distinct primary families from enabled resumes;
-2. reserve one primary targeted slot per distinct family while slots remain;
-3. round-robin additional primary variants across families and source resumes;
-4. allocate secondary/adjacent profiles;
+1. collect distinct **eligible search families** from enabled resumes;
+2. reserve one targeted slot per distinct eligible family while slots remain;
+3. round-robin additional targeted variants across eligible families and source
+   resumes;
+4. allocate eligible adjacent/secondary profiles that did not already receive
+   a targeted slot;
 5. allocate at most one broad fallback in the final remaining slot;
 6. stop at the configured maximum.
 
 Within each group, order is stable by role-family order used by RESET-6, stable
 resume ID, reason priority, and normalized query. This guarantees that one
 Python resume cannot consume all slots before support or automation receives a
-useful primary profile. If the budget is smaller than the number of distinct
-primary families, deterministic round-robin gives each family the earliest
-available slot; fallback never displaces a primary family.
+useful targeted profile. If the budget is smaller than the number of distinct
+eligible search families, deterministic round-robin gives each family the earliest
+available slot; fallback never displaces an eligible supported family. Thus a
+strongly evidenced `WEB_BACKEND` family stored as RESET-6 secondary is covered
+before generic or weak secondary families.
 
 Manual profiles do not consume the auto-generated budget because manual URL
 configuration is an explicit override. They retain their current order and
@@ -393,13 +456,62 @@ resume ID continue to receive those fields.
 ## Profile-quality telemetry
 
 Telemetry is observational and does not modify future profiles automatically.
+Discovery and processing/router telemetry are separate populations. A search
+can discover many more vacancy IDs than the current runtime is allowed to
+process, and router outcomes must never be divided by the larger discovery
+union.
+
+Run-level discovery coverage reports at least:
+
+```text
+raw_hits
+distinct_discovered
+processed_by_router
+not_processed_due_to_run_cap
+not_processed_by_other_pre_router_gate
+discovery_complete
+search_pages_fetched
+search_pages_truncated
+```
+
+`processed_by_router` is the number of distinct discovered vacancies for which
+the RESET-6 preliminary/final router was entered. `not_processed_due_to_run_cap`
+counts distinct discovered vacancies skipped by the existing
+`HH_MAX_VACANCIES_PER_RUN` before router/detail processing. Other pre-router
+exits (for example already responded or deterministic cheap rejection) are
+reported separately in `not_processed_by_other_pre_router_gate`; they are not
+silently folded into router outcomes.
+
+The following route and final-decision counters use only the
+`processed_by_router` population:
+
+```text
+ROUTE_SELECTED
+ROUTE_AMBIGUOUS
+NO_SUITABLE_RESUME
+ROLE_OUT_OF_SCOPE
+ROUTE_LOW_EVIDENCE
+AI evaluated
+MATCH
+REJECT
+REVIEW_REQUIRED
+```
+
+Discovery coverage is shown separately; the report must not present
+`distinct_discovered=161` and a bounded processed subset as if they were one
+router denominator.
+
 For every profile, report:
 
 ```text
 profile id, type, reason, role family, source resume IDs, query
-raw results
-unique contributed
-duplicate/overlap contribution
+raw_hits
+distinct_profile_vacancies
+exclusive_vacancies
+overlap_vacancies
+union_new_contribution
+processed_vacancies
+truncated, truncation_reason, pages_fetched
 ROUTE_SELECTED
 ROUTE_AMBIGUOUS
 NO_SUITABLE_RESUME
@@ -413,19 +525,40 @@ REVIEW_REQUIRED
 
 Because a vacancy can match multiple profiles, per-profile outcome counts are
 multi-attributed diagnostics and must be accompanied by the union totals. The
-union report remains the source of truth for accounting. Derived diagnostics
-include:
+union report remains the source of truth for accounting. Define profile
+contributions as follows:
+
+- `raw_hits`: every provider vacancy record returned for this profile,
+  including repeated IDs on different pages;
+- `distinct_profile_vacancies`: unique vacancy IDs returned by this profile;
+- `exclusive_vacancies`: IDs whose all-profile source set contains only this
+  profile;
+- `overlap_vacancies`: IDs in this profile's distinct set whose all-profile
+  source set contains at least one other profile;
+- `union_new_contribution`: IDs first introduced into the global union while
+  this profile is scanned;
+- `processed_vacancies`: this profile's source-attributed IDs among the
+  `processed_by_router` population.
+
+`raw_hits - distinct_profile_vacancies` is only an optional provider-repeat
+diagnostic. It is not an overlap definition. A vacancy found by several
+profiles contributes to each relevant profile's overlap and processed
+diagnostics, while union totals count it once.
+
+Derived router diagnostics use `processed_by_router` as denominator:
 
 ```text
-selected yield = selected vacancies attributed to profile / unique contributed
-out-of-scope yield = ROLE_OUT_OF_SCOPE / unique contributed
-low-evidence yield = ROUTE_LOW_EVIDENCE / unique contributed
-duplicate contribution = raw results - unique contributed
+selected_yield = ROUTE_SELECTED / processed_by_router
+out_of_scope_yield = ROLE_OUT_OF_SCOPE / processed_by_router
+low_evidence_yield = ROUTE_LOW_EVIDENCE / processed_by_router
 ```
 
-Zero denominators are reported as unavailable, not zero. Telemetry contains
-IDs, labels, queries, counts and safe decision categories; it does not contain
-cookies, API keys, complete AI prompts, or private raw response bodies.
+Per-profile route yields use that profile's `processed_vacancies` denominator;
+run-level route yields use `processed_by_router`. Zero denominators are
+reported as unavailable, not zero. Truncation is a validation signal, not a
+successful empty result. Telemetry contains IDs, labels, queries, counts and
+safe decision categories; it does not contain cookies, API keys, complete AI
+prompts, or private raw response bodies.
 
 ## Manual URL compatibility
 
@@ -460,9 +593,17 @@ raw-count, union-ID and router-outcome comparisons. Do not overwrite them.
 
 Run the new planner with `HH_DRY_RUN=true` and `HH_WRITE_ENABLED=false`, then
 inspect every targeted/adjacent/fallback profile's raw, contribution, overlap
-and router outcome counters. Any provider challenge, detail error or unknown
-critical HH state is recorded as a validation failure/review condition, never
-converted into a positive result.
+router outcome and truncation counters. Confirm both read caps, the number of
+search page GETs and explicit `discovery_complete`/`truncated` status. Any
+provider challenge, detail error or unknown critical HH state is recorded as a
+validation failure/review condition, never converted into a positive result.
+
+Before enabling any multi-phrase fallback, run a controlled read-only
+BrowserHHClient validation against a bounded fixture/live search window. URL
+encoding acceptance is insufficient: the validation must show that HH treats
+the literal `OR` expression as alternatives rather than as literal text or a
+different query language. Until that evidence exists, validate the one-proven-
+phrase fallback or validate that the fallback is omitted.
 
 ### C. Bounded union safety review
 
@@ -504,19 +645,28 @@ The implementation must add deterministic fixtures for the existing
 4. Git/Linux/SQL/API alone do not create a broad profile.
 5. System-admin and 1C families are not searched when no enabled resume
    supports them.
-6. Each supported primary family receives a slot when the budget permits;
-   Python variants cannot consume the entire budget first.
-7. Duplicate and equivalent hints/aliases collapse deterministically, while
+6. A strongly evidenced `WEB_BACKEND` stored as RESET-6 secondary becomes an
+   eligible search family and receives a targeted slot; a generic/weak
+   secondary family does not.
+7. Each eligible supported search family receives a slot when the budget
+   permits; Python variants cannot consume the entire budget first.
+8. Duplicate and equivalent hints/aliases collapse deterministically, while
    distinct provider resume filters remain safe and all collapsed source IDs
    survive.
-8. Manual `HH_SEARCH_URL` and `HH_SEARCH_URLS` precedence and parameter
+9. Manual `HH_SEARCH_URL` and `HH_SEARCH_URLS` precedence and parameter
    preservation remain compatible.
-9. Broad fallback exists, is clearly labelled, and cannot consume the full
-   profile budget or displace primary families.
-10. Profile provenance survives vacancy dedup with all matching profiles.
-11. Per-profile quality counters and union counters account correctly for
-    overlaps, selected, out-of-scope, low-evidence, AI and final outcomes.
-12. Shadow mode with the new planner cannot invoke an HH write; no test sends
+10. Broad fallback uses one proven trusted phrase or is omitted; literal `OR`
+    semantics are not enabled by URL/mock encoding alone.
+11. Per-profile `raw_hits`, `distinct_profile_vacancies`,
+    `exclusive_vacancies`, `overlap_vacancies`, `union_new_contribution` and
+    `processed_vacancies` account correctly for multi-profile discovery.
+12. Run-level discovery counters remain separate from
+    `processed_by_router`; route/final outcomes and yields use only the
+    processed denominator, and truncation is explicit.
+13. Each profile and the run respect the read-page caps, report truncation,
+    and do not silently call a truncated search complete.
+14. Profile provenance survives vacancy dedup with all matching profiles.
+15. Shadow mode with the new planner cannot invoke an HH write; no test sends
     an application or requires real HH cookies.
 
 Use deterministic fixtures, `httptest.Server` and mocked AI endpoints where a
@@ -534,10 +684,19 @@ RESET-7 implementation should stay within the existing discovery boundary:
   telemetry/dedup boundary, if needed;
 - `internal/runtime/career_agent_command.go` and related report tests — safe
   per-profile telemetry serialization;
+- `internal/config/defaults.go`, `internal/config/flags.go`,
+  `internal/config/validation.go` and config tests — positive bounded search
+  page settings with CLI-over-env precedence;
 - `internal/runtime/multi_search_test.go` and career-agent runtime tests —
-  provider parameter, pagination, dedup and manual compatibility fixtures;
-- `README.md` and `example.env` only if the final implementation changes a
-  documented setting or precedence.
+  provider parameter, bounded pagination, truncation, discovery-vs-processed
+  accounting, dedup and manual compatibility fixtures;
+- `README.md` and `example.env` — document
+  `HH_MAX_SEARCH_PAGES_PER_PROFILE=3`,
+  `HH_MAX_SEARCH_PAGES_PER_RUN=48`, precedence, truncation semantics and
+  separate discovery/router telemetry;
+- `docs/validation/VALIDATION_RESET_7_SEARCH.md` — frozen-baseline comparison,
+  controlled fallback semantics validation, union recall review and the
+  read-only live sample.
 
 No protected auth, write, router-policy, AI-prompt, nonce, reconciliation or
 cover-letter files are in scope. This design itself is the only source file
