@@ -73,3 +73,22 @@ errors, reports, or logs. No real HH request or write was performed.
   own-resume summaries/details.
 - Browser mode remains unchanged and remains authoritative for its existing
   profile parser.
+
+## Reviewer follow-up fixes
+
+Added real API resume-field coverage and normalization for `skill_set`,
+`salary.amount`, and `total_experience`. Free-text `skills` is retained only as
+wire input and is not promoted into the structured normalized skill list.
+Vacancy mapping now uses `salary_range` when the primary salary projection is
+absent. Work-format normalization aggregates all values and returns `hybrid`
+when remote and office/on-site evidence coexist.
+
+Vacancy detail reads now require explicit, non-conflicting applicant relation
+evidence. Missing or conflicting duplicate state returns typed
+`CapabilityError{Capability: "duplicate-state"}` with an empty detail result;
+it never becomes `AlreadyResponded=false`, an empty successful page, or a
+browser fallback.
+
+Follow-up focused endpoint, mapping, package, race, full-suite, vet, build,
+diff-check, and normalization-file secret-scan verification passed. The fixes
+were committed separately from the original Task 4 implementation.

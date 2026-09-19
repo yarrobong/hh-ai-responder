@@ -33,4 +33,33 @@ func TestMapResumeWireKeepsAbsentFieldsUnknown(t *testing.T) {
 	}
 }
 
+func TestMapResumeWireUsesStructuredSkillSetSalaryAmountAndTotalExperience(t *testing.T) {
+	value, err := mapResumeWire(wireResume{
+		ID: "resume-structured", SkillsText: "free-form Python, Django", SkillSet: wireNames{"Python", "Django"},
+		Salary: wireSalary{Amount: 110000, Currency: "RUR"}, TotalExperience: 42,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(value.Skills) != 2 || value.Skills[0] != "Python" || value.Salary != "110000" || value.Currency != "RUR" || value.TotalExperienceMonths != 42 || !value.TotalExperienceMonthsKnown || value.Experience != "42" {
+		t.Fatalf("value=%+v", value)
+	}
+}
+
+func TestMapResumeWireDoesNotPromoteFreeTextSkills(t *testing.T) {
+	value, err := mapResumeWire(wireResume{ID: "resume-text-only", SkillsText: "Python, Django"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(value.Skills) != 0 {
+		t.Fatalf("free-text skills became structured skills: %+v", value.Skills)
+	}
+}
+
+func TestCanonicalWorkFormatReturnsHybridWhenRemoteAndOfficeArePresent(t *testing.T) {
+	if got := canonicalWorkFormat(wireNames{"REMOTE", "ON_SITE"}); got != "hybrid" {
+		t.Fatalf("work format=%q, want hybrid", got)
+	}
+}
+
 func boolPtr(value bool) *bool { return &value }

@@ -31,22 +31,23 @@ type wireResumePage struct {
 }
 
 type wireResume struct {
-	ID          any        `json:"id"`
-	Hash        string     `json:"hash"`
-	Title       string     `json:"title"`
-	Description string     `json:"description"`
-	Skills      wireNames  `json:"skills"`
-	KeySkills   wireNames  `json:"key_skills"`
-	Area        wireNamed  `json:"area"`
-	Salary      wireSalary `json:"salary"`
-	Experience  wireNamed  `json:"experience"`
-	Employment  wireNamed  `json:"employment"`
-	Schedule    wireNamed  `json:"schedule"`
-	WorkFormat  wireNames  `json:"work_format"`
-	URL         string     `json:"alternate_url"`
-	Links       wireLinks  `json:"links"`
-	CreatedAt   string     `json:"created_at"`
-	UpdatedAt   string     `json:"updated_at"`
+	ID              any        `json:"id"`
+	Hash            string     `json:"hash"`
+	Title           string     `json:"title"`
+	Description     string     `json:"description"`
+	SkillsText      string     `json:"skills"`
+	SkillSet        wireNames  `json:"skill_set"`
+	Area            wireNamed  `json:"area"`
+	Salary          wireSalary `json:"salary"`
+	Experience      any        `json:"experience"`
+	TotalExperience any        `json:"total_experience"`
+	Employment      wireNamed  `json:"employment"`
+	Schedule        wireNamed  `json:"schedule"`
+	WorkFormat      wireNames  `json:"work_format"`
+	URL             string     `json:"alternate_url"`
+	Links           wireLinks  `json:"links"`
+	CreatedAt       string     `json:"created_at"`
+	UpdatedAt       string     `json:"updated_at"`
 }
 
 type wireVacancy struct {
@@ -59,6 +60,7 @@ type wireVacancy struct {
 	Area                   wireNamed     `json:"area"`
 	Address                wireAddress   `json:"address"`
 	Salary                 wireSalary    `json:"salary"`
+	SalaryRange            wireSalary    `json:"salary_range"`
 	Requirements           wireNames     `json:"requirements"`
 	Skills                 wireNames     `json:"skills"`
 	KeySkills              wireNames     `json:"key_skills"`
@@ -67,6 +69,8 @@ type wireVacancy struct {
 	Employment             wireNamed     `json:"employment"`
 	Schedule               wireNamed     `json:"schedule"`
 	WorkFormat             wireNames     `json:"work_format"`
+	Workplace              wireNames     `json:"workplace"`
+	WorkFormats            wireNames     `json:"work_formats"`
 	URL                    string        `json:"alternate_url"`
 	Links                  wireLinks     `json:"links"`
 	PublishedAt            string        `json:"published_at"`
@@ -189,6 +193,7 @@ func (v *wireAddress) UnmarshalJSON(data []byte) error {
 type wireSalary struct {
 	From     any    `json:"from"`
 	To       any    `json:"to"`
+	Amount   any    `json:"amount"`
 	Currency string `json:"currency"`
 }
 

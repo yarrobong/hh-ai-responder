@@ -207,7 +207,7 @@ func (c *APIHHClient) ReadVacancyDetail(ctx context.Context, id int) (hhread.Vac
 	if err := decodeWire(body, &value); err != nil {
 		return hhread.VacancyRecord{}, err
 	}
-	return mapVacancyWire(value)
+	return mapVacancyWireRequiringRelation(value)
 }
 
 // Applicant negotiation semantics are not proven for the API transport. A

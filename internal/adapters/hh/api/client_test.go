@@ -409,7 +409,7 @@ func TestAPIHHClientReadsResumeListAndDetail(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/resumes/mine":
-			_, _ = io.WriteString(w, `{"items":[{"id":"resume-1","title":"Python backend","area":{"name":"Yekaterinburg"},"key_skills":[{"name":"Python"},{"name":"Django"}],"salary":{"from":90000,"currency":"RUR"}}]}`)
+			_, _ = io.WriteString(w, `{"items":[{"id":"resume-1","title":"Python backend","area":{"name":"Yekaterinburg"},"skills":"Python, Django","skill_set":["Python","Django"],"salary":{"amount":90000,"currency":"RUR"},"total_experience":36}]}`)
 		case "/resumes/resume-1":
 			_, _ = io.WriteString(w, `{"id":"resume-1","title":"Python backend","description":"API integrations","experience":{"name":"1-3 years"},"updated_at":"2026-09-18T10:00:00Z"}`)
 		default:
@@ -423,7 +423,7 @@ func TestAPIHHClientReadsResumeListAndDetail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(resumes) != 1 || resumes[0].ID != "resume-1" || resumes[0].Title != "Python backend" || len(resumes[0].Skills) != 2 || resumes[0].Area != "Yekaterinburg" || resumes[0].Salary != "90000" || resumes[0].Currency != "RUR" {
+	if len(resumes) != 1 || resumes[0].ID != "resume-1" || resumes[0].Title != "Python backend" || len(resumes[0].Skills) != 2 || resumes[0].Skills[0] != "Python" || resumes[0].Area != "Yekaterinburg" || resumes[0].Salary != "90000" || resumes[0].Currency != "RUR" || resumes[0].TotalExperienceMonths != 36 || !resumes[0].TotalExperienceMonthsKnown {
 		t.Fatalf("resumes=%+v", resumes)
 	}
 	detail, err := client.ReadResume(context.Background(), "resume-1")
@@ -469,12 +469,12 @@ func TestAPIHHClientReadsVacanciesWithAPIQueryAndPagination(t *testing.T) {
 	}
 }
 
-func TestAPIHHClientReadsVacancyDetailAndPreservesUnknownRelation(t *testing.T) {
+func TestAPIHHClientReadsVacancyDetailWithExplicitRelation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/vacancies/42" {
 			t.Fatalf("path=%q", r.URL.Path)
 		}
-		_, _ = io.WriteString(w, `{"id":42,"name":"Integration specialist","description":"REST API automation","employer":{"name":"Fixture employer"},"area":{"name":"Yekaterinburg"},"address":{"raw":"Lenina street"},"salary":{"from":90000,"to":120000,"currency":"RUR"},"key_skills":[{"name":"Python"},{"name":"REST API"}],"professional_roles":[{"name":"Developer"}],"experience":{"id":"between1And3","name":"1-3 years"},"employment":{"name":"Full time"},"schedule":{"name":"Flexible"},"work_format":[{"name":"Remote"}],"published_at":"2026-09-17T08:00:00Z","archived":null,"response_letter_required":true,"has_test":false,"relations":{}}`)
+		_, _ = io.WriteString(w, `{"id":42,"name":"Integration specialist","description":"REST API automation","employer":{"name":"Fixture employer"},"area":{"name":"Yekaterinburg"},"address":{"raw":"Lenina street"},"salary_range":{"from":90000,"to":120000,"currency":"RUR"},"key_skills":[{"name":"Python"},{"name":"REST API"}],"professional_roles":[{"name":"Developer"}],"experience":{"id":"between1And3","name":"1-3 years"},"employment":{"name":"Full time"},"schedule":{"name":"Flexible"},"work_format":[{"name":"Remote"}],"published_at":"2026-09-17T08:00:00Z","archived":null,"response_letter_required":true,"has_test":false,"relations":{"already_responded":false}}`)
 	}))
 	defer server.Close()
 
@@ -488,8 +488,40 @@ func TestAPIHHClientReadsVacancyDetailAndPreservesUnknownRelation(t *testing.T) 
 	if _, ok := got.Metadata["already_responded"]; ok {
 		t.Fatalf("unknown relation was normalized as already_responded: %+v", got.Metadata)
 	}
-	if got.AlreadyResponded != nil || got.AlreadyRespondedEvidence != "" {
-		t.Fatalf("incomplete relation was normalized as known: value=%v evidence=%q", got.AlreadyResponded, got.AlreadyRespondedEvidence)
+	if got.AlreadyResponded == nil || *got.AlreadyResponded || got.AlreadyRespondedEvidence == "" {
+		t.Fatalf("explicit relation was not preserved: value=%v evidence=%q", got.AlreadyResponded, got.AlreadyRespondedEvidence)
+	}
+}
+
+func TestAPIHHClientVacancyDetailMissingRelationReturnsCapabilityError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/vacancies/42" {
+			t.Fatalf("path=%q", r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"id":42,"name":"Integration specialist","salary_range":{"from":90000,"currency":"RUR"}}`)
+	}))
+	defer server.Close()
+
+	got, err := newAPIClient(t, server.URL, &memoryTokenStore{loaded: validTokens()}).ReadVacancyDetail(context.Background(), 42)
+	var capabilityErr *CapabilityError
+	if !errors.As(err, &capabilityErr) || capabilityErr.Capability != "duplicate-state" {
+		t.Fatalf("error=%T %v, want duplicate-state capability error", err, err)
+	}
+	if got.ID != 0 || got.Title != "" || got.Metadata != nil {
+		t.Fatalf("missing relation returned successful detail: %+v", got)
+	}
+}
+
+func TestAPIHHClientVacancyDetailConflictingRelationReturnsCapabilityError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"id":42,"name":"Integration specialist","relations":{"already_responded":false,"responded":true}}`)
+	}))
+	defer server.Close()
+
+	got, err := newAPIClient(t, server.URL, &memoryTokenStore{loaded: validTokens()}).ReadVacancyDetail(context.Background(), 42)
+	var capabilityErr *CapabilityError
+	if !errors.As(err, &capabilityErr) || capabilityErr.Capability != "duplicate-state" || got.ID != 0 {
+		t.Fatalf("detail=%+v error=%T %v, want empty detail and duplicate-state capability error", got, err, err)
 	}
 }
 

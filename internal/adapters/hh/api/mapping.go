@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
 	"net/url"
 	"strconv"
@@ -52,15 +53,15 @@ func mapUser(value wireMe) UserMetadata {
 func mapResumeWire(value wireResume) (hhread.ResumeRecord, error) {
 	result := hhread.ResumeRecord{
 		ID: scalarString(value.ID), Hash: strings.TrimSpace(value.Hash), Title: strings.TrimSpace(value.Title),
-		Description: strings.TrimSpace(value.Description), Skills: append([]string(nil), value.Skills...), Area: namedValue(value.Area),
-		Salary: salaryValue(value.Salary), Currency: strings.TrimSpace(value.Salary.Currency), Experience: namedIDOrValue(value.Experience),
+		Description: strings.TrimSpace(value.Description), Skills: append([]string(nil), value.SkillSet...), Area: namedValue(value.Area),
+		Salary: salaryValue(value.Salary), Currency: strings.TrimSpace(value.Salary.Currency), Experience: resumeExperienceValue(value.Experience),
 		EmploymentType: namedValue(value.Employment), Schedule: namedValue(value.Schedule), WorkFormat: canonicalWorkFormat(value.WorkFormat),
 		URL: firstNonEmpty(value.URL, value.Links.Alternate, value.Links.Desktop), CreatedAt: parseAPITime(value.CreatedAt), UpdatedAt: parseAPITime(value.UpdatedAt),
 	}
-	if len(result.Skills) == 0 {
-		result.Skills = append([]string(nil), value.KeySkills...)
-	} else if len(value.KeySkills) > 0 {
-		result.Skills = appendUnique(result.Skills, value.KeySkills...)
+	result.Skills = append([]string(nil), value.SkillSet...)
+	result.TotalExperienceMonths, result.TotalExperienceMonthsKnown = totalExperienceMonths(value.TotalExperience)
+	if result.Experience == "" && result.TotalExperienceMonthsKnown {
+		result.Experience = strconv.Itoa(result.TotalExperienceMonths)
 	}
 	if result.ID == "" {
 		return hhread.ResumeRecord{}, errors.New("HH API resume has no id")
@@ -84,11 +85,15 @@ func mapVacancyWire(value wireVacancy) (hhread.VacancyRecord, error) {
 	} else {
 		skills = appendUnique(skills, value.Skills...)
 	}
+	salary := value.Salary
+	if salaryValue(salary) == "" {
+		salary = value.SalaryRange
+	}
 	result := hhread.VacancyRecord{
 		ExternalID: scalarString(value.ID), ID: id, Title: firstNonEmpty(value.Name, value.Title), Description: strings.TrimSpace(value.Description),
 		Company: namedValue(company), Requirements: append([]string(nil), value.Requirements...), KeySkills: skills,
-		Salary: salaryValue(value.Salary), Currency: strings.TrimSpace(value.Salary.Currency), Location: namedValue(value.Area), AreaName: namedValue(value.Area),
-		Address: addressValue(value.Address), WorkFormat: canonicalWorkFormat(value.WorkFormat), Experience: namedIDOrValue(value.Experience),
+		Salary: salaryValue(salary), Currency: strings.TrimSpace(salary.Currency), Location: namedValue(value.Area), AreaName: namedValue(value.Area),
+		Address: addressValue(value.Address), WorkFormat: canonicalWorkFormat(append(append(append(wireNames{}, value.WorkFormat...), value.Workplace...), value.WorkFormats...)), Experience: namedIDOrValue(value.Experience),
 		EmploymentType: namedValue(value.Employment), Schedule: namedValue(value.Schedule), URL: firstNonEmpty(value.URL, value.Links.Desktop, value.Links.Alternate),
 		PublishedAt: parseAPITime(value.PublishedAt), UpdatedAt: parseAPITime(value.UpdatedAt), ProfessionalRoles: roles,
 		Metadata: map[string]string{"hh_read_source": "api"},
@@ -111,7 +116,7 @@ func mapVacancyWire(value wireVacancy) (hhread.VacancyRecord, error) {
 		result.UserTestPresent, result.UserTestPresentKnown = *testPresent, true
 	}
 	result.ResponseURL = strings.TrimSpace(value.ResponseURL)
-	if responded, evidence := relationValue(value); responded != nil {
+	if responded, evidence, relationErr := relationValue(value); relationErr == nil && responded != nil {
 		copy := *responded
 		result.AlreadyResponded = &copy
 		result.AlreadyRespondedEvidence = evidence
@@ -119,37 +124,103 @@ func mapVacancyWire(value wireVacancy) (hhread.VacancyRecord, error) {
 	return result, nil
 }
 
-func relationValue(value wireVacancy) (*bool, string) {
+func mapVacancyWireRequiringRelation(value wireVacancy) (hhread.VacancyRecord, error) {
+	result, err := mapVacancyWire(value)
+	if err != nil {
+		return hhread.VacancyRecord{}, err
+	}
+	responded, evidence, relationErr := relationValue(value)
+	if relationErr != nil {
+		return hhread.VacancyRecord{}, relationErr
+	}
+	if responded == nil {
+		return hhread.VacancyRecord{}, unsupportedCapability("duplicate-state", "applicant relation evidence is missing")
+	}
+	result.AlreadyResponded = responded
+	result.AlreadyRespondedEvidence = evidence
+	return result, nil
+}
+
+func relationValue(value wireVacancy) (*bool, string, error) {
+	type candidate struct {
+		value    bool
+		evidence string
+	}
+	candidates := make([]candidate, 0, 6)
 	if value.AlreadyResponded != nil {
-		return value.AlreadyResponded, "vacancy.already_responded"
+		candidates = append(candidates, candidate{*value.AlreadyResponded, "vacancy.already_responded"})
 	}
 	if value.Responded != nil {
-		return value.Responded, "vacancy.responded"
+		candidates = append(candidates, candidate{*value.Responded, "vacancy.responded"})
 	}
 	for _, relation := range []*wireRelation{value.Relation, value.Relations} {
 		if relation == nil {
 			continue
 		}
 		if relation.AlreadyResponded != nil {
-			return relation.AlreadyResponded, "vacancy.relation.already_responded"
+			candidates = append(candidates, candidate{*relation.AlreadyResponded, "vacancy.relation.already_responded"})
 		}
 		if relation.Responded != nil {
-			return relation.Responded, "vacancy.relation.responded"
+			candidates = append(candidates, candidate{*relation.Responded, "vacancy.relation.responded"})
 		}
 	}
-	return nil, ""
+	if len(candidates) == 0 {
+		return nil, "", nil
+	}
+	for _, value := range candidates[1:] {
+		if value.value != candidates[0].value {
+			return nil, "", unsupportedCapability("duplicate-state", "applicant relation evidence is conflicting")
+		}
+	}
+	result := candidates[0].value
+	return &result, candidates[0].evidence, nil
 }
 
 func salaryValue(value wireSalary) string {
-	from, to := scalarString(value.From), scalarString(value.To)
+	from, to, amount := scalarString(value.From), scalarString(value.To), scalarString(value.Amount)
 	switch {
 	case from != "" && to != "":
 		return from + "–" + to
 	case from != "":
 		return from
+	case amount != "":
+		return amount
 	default:
 		return to
 	}
+}
+
+func resumeExperienceValue(value any) string {
+	switch typed := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(typed)
+	case json.Number:
+		return typed.String()
+	case float64:
+		return strconv.FormatFloat(typed, 'f', -1, 64)
+	case int:
+		return strconv.Itoa(typed)
+	case wireNamed:
+		return namedIDOrValue(typed)
+	case map[string]any:
+		return firstNonEmpty(scalarString(typed["id"]), scalarString(typed["name"]), scalarString(typed["title"]))
+	default:
+		return ""
+	}
+}
+
+func totalExperienceMonths(value any) (int, bool) {
+	if object, ok := value.(map[string]any); ok {
+		value = object["months"]
+	}
+	text := scalarString(value)
+	months, err := strconv.Atoi(text)
+	if err != nil || months < 0 {
+		return 0, false
+	}
+	return months, true
 }
 
 func namedValue(value wireNamed) string {
@@ -174,18 +245,26 @@ func addressValue(value wireAddress) string {
 }
 
 func canonicalWorkFormat(values wireNames) string {
+	hasRemote, hasOffice := false, false
 	for _, raw := range values {
 		value := strings.ToLower(strings.TrimSpace(raw))
 		switch {
 		case strings.Contains(value, "remote"), strings.Contains(value, "дистан"):
-			return "remote"
+			hasRemote = true
 		case strings.Contains(value, "hybrid"), strings.Contains(value, "гибрид"):
 			return "hybrid"
-		case strings.Contains(value, "office"), strings.Contains(value, "onsite"), strings.Contains(value, "офис"):
-			return "office"
-		case value != "":
-			return value
+		case strings.Contains(value, "office"), strings.Contains(value, "onsite"), strings.Contains(value, "on_site"), strings.Contains(value, "on-site"), strings.Contains(value, "workplace"), strings.Contains(value, "офис"):
+			hasOffice = true
 		}
+	}
+	if hasRemote && hasOffice {
+		return "hybrid"
+	}
+	if hasRemote {
+		return "remote"
+	}
+	if hasOffice {
+		return "office"
 	}
 	return ""
 }

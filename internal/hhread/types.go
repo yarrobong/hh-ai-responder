@@ -76,21 +76,23 @@ type ApplicationPage struct {
 // Optional fields remain empty when the provider omits or nulls them; an empty
 // value is not evidence that the candidate lacks the corresponding fact.
 type ResumeRecord struct {
-	ID             string
-	Hash           string
-	Title          string
-	Description    string
-	Skills         []string
-	Area           string
-	Salary         string
-	Currency       string
-	Experience     string
-	EmploymentType string
-	Schedule       string
-	WorkFormat     string
-	URL            string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID                         string
+	Hash                       string
+	Title                      string
+	Description                string
+	Skills                     []string
+	Area                       string
+	Salary                     string
+	Currency                   string
+	Experience                 string
+	TotalExperienceMonths      int
+	TotalExperienceMonthsKnown bool
+	EmploymentType             string
+	Schedule                   string
+	WorkFormat                 string
+	URL                        string
+	CreatedAt                  time.Time
+	UpdatedAt                  time.Time
 }
 
 type Action struct {
