@@ -10,6 +10,11 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-19-reset-6-router-design.md`
 
+**Implementation start SHA:** recorded in the execution ledger immediately
+after the final docs-only plan commit. All protected-path audits use that exact
+ledger value; the original RESET-6 source starting commit remains documented
+in the spec and validation report.
+
 ## Global Constraints
 
 - All RESET-6 runs use `HH_DRY_RUN=true` and `HH_WRITE_ENABLED=false`.
@@ -61,6 +66,20 @@ The final router returns existing `Status` compatibility (`SELECTED` or
 resumes at all. `ROUTE_AMBIGUOUS_AFTER_DETAIL` remains a deprecated source
 compatibility alias only if needed by existing Go callers; serialized RESET-6
 reports use the canonical `ROUTE_AMBIGUOUS` category.
+
+## Execution Pre-flight: preserve the old baseline before any new run
+
+This pre-flight occurs immediately after the implementation-start docs commit
+and before any additional `career-agent run` command:
+
+- Preserve the existing pre-change report as `/tmp/reset6-old.json`.
+- Save `/tmp/reset6-baseline-meta.json` with the implementation start SHA,
+  exact old baseline vacancy IDs, enabled resume IDs, and baseline counters.
+- Verify that the old JSON contains the exact vacancy-ID set that will be used
+  for every old-vs-new comparison.
+- Do not regenerate the old baseline after Task 1 begins. If a later live run
+  discovers a different HH result set, it is a validation limitation to report,
+  not permission to compare different IDs.
 
 ## Task 1: Add role-family and evidence model tests first
 
@@ -168,6 +187,14 @@ type VacancyRoleEvidence struct {
 
 func ClassifyVacancyRole(v VacancyInput, resumes []ResumeProfile) VacancyRoleEvidence
 ```
+
+`ClassifyVacancyRole` must determine vacancy role families from vacancy
+evidence independently of `resumes`. The `resumes` parameter may remain for
+signature compatibility or bounded catalog context, but it must never remove,
+hide, or downgrade an otherwise strongly detected unsupported family. First
+classify the vacancy; only then compare the result with enabled resume
+families. This is required to distinguish `ROLE_OUT_OF_SCOPE` from
+`ROUTE_LOW_EVIDENCE`.
 
 Extend `ResumeIdentity` with runtime-derived primary/secondary role families,
 strong/generic anchors, negative mismatch anchors, core skills, and adjacent
@@ -414,11 +441,11 @@ type CareerAgentVacancyResult struct {
 - Temporary, outside the repository: `/tmp/reset6-old.json`, `/tmp/reset6-new.json`, `/tmp/reset6-transition.tsv`
 - Read-only source artifacts: `career_agent_latest.json` may be inspected but must not be committed.
 
-- [ ] **Step 1: Preserve the old baseline before the new run.** Copy the
-  baseline JSON to `/tmp/reset6-old.json` and record the exact starting SHA,
-  enabled resume IDs, and vacancy IDs. If the baseline file was overwritten,
-  reconstruct the same set from the saved pre-change run output; do not mix run
-  IDs.
+- [ ] **Step 1: Verify the execution pre-flight artifacts.** Confirm that
+  `/tmp/reset6-old.json` and `/tmp/reset6-baseline-meta.json` were created
+  before Task 1 and contain the implementation-start SHA, exact baseline
+  vacancy IDs, enabled resume IDs, and baseline counters. Do not regenerate
+  them here.
 
 - [ ] **Step 2: Build the changed binary without running writes.** Run the
   repository build after Tasks 1–5 and execute only with:
@@ -473,7 +500,7 @@ type CareerAgentVacancyResult struct {
 
 - [ ] **Step 2: Write the report from actual artifacts.** Include:
 
-  - starting commit and final commit;
+  - original source starting commit, implementation-start SHA, and final commit;
   - enabled resume inventory and derived role families;
   - before/after selected, ambiguous, no-suitable, out-of-scope, and low-evidence counts;
   - all six old ambiguity categories and representative table of at least 20;
@@ -523,9 +550,9 @@ type CareerAgentVacancyResult struct {
 - [ ] **Step 3: Audit the diff.**
 
   ```bash
-  git diff --name-only 5dc0e102534a2a270c0f0392af01df0827f96b1f..HEAD
+  git diff --name-only "${IMPLEMENTATION_START_SHA}"..HEAD
   git status --short
-  git diff --stat 5dc0e102534a2a270c0f0392af01df0827f96b1f..HEAD
+  git diff --stat "${IMPLEMENTATION_START_SHA}"..HEAD
   ```
 
   Verify protected files and generated authenticated data are absent from the
