@@ -185,10 +185,14 @@ func DeriveEligibleSearchFamilies(resume ResumeProfile) []EligibleSearchFamily {
 				evidence = appendUniqueStrings(evidence, "specific:"+canonicalToken(token))
 			}
 		}
-		eligible := len(evidence) > 0 && (roleEvidence > 0 || specificEvidence >= 2)
-		if roleEvidence > 0 && specificEvidence == 0 {
-			eligible = false
+		hasTitleEvidence := false
+		for _, item := range evidence {
+			if strings.HasPrefix(item, "title:") {
+				hasTitleEvidence = true
+				break
+			}
 		}
+		eligible := len(evidence) > 0 && (hasTitleEvidence || (roleEvidence > 0 && specificEvidence > 0) || specificEvidence >= 2)
 		if eligible {
 			sort.Strings(evidence)
 			result = append(result, EligibleSearchFamily{Family: rule.family, ResumeID: resume.ID, Evidence: evidence})
@@ -215,86 +219,270 @@ func PlanSearches(resumes []ResumeProfile, signals CandidateSignals, constraints
 	if period <= 0 {
 		period = 7
 	}
-	type plannedTerm struct {
-		resume ResumeProfile
-		query  string
-		reason string
+
+	type familySource struct {
+		resume   ResumeProfile
+		evidence []string
+		terms    []SearchProfile
 	}
-	queues := make([][]plannedTerm, 0, len(resumes))
+	byFamily := map[RoleFamily][]*familySource{}
+	familyOrder := searchFamilyOrder()
 	for _, resume := range resumes {
 		if !resume.Enabled {
 			continue
 		}
-		terms := make([]plannedTerm, 0)
-		add := func(values []string, reason string) {
-			for _, raw := range values {
-				query := normalizeQuery(raw)
-				if query == "" || isNoiseQuery(query) || containsKeyword(query, constraints.ExcludeKeywords) {
+		families := DeriveEligibleSearchFamilies(resume)
+		for _, family := range families {
+			source := &familySource{resume: resume, evidence: append([]string(nil), family.Evidence...)}
+			for _, query := range searchFamilyQueries(resume, family.Family, signals) {
+				profile := buildSearchProfile(resume, family, query.query, query.reason, SearchProfileTargeted, period, constraints)
+				if profile.Query != "" {
+					source.terms = append(source.terms, profile)
+				}
+			}
+			if len(source.terms) > 0 {
+				byFamily[family.Family] = append(byFamily[family.Family], source)
+			}
+		}
+	}
+
+	// Reserve one trusted query for each enabled source first. This preserves
+	// resume fairness while the second pass ensures every eligible family gets
+	// a slot before language/technology variants consume the budget.
+	ordered := make([]SearchProfile, 0)
+	coveredFamilies := map[RoleFamily]bool{}
+	for _, resume := range resumes {
+		if !resume.Enabled {
+			continue
+		}
+		for _, family := range familyOrder {
+			for _, source := range byFamily[family] {
+				if source.resume.ID != resume.ID || len(source.terms) == 0 {
 					continue
 				}
-				duplicate := false
-				for _, existing := range terms {
-					if existing.query == query {
-						duplicate = true
-						break
-					}
-				}
-				if !duplicate {
-					terms = append(terms, plannedTerm{resume: resume, query: query, reason: reason})
-				}
+				ordered = append(ordered, source.terms[0])
+				coveredFamilies[family] = true
+				break
+			}
+			if coveredFamilies[family] {
+				break
 			}
 		}
-		add(resume.SearchHints, "resume search hint")
-		add([]string{resume.DesiredRole, resume.Title}, "resume role/title")
-		add(signals.Roles, "candidate role signal")
-		add(roleExpansions(resume.Title, resume.DesiredRole), "deterministic role expansion")
-		if len(terms) == 0 {
-			add(signals.Skills, "candidate skill signal")
-		}
-		queues = append(queues, terms)
 	}
-	// Round-robin over enabled resumes. This keeps a small profile budget from
-	// silently becoming "all searches for the first resume".
-	result := make([]SearchProfile, 0, max)
-	seen := map[string]bool{}
-	for round := 0; len(result) < max; round++ {
+	for _, family := range familyOrder {
+		if coveredFamilies[family] {
+			continue
+		}
+		if sources := byFamily[family]; len(sources) > 0 && len(sources[0].terms) > 0 {
+			ordered = append(ordered, sources[0].terms[0])
+			coveredFamilies[family] = true
+		}
+	}
+
+	// Add remaining variants round-robin across families and source resumes.
+	for offset := 1; ; offset++ {
 		added := 0
-		for _, queue := range queues {
-			if round >= len(queue) || len(result) >= max {
-				continue
+		for _, family := range familyOrder {
+			for _, source := range byFamily[family] {
+				if offset >= len(source.terms) {
+					continue
+				}
+				ordered = append(ordered, source.terms[offset])
+				added++
 			}
-			term := queue[round]
-			seenKey := term.resume.ID + "\x00" + term.query
-			if seen[seenKey] {
-				continue
-			}
-			seen[seenKey] = true
-			params := url.Values{}
-			params.Set("text", term.query)
-			if constraints.Area != "" {
-				params.Set("area", strings.TrimSpace(constraints.Area))
-			}
-			if term.resume.Hash != "" {
-				params.Set("resume", term.resume.Hash)
-			}
-			params.Set("order_by", "publication_time")
-			params.Set("search_period", strconv.Itoa(period))
-			params.Set("items_on_page", "50")
-			if len(constraints.IncludeKeywords) > 0 {
-				params.Set("career_agent_include", strings.Join(normalizeKeywords(constraints.IncludeKeywords), ","))
-			}
-			if len(constraints.ExcludeKeywords) > 0 {
-				params.Set("career_agent_exclude", strings.Join(normalizeKeywords(constraints.ExcludeKeywords), ","))
-			}
-			id := stableSearchID(term.resume.ID, term.query)
-			result = append(result, SearchProfile{ID: id, ResumeID: term.resume.ID, ResumeTitle: term.resume.Title, Query: term.query, Reason: term.reason, SearchPeriodDays: period, Params: params})
-			added++
 		}
 		if added == 0 {
 			break
 		}
 	}
+
+	merged := mergeSearchProfiles(ordered)
+	if len(merged) > max {
+		merged = merged[:max]
+	}
+	for index := range merged {
+		merged[index].ID = stableSearchProfileID(merged[index])
+	}
+	return merged
+}
+
+type searchQueryCandidate struct {
+	query  string
+	reason string
+}
+
+func searchFamilyOrder() []RoleFamily {
+	return []RoleFamily{
+		RoleFamilyPythonBackend, RoleFamilyWebBackend, RoleFamilyAutomationIntegrations,
+		RoleFamilyTechSupport, RoleFamilySystemAdmin, RoleFamilyFrontend, RoleFamilyFlutter,
+		RoleFamilyOneC, RoleFamilySystemAnalyst,
+	}
+}
+
+var searchFamilyAliases = map[RoleFamily][]string{
+	RoleFamilyPythonBackend:          {"Python-разработчик", "Backend-разработчик", "Python backend", "Python developer", "Django developer"},
+	RoleFamilyWebBackend:             {"backend-разработчик", "веб-разработчик", "Backend developer", "PHP backend", "Laravel developer"},
+	RoleFamilyAutomationIntegrations: {"инженер внедрения", "специалист по интеграциям", "automation engineer", "integration specialist", "implementation specialist"},
+	RoleFamilyTechSupport:            {"специалист технической поддержки", "инженер технической поддержки", "technical support", "support engineer", "application support"},
+	RoleFamilySystemAdmin:            {"system administrator", "linux administrator", "системный администратор"},
+	RoleFamilyFrontend:               {"frontend developer", "front end developer", "frontend-разработчик"},
+	RoleFamilyFlutter:                {"Flutter developer", "Flutter-разработчик"},
+	RoleFamilyOneC:                   {"1C developer", "1С-разработчик"},
+	RoleFamilySystemAnalyst:          {"system analyst", "системный аналитик"},
+}
+
+func searchFamilyQueries(resume ResumeProfile, family RoleFamily, signals CandidateSignals) []searchQueryCandidate {
+	queries := make([]searchQueryCandidate, 0)
+	add := func(raw, reason string) {
+		query := normalizeQuery(raw)
+		if query == "" || isNoiseQuery(query) || (!searchFamilyMatchesText(family, query) && reason != "resume role/title") {
+			return
+		}
+		for _, existing := range queries {
+			if normalizeText(existing.query) == normalizeText(query) {
+				return
+			}
+		}
+		queries = append(queries, searchQueryCandidate{query: query, reason: reason})
+	}
+	if familyMatchesResumeText(resume, family) {
+		add(resume.DesiredRole, "resume role/title")
+		add(resume.Title, "resume role/title")
+	}
+	for _, hint := range resume.SearchHints {
+		if searchFamilyMatchesText(family, hint) {
+			add(hint, "resume search hint")
+		}
+	}
+	for _, role := range signals.Roles {
+		if searchFamilyMatchesText(family, role) {
+			add(role, "trusted candidate role variant")
+		}
+	}
+	for _, alias := range searchFamilyAliases[family] {
+		add(alias, "bounded role-family alias")
+	}
+	return queries
+}
+
+func familyMatchesResumeText(resume ResumeProfile, family RoleFamily) bool {
+	for _, eligible := range DeriveEligibleSearchFamilies(resume) {
+		if eligible.Family == family {
+			return true
+		}
+	}
+	return false
+}
+
+func searchFamilyMatchesText(family RoleFamily, value string) bool {
+	rule, ok := roleFamilyRuleByFamily(family)
+	if !ok {
+		return false
+	}
+	for _, phrase := range rule.titleAnchors {
+		if containsCanonicalPhrase(value, phrase) {
+			return true
+		}
+	}
+	valueTokens := tokens(value)
+	for _, token := range append(append([]string(nil), rule.roleTokens...), rule.specificTokens...) {
+		if valueTokens[canonicalToken(token)] {
+			return true
+		}
+	}
+	return false
+}
+
+func roleFamilyRuleByFamily(family RoleFamily) (roleFamilyRule, bool) {
+	for _, rule := range reset6RoleFamilyRules {
+		if rule.family == family {
+			return rule, true
+		}
+	}
+	return roleFamilyRule{}, false
+}
+
+func buildSearchProfile(resume ResumeProfile, family EligibleSearchFamily, query, reason string, profileType SearchProfileType, period int, constraints SearchConstraints) SearchProfile {
+	query = normalizeQuery(query)
+	if query == "" || isNoiseQuery(query) || containsKeyword(query, constraints.ExcludeKeywords) {
+		return SearchProfile{}
+	}
+	params := url.Values{}
+	params.Set("text", query)
+	if constraints.Area != "" {
+		params.Set("area", strings.TrimSpace(constraints.Area))
+	}
+	if resume.Hash != "" {
+		params.Set("resume", resume.Hash)
+	}
+	params.Set("order_by", "publication_time")
+	params.Set("search_period", strconv.Itoa(period))
+	params.Set("items_on_page", "50")
+	if include := normalizeKeywords(constraints.IncludeKeywords); len(include) > 0 {
+		params.Set("career_agent_include", strings.Join(include, ","))
+	}
+	if exclude := normalizeKeywords(constraints.ExcludeKeywords); len(exclude) > 0 {
+		params.Set("career_agent_exclude", strings.Join(exclude, ","))
+	}
+	return SearchProfile{
+		ResumeID: resume.ID, ResumeTitle: resume.Title, Query: query, Reason: reason,
+		SearchPeriodDays: period, Params: params, ProfileType: profileType,
+		RoleFamily: family.Family, SourceResumeIDs: []string{resume.ID},
+		EligibilityEvidence: append([]string(nil), family.Evidence...),
+	}
+}
+
+func mergeSearchProfiles(profiles []SearchProfile) []SearchProfile {
+	result := make([]SearchProfile, 0, len(profiles))
+	indices := map[string]int{}
+	for _, profile := range profiles {
+		if profile.Query == "" {
+			continue
+		}
+		key := canonicalSearchProfileKey(profile)
+		if index, ok := indices[key]; ok {
+			result[index].SourceResumeIDs = appendUniqueStrings(result[index].SourceResumeIDs, profile.SourceResumeIDs...)
+			result[index].EligibilityEvidence = appendUniqueStrings(result[index].EligibilityEvidence, profile.EligibilityEvidence...)
+			result[index].Reason = mergeStableText(result[index].Reason, profile.Reason)
+			if profile.ResumeID < result[index].ResumeID {
+				result[index].ResumeID = profile.ResumeID
+				result[index].ResumeTitle = profile.ResumeTitle
+				result[index].ID = profile.ID
+			}
+			continue
+		}
+		profile.SourceResumeIDs = appendUniqueStrings(nil, profile.SourceResumeIDs...)
+		profile.EligibilityEvidence = appendUniqueStrings(nil, profile.EligibilityEvidence...)
+		indices[key] = len(result)
+		result = append(result, profile)
+	}
+	for index := range result {
+		sort.Strings(result[index].SourceResumeIDs)
+		sort.Strings(result[index].EligibilityEvidence)
+	}
 	return result
+}
+
+func mergeStableText(values ...string) string {
+	parts := []string{}
+	seen := map[string]bool{}
+	for _, value := range values {
+		for _, part := range strings.Split(value, "; ") {
+			part = strings.TrimSpace(part)
+			if part != "" && !seen[part] {
+				seen[part] = true
+				parts = append(parts, part)
+			}
+		}
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, "; ")
+}
+
+func stableSearchProfileID(profile SearchProfile) string {
+	key := canonicalSearchProfileKey(profile) + "\x00" + strings.Join(profile.SourceResumeIDs, "\x00") + "\x00" + strings.Join(profile.EligibilityEvidence, "\x00")
+	sum := sha256.Sum256([]byte(key))
+	return "search-" + hex.EncodeToString(sum[:8])
 }
 
 type VacancyInput struct {
