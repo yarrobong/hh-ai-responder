@@ -43,6 +43,15 @@ type Config struct {
 	BrowserTraceVacancyURL       string
 	BrowserTransport             string
 	BrowserHeadless              bool
+	HHTransport                  string
+	HHAPIBaseURL                 string
+	HHOAuthAuthorizeURL          string
+	HHOAuthTokenURL              string
+	HHOAuthClientID              string
+	HHOAuthClientSecret          string
+	HHOAuthRedirectURI           string
+	HHOAuthUserAgent             string
+	HHAPITokenFile               string
 	LogLevel                     string
 	Resume                       string
 	MaxResponses                 int

@@ -1,6 +1,8 @@
 /.env
 /cookies.txt
 /.hh-browser-profile/
+/.hh-api-token.json
+/.hh-api-token-*.json
 /out/
 /search.html
 /resumes.html

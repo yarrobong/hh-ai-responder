@@ -30,6 +30,11 @@ const (
 	DefaultLogLevel                     = "info"
 	DefaultProfileDir                   = ".hh-browser-profile"
 	DefaultBrowserTransport             = "auto"
+	DefaultHHTransport                  = "browser"
+	DefaultHHAPIBaseURL                 = "https://api.hh.ru"
+	DefaultHHOAuthAuthorizeURL          = "https://hh.ru/oauth/authorize"
+	DefaultHHOAuthTokenURL              = "https://api.hh.ru/token"
+	DefaultHHAPITokenFile               = ".hh-api-token.json"
 )
 
 const (
@@ -76,6 +81,11 @@ func defaults(workingDir string) Config {
 		ResumeRegistryPath:           filepath.Join(workingDir, "resume_registry.json"),
 		BrowserProfilePath:           filepath.Join(workingDir, DefaultProfileDir),
 		BrowserTransport:             DefaultBrowserTransport,
+		HHTransport:                  DefaultHHTransport,
+		HHAPIBaseURL:                 DefaultHHAPIBaseURL,
+		HHOAuthAuthorizeURL:          DefaultHHOAuthAuthorizeURL,
+		HHOAuthTokenURL:              DefaultHHOAuthTokenURL,
+		HHAPITokenFile:               DefaultHHAPITokenFile,
 		SearchPeriodDays:             DefaultSearchPeriodDays,
 		CareerAgentMaxSearchProfiles: DefaultCareerAgentMaxSearchProfiles,
 		MaxSearchPagesPerProfile:     DefaultMaxSearchPagesPerProfile,

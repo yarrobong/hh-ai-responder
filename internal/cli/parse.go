@@ -82,6 +82,8 @@ func topLevelCommand(value string) (CommandKind, bool) {
 		return CommandCareerAgent, true
 	case "hh-doctor":
 		return CommandHHDoctor, true
+	case "hh-api":
+		return CommandHHAPI, true
 	default:
 		return "", false
 	}
@@ -126,6 +128,10 @@ func validateCommandArgs(command CommandKind, args []string) error {
 		}
 		if args[0] == "reliability" && len(args) > 2 && !strings.HasPrefix(args[2], "-") && !known(args[2], "reconcile", "manual-confirm") {
 			return fmt.Errorf("unknown hh reliability action %q", args[2])
+		}
+	case CommandHHAPI:
+		if !known(args[0], "auth", "doctor", "logout") {
+			return fmt.Errorf("unknown hh-api command %q", args[0])
 		}
 	case CommandCandidate:
 		if !known(args[0], "migrate-postgres", "status", "semantic") {

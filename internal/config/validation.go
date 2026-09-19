@@ -34,6 +34,19 @@ func NormalizeBrowserTransport(value string) (string, error) {
 	}
 }
 
+func NormalizeHHTransport(value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return DefaultHHTransport, nil
+	}
+	switch value {
+	case "browser", "api", "auto":
+		return value, nil
+	default:
+		return "", fmt.Errorf("unsupported HH transport %q: use browser, api, or auto", value)
+	}
+}
+
 func ParseNonNegativeInt(value, name string, fallback int) (int, error) {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
@@ -228,6 +241,9 @@ func Validate(c Config) error {
 		return err
 	}
 	if _, err := NormalizeBrowserTransport(c.BrowserTransport); err != nil {
+		return err
+	}
+	if _, err := NormalizeHHTransport(c.HHTransport); err != nil {
 		return err
 	}
 	if c.AIAttempts < 1 {

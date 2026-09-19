@@ -95,6 +95,15 @@ type Config struct {
 	BrowserTraceVacancyURL       string
 	BrowserTransport             string
 	BrowserHeadless              bool
+	HHTransport                  string
+	HHAPIBaseURL                 string
+	HHOAuthAuthorizeURL          string
+	HHOAuthTokenURL              string
+	HHOAuthClientID              string
+	HHOAuthClientSecret          string
+	HHOAuthRedirectURI           string
+	HHOAuthUserAgent             string
+	HHAPITokenFile               string
 	LogLevel                     string
 	Resume                       string
 	MaxResponses                 int
@@ -3290,6 +3299,15 @@ func legacyConfigFromPackage(value appconfig.Config) Config {
 		BrowserTraceVacancyURL:       value.BrowserTraceVacancyURL,
 		BrowserTransport:             value.BrowserTransport,
 		BrowserHeadless:              value.BrowserHeadless,
+		HHTransport:                  value.HHTransport,
+		HHAPIBaseURL:                 value.HHAPIBaseURL,
+		HHOAuthAuthorizeURL:          value.HHOAuthAuthorizeURL,
+		HHOAuthTokenURL:              value.HHOAuthTokenURL,
+		HHOAuthClientID:              value.HHOAuthClientID,
+		HHOAuthClientSecret:          value.HHOAuthClientSecret,
+		HHOAuthRedirectURI:           value.HHOAuthRedirectURI,
+		HHOAuthUserAgent:             value.HHOAuthUserAgent,
+		HHAPITokenFile:               value.HHAPITokenFile,
 		LogLevel:                     value.LogLevel,
 		Resume:                       value.Resume,
 		MaxResponses:                 value.MaxResponses,

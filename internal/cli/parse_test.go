@@ -29,6 +29,9 @@ func TestParseSupportedInvocations(t *testing.T) {
 		{name: "monitor", args: []string{"monitor", "--run-once"}, command: CommandMonitor, commandArgs: []string{"--run-once"}},
 		{name: "audit", args: []string{"audit"}, command: CommandAudit},
 		{name: "hh doctor", args: []string{"hh-doctor"}, command: CommandHHDoctor},
+		{name: "hh api auth", args: []string{"hh-api", "auth"}, command: CommandHHAPI, subcommand: "auth", commandArgs: []string{"auth"}},
+		{name: "hh api doctor", args: []string{"hh-api", "doctor"}, command: CommandHHAPI, subcommand: "doctor", commandArgs: []string{"doctor"}},
+		{name: "hh api logout", args: []string{"hh-api", "logout"}, command: CommandHHAPI, subcommand: "logout", commandArgs: []string{"logout"}},
 		{name: "career agent shadow", args: []string{"career-agent", "--shadow"}, command: CommandCareerAgent, commandArgs: []string{"--shadow"}},
 		{name: "career agent subcommand shadow", args: []string{"career-agent", "shadow"}, command: CommandCareerAgent, subcommand: "shadow", commandArgs: []string{"shadow"}},
 		{name: "career agent feedback", args: []string{"career-agent", "feedback", "--vacancy", "1"}, command: CommandCareerAgent, subcommand: "feedback", commandArgs: []string{"feedback", "--vacancy", "1"}},
@@ -53,7 +56,7 @@ func TestParseSupportedInvocations(t *testing.T) {
 }
 
 func TestParseRejectsUnknownCommands(t *testing.T) {
-	for _, args := range [][]string{{"unknown"}, {"hh", "unknown"}} {
+	for _, args := range [][]string{{"unknown"}, {"hh", "unknown"}, {"hh-api", "unknown"}} {
 		if _, err := Parse(args); err == nil {
 			t.Fatalf("Parse(%#v) accepted an unsupported command", args)
 		}

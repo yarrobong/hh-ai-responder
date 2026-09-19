@@ -21,6 +21,7 @@ const (
 	CommandAudit       CommandKind = "audit"
 	CommandCareerAgent CommandKind = "career-agent"
 	CommandHHDoctor    CommandKind = "hh-doctor"
+	CommandHHAPI       CommandKind = "hh-api"
 )
 
 // Invocation is the parsed CLI intent. Args are the arguments after the

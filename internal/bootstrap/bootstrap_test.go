@@ -92,6 +92,20 @@ func TestRunDispatchesCommandAndPreservesArguments(t *testing.T) {
 	}
 }
 
+func TestRunDispatchesHHAPICommand(t *testing.T) {
+	called := false
+	env := testEnv(t, Handlers{HHAPI: func(request Request) int {
+		called = true
+		if request.Invocation.Command != "hh-api" || request.Invocation.Subcommand != "doctor" {
+			t.Fatalf("invocation=%+v", request.Invocation)
+		}
+		return 0
+	}})
+	if got := Run(context.Background(), []string{"hh-api", "doctor"}, env); got != 0 || !called {
+		t.Fatalf("exit=%d called=%t", got, called)
+	}
+}
+
 func TestRunPassesCancellationToRunHandler(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

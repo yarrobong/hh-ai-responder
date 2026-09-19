@@ -56,6 +56,55 @@ func TestLoadSafeDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadParsesHHAPIConfiguration(t *testing.T) {
+	lookup := lookupFrom(map[string]string{
+		"HH_TRANSPORT":           "api",
+		"HH_API_BASE_URL":        "http://api.test",
+		"HH_OAUTH_AUTHORIZE_URL": "http://authorize.test",
+		"HH_OAUTH_TOKEN_URL":     "http://token.test",
+		"HH_OAUTH_CLIENT_ID":     "test-client",
+		"HH_OAUTH_CLIENT_SECRET": "test-secret",
+		"HH_OAUTH_REDIRECT_URI":  "http://127.0.0.1/callback",
+		"HH_OAUTH_USER_AGENT":    "test-agent",
+		"HH_API_TOKEN_FILE":      ".test-token.json",
+	})
+	cfg, err := Load(nil, lookup, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HHTransport != "api" || cfg.HHAPIBaseURL != "http://api.test" || cfg.HHOAuthAuthorizeURL != "http://authorize.test" || cfg.HHOAuthTokenURL != "http://token.test" || cfg.HHOAuthClientID != "test-client" || cfg.HHOAuthClientSecret != "test-secret" || cfg.HHOAuthRedirectURI != "http://127.0.0.1/callback" || cfg.HHOAuthUserAgent != "test-agent" || cfg.HHAPITokenFile != ".test-token.json" {
+		t.Fatal("HH API environment values were not parsed")
+	}
+}
+
+func TestLoadHHAPIConfigurationDefaultsKeepCredentialsEmpty(t *testing.T) {
+	cfg := loadForTest(t, nil, nil)
+	if cfg.HHTransport != "browser" || cfg.HHAPIBaseURL != "https://api.hh.ru" || cfg.HHOAuthAuthorizeURL != "https://hh.ru/oauth/authorize" || cfg.HHOAuthTokenURL != "https://api.hh.ru/token" || cfg.HHAPITokenFile != ".hh-api-token.json" {
+		t.Fatalf("unexpected HH API defaults: %+v", cfg)
+	}
+	if cfg.HHOAuthClientID != "" || cfg.HHOAuthClientSecret != "" || cfg.HHOAuthRedirectURI != "" || cfg.HHOAuthUserAgent != "" {
+		t.Fatalf("HH API credentials must default to empty: %+v", cfg)
+	}
+}
+
+func TestLoadHHTransportValidationAndCLIPrecedence(t *testing.T) {
+	for _, transport := range []string{"browser", "api", "auto"} {
+		t.Run(transport, func(t *testing.T) {
+			cfg := loadForTest(t, nil, map[string]string{"HH_TRANSPORT": transport})
+			if cfg.HHTransport != transport {
+				t.Fatalf("HHTransport = %q, want %q", cfg.HHTransport, transport)
+			}
+		})
+	}
+	if _, err := Load(nil, lookupFrom(map[string]string{"HH_TRANSPORT": "http"}), t.TempDir()); err == nil {
+		t.Fatal("invalid HH transport was accepted")
+	}
+	cfg := loadForTest(t, []string{"--hh-transport", "browser"}, map[string]string{"HH_TRANSPORT": "api"})
+	if cfg.HHTransport != "browser" {
+		t.Fatalf("CLI HH transport did not override environment: %q", cfg.HHTransport)
+	}
+}
+
 func TestConversationRunLimitParsingAndValidation(t *testing.T) {
 	workDir := t.TempDir()
 	cfg, err := Load(nil, lookupFrom(map[string]string{"HH_MAX_CONVERSATIONS_PER_RUN": "3"}), workDir)

@@ -149,6 +149,20 @@ func Load(args []string, lookup LookupEnv, workingDir string) (Config, error) {
 	if cfg.BrowserTransport, err = NormalizeBrowserTransport(cfg.BrowserTransport); err != nil {
 		return Config{}, err
 	}
+	if !flags["hh-transport"] {
+		cfg.HHTransport = get("HH_TRANSPORT", cfg.HHTransport)
+	}
+	if cfg.HHTransport, err = NormalizeHHTransport(cfg.HHTransport); err != nil {
+		return Config{}, err
+	}
+	cfg.HHAPIBaseURL = get("HH_API_BASE_URL", cfg.HHAPIBaseURL)
+	cfg.HHOAuthAuthorizeURL = get("HH_OAUTH_AUTHORIZE_URL", cfg.HHOAuthAuthorizeURL)
+	cfg.HHOAuthTokenURL = get("HH_OAUTH_TOKEN_URL", cfg.HHOAuthTokenURL)
+	cfg.HHOAuthClientID = get("HH_OAUTH_CLIENT_ID", cfg.HHOAuthClientID)
+	cfg.HHOAuthClientSecret = get("HH_OAUTH_CLIENT_SECRET", cfg.HHOAuthClientSecret)
+	cfg.HHOAuthRedirectURI = get("HH_OAUTH_REDIRECT_URI", cfg.HHOAuthRedirectURI)
+	cfg.HHOAuthUserAgent = get("HH_OAUTH_USER_AGENT", cfg.HHOAuthUserAgent)
+	cfg.HHAPITokenFile = get("HH_API_TOKEN_FILE", cfg.HHAPITokenFile)
 	if !flags["hh-read-concurrency"] {
 		if raw, ok := lookupValue("HH_READ_CONCURRENCY"); ok && raw != "" {
 			cfg.HHReadConcurrency, err = atoiEnv(raw, "HH_READ_CONCURRENCY")
@@ -428,6 +442,7 @@ func registerFlags(fs *flag.FlagSet, cfg *Config, includeKeywordsRaw, excludeKey
 	fs.StringVar(&cfg.BrowserTraceVacancyURL, "browser-trace-vacancy", "", "One safe vacancy URL for browser/HTTP read trace")
 	fs.StringVar(&cfg.BrowserTransport, "browser-transport", DefaultBrowserTransport, "HH web read transport: auto, browser, or http")
 	fs.BoolVar(&cfg.BrowserHeadless, "browser-headless", false, "Run Playwright browser headless")
+	fs.StringVar(&cfg.HHTransport, "hh-transport", DefaultHHTransport, "HH read transport: browser, api, or auto")
 	fs.StringVar(&cfg.HHSyncStatePath, "hh-sync-state", filepath.Join(wd, "hh_sync_state.json"), "Состояние read-only синхронизации HH")
 	fs.DurationVar(&cfg.MonitorInterval, "sync-interval", DefaultMonitorInterval, "Интервал background monitor")
 	fs.StringVar(&cfg.MonitorQuietHours, "quiet-hours", "", "Тихие часы уведомлений, например 23:00-07:00")
