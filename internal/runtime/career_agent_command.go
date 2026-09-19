@@ -180,6 +180,7 @@ func renderCareerAgentHumanReport(report CareerAgentRunReport) string {
 	fmt.Fprintf(&builder, "Run: `%s`\n\n", report.RunID)
 	builder.WriteString("## Summary\n\n")
 	fmt.Fprintf(&builder, "- Raw: %d\n- Duplicates: %d\n- Unique: %d\n- Processed: %d\n- Already responded: %d\n- Obvious rejects: %d\n- Preliminary clear route: %d\n- Preliminary needs detail: %d\n- Detail requested/succeeded/failed: %d/%d/%d\n- Final routed: %d\n- Final ambiguous: %d\n- AI evaluated: %d\n- AI Apply=true/false (legacy): %d/%d\n- AI recommendation APPLY/DO_NOT_APPLY/UNCERTAIN: %d/%d/%d\n- AI hard missing/unknown: %d/%d\n- AI score below threshold: %d\n- AI advisory-only concerns: %d\n- AI MATCH/REJECT/REVIEW_REQUIRED: %d/%d/%d\n- MATCH: %d\n- REJECT: %d\n- REVIEW_REQUIRED: %d\n- Review before/after detail: %d/%d\n- Would apply: %d\n- Applied: %d\n- Shadow writes: %d\n- TOTAL TERMINAL: %d\n- ACCOUNTING CHECK: %s\n\n", report.Summary.VacanciesFetchedRaw, report.Summary.DuplicatesSkipped, report.Summary.VacanciesAfterDedup, report.Summary.VacanciesProcessed, report.Summary.PreviouslyRespondedSkipped, report.Summary.PreliminaryObviousRejects, report.Summary.PreliminaryClearRoute, report.Summary.PreliminaryNeedsDetail, report.Summary.DetailRequested, report.Summary.DetailSucceeded, report.Summary.DetailFailed, report.Summary.FinalRouted, report.Summary.FinalAmbiguous, report.Summary.AIEvaluated, report.Summary.AIApplyTrue, report.Summary.AIApplyFalse, report.Summary.AIRecommendationApply, report.Summary.AIRecommendationDoNotApply, report.Summary.AIRecommendationUncertain, report.Summary.AIHardMissing, report.Summary.AIHardUnknown, report.Summary.AIScoreBelowThreshold, report.Summary.AIAdvisoryOnlyConcerns, report.Summary.AIMatched, report.Summary.AIRejected, report.Summary.AIReviewed, report.Summary.Matched, report.Summary.Rejected, report.Summary.ReviewRequired, report.Summary.ReviewBeforeDetail, report.Summary.ReviewAfterDetail, report.Summary.WouldApply, report.Summary.Applied, report.Summary.ShadowWriteCount, report.Summary.TotalTerminal, passFail(report.Summary.AccountingPass))
+	fmt.Fprintf(&builder, "- Route ambiguous: %d\n- No suitable resume: %d\n- Role out of scope: %d\n- Route low evidence: %d\n\n", report.Summary.RouteReasonCounts[careeragent.RouteReasonAmbiguous], report.Summary.RouteReasonCounts[careeragent.RouteReasonNoSuitable], report.Summary.RouteReasonCounts[careeragent.RouteReasonOutOfScope], report.Summary.RouteReasonCounts[careeragent.RouteReasonLowEvidence])
 	builder.WriteString("Terminal outcomes:\n\n")
 	for _, key := range sortedMapKeys(report.Summary.TerminalOutcomes) {
 		fmt.Fprintf(&builder, "- %s: %d\n", key, report.Summary.TerminalOutcomes[key])
@@ -188,7 +189,7 @@ func renderCareerAgentHumanReport(report CareerAgentRunReport) string {
 	for _, profile := range report.SearchProfiles {
 		fmt.Fprintf(&builder, "| %s | %s | %s |\n", profile.ResumeTitle, profile.Query, profile.Reason)
 	}
-	builder.WriteString("\n## Vacancy outcomes\n\n| ID | Title | Terminal | AI | Selected resume | Confidence | AI reason | Blocked reason |\n|---:|---|---|---|---|---|---|---|\n")
+	builder.WriteString("\n## Vacancy outcomes\n\n| ID | Title | Terminal | AI | Selected resume | Confidence | Route reason | AI reason | Blocked reason |\n|---:|---|---|---|---|---|---|---|---|\n")
 	for _, vacancy := range report.Vacancies {
 		ai := "no"
 		if vacancy.AIEvaluated {
@@ -198,7 +199,7 @@ func renderCareerAgentHumanReport(report CareerAgentRunReport) string {
 		if vacancy.SelectedResumeTitle != "" {
 			selected = vacancy.SelectedResumeTitle + " (" + selected + ")"
 		}
-		fmt.Fprintf(&builder, "| %d | %s | %s | %s | %s | %s | %s | %s |\n", vacancy.VacancyID, vacancy.Title, vacancy.TerminalOutcome, ai, selected, vacancy.ResumeConfidence, vacancy.AIReasonCode, vacancy.BlockedReason)
+		fmt.Fprintf(&builder, "| %d | %s | %s | %s | %s | %s | %s | %s | %s |\n", vacancy.VacancyID, vacancy.Title, vacancy.TerminalOutcome, ai, selected, vacancy.ResumeConfidence, vacancy.FinalRouteReasonCode, vacancy.AIReasonCode, vacancy.BlockedReason)
 	}
 	return builder.String()
 }
