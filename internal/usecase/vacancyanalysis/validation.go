@@ -313,35 +313,8 @@ func isOptionalRequirementCandidate(value vacancy.Vacancy, description string, r
 	if requirement.Category == HardRequirementCategoryExperienceYears {
 		source = strings.Join([]string{value.WorkExperience, description}, " | ")
 	}
-	normalizedSource := normalizeEvidenceText(source)
-	normalizedEvidence := normalizeEvidenceText(requirement.VacancyEvidence)
-	if index := strings.Index(normalizedSource, normalizedEvidence); index >= 0 {
-		start := 0
-		for i := index - 1; i >= 0; i-- {
-			if strings.ContainsRune(".!?;|", rune(normalizedSource[i])) {
-				start = i + 1
-				break
-			}
-		}
-		end := len(normalizedSource)
-		for i := index + len(normalizedEvidence); i < len(normalizedSource); i++ {
-			if strings.ContainsRune(".!?;|", rune(normalizedSource[i])) {
-				end = i
-				break
-			}
-		}
-		return containsOptionalMarker(normalizedSource[start:end])
-	}
-	return containsOptionalMarker(normalizeEvidenceText(requirement.Requirement))
-}
-
-func containsOptionalMarker(text string) bool {
-	for _, marker := range []string{"желательно", "будет плюсом", "будет преимуществом", "приветствуется", "nice to have", "plus", "optional", "preferred", "bonus"} {
-		if strings.Contains(text, marker) {
-			return true
-		}
-	}
-	return false
+	classification := classifyRequirementContext(source, requirement.VacancyEvidence)
+	return classification.Classification == RequirementExtractionPreference
 }
 
 func normalizeEvidenceText(value string) string {
@@ -639,13 +612,8 @@ func ValidateHardRequirements(candidate CandidateFacts, value vacancy.Vacancy, a
 }
 
 func isOptionalRequirement(value HardRequirementEvaluation) bool {
-	text := strings.ToLower(strings.TrimSpace(value.Requirement + " " + value.VacancyEvidence))
-	for _, marker := range []string{"желательно", "желательный", "будет плюсом", "плюсом", "будет преимуществом", "преимуществом", "не обязательно", "nice to have", "preferred", "bonus", "optional"} {
-		if strings.Contains(text, marker) {
-			return true
-		}
-	}
-	return false
+	classification := classifyRequirementContext(value.Requirement+" "+value.VacancyEvidence, value.VacancyEvidence)
+	return classification.Classification == RequirementExtractionPreference
 }
 
 func validateLocationRequirement(candidateLocationValue string, requirement HardRequirementEvaluation) error {
