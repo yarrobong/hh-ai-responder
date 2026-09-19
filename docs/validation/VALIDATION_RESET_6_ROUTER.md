@@ -8,7 +8,8 @@ Validation date: 2026-09-19. All live validation runs were read-only with
 - Source baseline: `5dc0e102534a2a270c0f0392af01df0827f96b1f`.
 - Implementation start SHA: `7c5c69d39de31ee0a1c6beb39398575fde4ea1eb`.
 - Old report: `/tmp/reset6-old.json`.
-- Post-fix report: `/tmp/reset6-new2.json`.
+- Task 6 post-fix report: `/tmp/reset6-new2.json`.
+- Final post-verification report: `/tmp/reset6-final.json`.
 - Exact pre-flight metadata: `/tmp/reset6-baseline-meta.json`.
 - Enabled resumes: 4. The preserved old baseline has 46 vacancy IDs.
 
@@ -53,7 +54,10 @@ observable.
 | REJECT | 2 | 1 |
 | Shadow writes | 0 | 0 |
 
-The post-fix fresh-route accounting is exact: `1 + 1 + 2 + 16 + 21 = 41`.
+The final post-verification fresh-route accounting is exact:
+`1 + 1 + 2 + 16 + 21 = 41`. The final rerun preserved the same route
+categories, selected vacancy, AI count, and zero-write result as the Task 6
+post-fix report.
 
 ## Old-to-new transition matrix
 
@@ -132,7 +136,7 @@ false selections; those vacancies became `ROLE_OUT_OF_SCOPE`.
 
 ## Verification evidence
 
-Focused and full package checks passed during implementation. Final Task 8
-will rerun the complete repository checks, including race, vet, build,
-format/diff checks, and the final read-only run. The final source commit is
-reported in the RESET-6 handoff because it includes this validation report.
+Task 8 complete checks passed: full tests, race, vet, build, formatting/diff
+checks, JavaScript syntax check, and the final read-only run. The final source
+commit is reported in the RESET-6 handoff because it includes this validation
+report.
