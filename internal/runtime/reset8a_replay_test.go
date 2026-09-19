@@ -101,3 +101,80 @@ func TestReset8AReplayFixture(t *testing.T) {
 		}
 	}
 }
+
+func TestReset8AReplayTransitions(t *testing.T) {
+	cases := loadReset8AReplayCases(t)
+	for _, item := range cases {
+		candidate := LegacyCandidateContext{
+			Location:                   item.TrustedCandidateFacts.Location,
+			Skills:                     item.TrustedCandidateFacts.Skills,
+			Experience:                 item.TrustedCandidateFacts.Experience,
+			TotalExperienceMonthsKnown: item.TrustedCandidateFacts.TotalExperienceMonthsKnown,
+			TotalExperienceMonths:      item.TrustedCandidateFacts.TotalExperienceMonths,
+		}
+		value := Vacancy{
+			ID:             item.VacancyID,
+			Name:           item.Title,
+			Description:    item.Description,
+			WorkSchedule:   item.RelevantWorkModeLocationField,
+			WorkExperience: item.RelevantStructuredExperienceField,
+		}
+		derived := deriveHardRequirements(candidate, value, item.Description, replayRequirementCandidates(item.HardRequirementCandidates))
+		assessment := VacancyEvaluation{
+			Score:            item.AIScore,
+			Apply:            item.AIRecommendation == "APPLY",
+			Recommendation:   item.AIRecommendation,
+			HardRequirements: derived,
+		}
+		decision, reasonCode, _ := vacancyDecisionWithReason(assessment, 65)
+
+		gotStatuses := make(map[string]string, len(derived))
+		for _, requirement := range derived {
+			gotStatuses[requirement.Requirement] = requirement.Status
+		}
+		expectedStatuses := cloneStringMap(item.OldHardStatuses)
+		expectedReason := item.OldFinalReason
+		expectedDecision := item.OldFinalDecision
+		switch item.VacancyID {
+		case 137531969:
+			expectedStatuses["2 года опыта в AI/ML/NLP"] = hardRequirementStatusUnknown
+			expectedReason = ReasonScoreBelowThreshold
+			expectedDecision = string(VacancyReject)
+		case 136577315:
+			delete(expectedStatuses, "Москва (офис)")
+			expectedReason = ReasonAIAdvisoryConcern
+			expectedDecision = string(VacancyReviewRequired)
+		}
+		if !mapsEqual(gotStatuses, expectedStatuses) || string(decision) != expectedDecision || reasonCode != expectedReason {
+			t.Errorf("vacancy %d transition old=%v/%s/%s/%s got=%v/%s/%s/%s expected=%v/%s/%s", item.VacancyID, item.OldHardStatuses, item.OldLocalGate, item.OldFinalDecision, item.OldFinalReason, gotStatuses, reasonCode, decision, reasonCode, expectedStatuses, expectedReason, expectedDecision)
+		}
+	}
+}
+
+func replayRequirementCandidates(values []reset8AReplayRequirement) []HardRequirementCandidate {
+	result := make([]HardRequirementCandidate, 0, len(values))
+	for _, value := range values {
+		result = append(result, HardRequirementCandidate{Requirement: value.Requirement, Category: value.Category, VacancyEvidence: value.VacancyEvidence})
+	}
+	return result
+}
+
+func cloneStringMap(value map[string]string) map[string]string {
+	result := make(map[string]string, len(value))
+	for key, item := range value {
+		result[key] = item
+	}
+	return result
+}
+
+func mapsEqual(left, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, value := range left {
+		if right[key] != value {
+			return false
+		}
+	}
+	return true
+}
