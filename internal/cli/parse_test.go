@@ -36,6 +36,7 @@ func TestParseSupportedInvocations(t *testing.T) {
 		{name: "hh api doctor", args: []string{"hh-api", "doctor"}, command: CommandHHAPI, subcommand: "doctor", commandArgs: []string{"doctor"}},
 		{name: "hh api logout", args: []string{"hh-api", "logout"}, command: CommandHHAPI, subcommand: "logout", commandArgs: []string{"logout"}},
 		{name: "hh api preflight", args: []string{"hh-api", "preflight", "42", "--resume-id", "resume-1"}, command: CommandHHAPI, subcommand: "preflight", commandArgs: []string{"preflight", "42", "--resume-id", "resume-1"}},
+		{name: "hh api preflight all resumes", args: []string{"hh-api", "preflight", "42", "--all-resumes"}, command: CommandHHAPI, subcommand: "preflight", commandArgs: []string{"preflight", "42", "--all-resumes"}},
 		{name: "career agent shadow", args: []string{"career-agent", "--shadow"}, command: CommandCareerAgent, commandArgs: []string{"--shadow"}},
 		{name: "career agent subcommand shadow", args: []string{"career-agent", "shadow"}, command: CommandCareerAgent, subcommand: "shadow", commandArgs: []string{"shadow"}},
 		{name: "career agent feedback", args: []string{"career-agent", "feedback", "--vacancy", "1"}, command: CommandCareerAgent, subcommand: "feedback", commandArgs: []string{"feedback", "--vacancy", "1"}},
@@ -95,6 +96,7 @@ func TestParseRejectsHHAPIExtraPositionalArguments(t *testing.T) {
 		{"hh-api", "logout", "unexpected"},
 		{"hh-api", "preflight"},
 		{"hh-api", "preflight", "42", "unexpected"},
+		{"hh-api", "preflight", "42", "--resume-id", "resume-1", "--all-resumes"},
 		{"hh-api", "auth", "--code=authorization-code-sentinel"},
 		{"hh-api", "auth", "--authorization-code=authorization-code-sentinel"},
 	} {

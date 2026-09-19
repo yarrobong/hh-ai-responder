@@ -273,6 +273,8 @@ func TestHHAPIPreflightIsGETOnlyAndSanitized(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		methods = append(methods, r.Method)
 		switch r.URL.Path {
+		case "/resumes/mine":
+			writeHHAPIJSON(t, w, map[string]any{"items": []any{map[string]any{"id": "resume-1", "title": "Backend"}}})
 		case "/vacancies/42":
 			writeHHAPIJSON(t, w, map[string]any{
 				"id": "42", "relations": []string{"favorited"},
@@ -281,7 +283,7 @@ func TestHHAPIPreflightIsGETOnlyAndSanitized(t *testing.T) {
 				"archived":             false, "has_test": false, "response_letter_required": false,
 			})
 		case "/vacancies/42/suitable_resumes":
-			writeHHAPIJSON(t, w, map[string]any{"items": []any{map[string]any{"id": "resume-1"}}})
+			writeHHAPIJSON(t, w, map[string]any{"items": []any{map[string]any{"id": "resume-1"}}, "page": 0, "pages": 1})
 		case "/negotiations":
 			writeHHAPIJSON(t, w, map[string]any{"items": []any{}})
 		default:
@@ -300,13 +302,58 @@ func TestHHAPIPreflightIsGETOnlyAndSanitized(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := out.String()
-	for _, want := range []string{"Vacancy ID: 42", "got_response relation: NO", "negotiations URL present: YES", "suitable resumes URL present: YES", "selected resume suitable: YES", "existing negotiation: UNKNOWN", "negotiation ID: absent", "negotiation collections discovered: 0", "negotiation collections checked: 0", "negotiation pages checked: 0", "matching negotiation: NO", "negotiation scan complete: NO", "final duplicate state: UNKNOWN"} {
+	for _, want := range []string{"Vacancy ID: 42", "requested resume ID: present", "selected provider resume title: Backend", "got_response relation: NO", "negotiations URL present: YES", "suitable resumes URL present: YES", "suitable endpoint scan complete: YES", "suitable resume IDs discovered: 1", "requested resume present: YES", "selected resume suitable: YES", "existing negotiation: UNKNOWN", "negotiation ID: absent", "negotiation collections discovered: 0", "negotiation collections checked: 0", "negotiation pages checked: 0", "matching negotiation: NO", "negotiation scan complete: NO", "application availability: UNKNOWN", "final duplicate state: UNKNOWN"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("output=%q, missing %q", output, want)
 		}
 	}
 	if strings.Contains(output, server.URL) || strings.Contains(output, "resume-1") {
 		t.Fatalf("preflight output exposed provider details: %q", output)
+	}
+	for _, method := range methods {
+		if method != http.MethodGet {
+			t.Fatalf("methods=%v, want GET only", methods)
+		}
+	}
+	assertHHAPISafeOutput(t, output+errOut.String())
+}
+
+func TestHHAPIAllResumePreflightPrintsReadOnlyMatrix(t *testing.T) {
+	var methods []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		methods = append(methods, r.Method)
+		switch r.URL.Path {
+		case "/resumes/mine":
+			writeHHAPIJSON(t, w, map[string]any{"items": []any{
+				map[string]any{"id": "resume-a", "title": "Support"},
+				map[string]any{"id": "resume-b", "title": "Backend"},
+			}})
+		case "/vacancies/42":
+			writeHHAPIJSON(t, w, map[string]any{"id": "42", "suitable_resumes_url": "/vacancies/42/suitable_resumes", "archived": true})
+		case "/vacancies/42/suitable_resumes":
+			writeHHAPIJSON(t, w, map[string]any{"items": []any{map[string]any{"id": "resume-a"}}, "page": 0, "pages": 1})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	tokenFile := filepath.Join(t.TempDir(), "api-token.json")
+	if err := hhapi.NewFileTokenStore(tokenFile).Save(context.Background(), hhapi.OAuthTokens{AccessToken: hhAPIAccessTokenSentinel, TokenType: "bearer", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testHHAPIConfig(t, server.URL, server.URL+"/token", tokenFile, "https://operator.example/callback")
+	var out, errOut bytes.Buffer
+	if err := runHHAPICommandWithDeps(context.Background(), []string{"preflight", "42", "--all-resumes"}, cfg, strings.NewReader(""), &out, &errOut, HHAPICommandDeps{}); err != nil {
+		t.Fatal(err)
+	}
+	output := out.String()
+	for _, want := range []string{"resume matrix: GET-only; no routing or resume switching", "resume title: Support", "resume title: Backend", "present in suitable_resumes: YES", "present in suitable_resumes: NO", "scan complete: YES", "application availability: UNAVAILABLE"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output=%q, missing %q", output, want)
+		}
+	}
+	if strings.Contains(output, "resume-a") || strings.Contains(output, "resume-b") {
+		t.Fatalf("all-resume output exposed raw provider IDs: %q", output)
 	}
 	for _, method := range methods {
 		if method != http.MethodGet {

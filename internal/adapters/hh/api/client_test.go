@@ -572,6 +572,104 @@ func TestAPIHHClientReadsProviderSuppliedSuitableResumes(t *testing.T) {
 	}
 }
 
+func TestAPIHHClientScansAllSuitableResumePages(t *testing.T) {
+	var methods []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		methods = append(methods, r.Method)
+		if r.URL.Path != "/vacancies/42/suitable_resumes" {
+			t.Fatalf("path=%q", r.URL.Path)
+		}
+		switch r.URL.Query().Get("page") {
+		case "", "0":
+			_, _ = io.WriteString(w, `{"items":[{"id":"resume-a"}],"page":0,"pages":2,"found":2}`)
+		case "1":
+			_, _ = io.WriteString(w, `{"items":[{"id":"resume-b"}],"page":1,"pages":2,"found":2}`)
+		default:
+			t.Fatalf("unexpected page=%q", r.URL.Query().Get("page"))
+		}
+	}))
+	defer server.Close()
+
+	scan, err := newAPIClient(t, server.URL, &memoryTokenStore{loaded: validTokens()}).ReadSuitableResumeScan(context.Background(), server.URL+"/vacancies/42/suitable_resumes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !scan.Complete || scan.PagesChecked != 2 || len(scan.IDs) != 2 || scan.IDs[0] != "resume-a" || scan.IDs[1] != "resume-b" {
+		t.Fatalf("scan=%+v", scan)
+	}
+	for _, method := range methods {
+		if method != http.MethodGet {
+			t.Fatalf("methods=%v, want GET only", methods)
+		}
+	}
+}
+
+func TestAPIHHClientSuitableResumeScanIsIncompleteWithoutPaginationEvidence(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"items":[{"id":"resume-a"}]}`)
+	}))
+	defer server.Close()
+
+	scan, err := newAPIClient(t, server.URL, &memoryTokenStore{loaded: validTokens()}).ReadSuitableResumeScan(context.Background(), server.URL+"/vacancies/42/suitable_resumes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scan.Complete || scan.PagesChecked != 1 || len(scan.IDs) != 1 {
+		t.Fatalf("scan=%+v, want incomplete scan with one discovered ID", scan)
+	}
+}
+
+func TestAPIHHClientSuitableResumeScanHandlesEmptyAndMultipleResults(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want []string
+	}{
+		{name: "no suitable resumes", body: `{"items":[],"page":0,"pages":1,"found":0}`, want: nil},
+		{name: "multiple suitable resumes", body: `{"items":[{"id":"resume-a"},{"id":"resume-b"}],"page":0,"pages":1,"found":2}`, want: []string{"resume-a", "resume-b"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.WriteString(w, test.body)
+			}))
+			defer server.Close()
+			scan, err := newAPIClient(t, server.URL, &memoryTokenStore{loaded: validTokens()}).ReadSuitableResumeScan(context.Background(), server.URL+"/vacancies/42/suitable_resumes")
+			if err != nil || !scan.Complete || len(scan.IDs) != len(test.want) {
+				t.Fatalf("scan=%+v err=%v", scan, err)
+			}
+			for index, want := range test.want {
+				if scan.IDs[index] != want {
+					t.Fatalf("scan IDs=%v, want %v", scan.IDs, test.want)
+				}
+			}
+		})
+	}
+}
+
+func TestAPIHHClientSuitableResumeScanFailsOnEndpointErrorOrMalformedID(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{name: "endpoint error", status: http.StatusForbidden, body: `{"error":"forbidden"}`},
+		{name: "malformed id", status: http.StatusOK, body: `{"items":[{"title":"missing provider id"}],"page":0,"pages":1}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(test.status)
+				_, _ = io.WriteString(w, test.body)
+			}))
+			defer server.Close()
+			if _, err := newAPIClient(t, server.URL, &memoryTokenStore{loaded: validTokens()}).ReadSuitableResumeScan(context.Background(), server.URL+"/vacancies/42/suitable_resumes"); err == nil {
+				t.Fatal("suitable-resume scan unexpectedly succeeded")
+			}
+		})
+	}
+}
+
 func TestAPIHHClientReadsProviderSuppliedNegotiations(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/negotiations" || r.URL.Query().Get("vacancy_id") != "42" {

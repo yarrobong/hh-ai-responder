@@ -153,6 +153,7 @@ func TestAlreadyRespondedEvidenceIsFailClosed(t *testing.T) {
 type apiApplicationPreflightFake struct {
 	detail           hhread.VacancyRecord
 	suitableIDs      []string
+	suitableScan     *hhread.SuitableResumeScan
 	suitableErr      error
 	negotiations     hhread.ApplicationPage
 	negotiationsErr  error
@@ -184,6 +185,16 @@ func (f *apiApplicationPreflightFake) ReadVacancyDetail(context.Context, int) (h
 
 func (f *apiApplicationPreflightFake) ReadSuitableResumeIDs(context.Context, string) ([]string, error) {
 	return append([]string(nil), f.suitableIDs...), f.suitableErr
+}
+
+func (f *apiApplicationPreflightFake) ReadSuitableResumeScan(context.Context, string) (hhread.SuitableResumeScan, error) {
+	if f.suitableErr != nil {
+		return hhread.SuitableResumeScan{}, f.suitableErr
+	}
+	if f.suitableScan != nil {
+		return *f.suitableScan, nil
+	}
+	return hhread.SuitableResumeScan{IDs: append([]string(nil), f.suitableIDs...), PagesChecked: 1, Complete: true}, nil
 }
 
 func (f *apiApplicationPreflightFake) ReadNegotiations(context.Context, string) (hhread.ApplicationPage, error) {
@@ -291,6 +302,43 @@ func TestAPIApplicationPreflightSuitableResumeTriState(t *testing.T) {
 			}
 			if preflight.SelectedResumeSuitableKnown != test.wantKnown || preflight.SelectedResumeSuitable != test.wantValue {
 				t.Fatalf("suitable=%+v", preflight)
+			}
+		})
+	}
+}
+
+func TestAPIApplicationPreflightIncompleteSuitableScanRemainsUnknown(t *testing.T) {
+	source := &apiApplicationPreflightFake{
+		detail:       hhread.VacancyRecord{ID: 42, SuitableResumesURL: "https://api.example/suitable"},
+		suitableScan: &hhread.SuitableResumeScan{IDs: []string{"resume-1"}, PagesChecked: 1, Complete: false},
+	}
+	preflight, err := newAPIApplicationPreflightResponder(source).GetVacancyPreflight(Vacancy{ID: 42})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preflight.SelectedResumeSuitableKnown || preflight.SuitableResumesScanComplete || preflight.SuitableResumeIDsDiscovered != 1 {
+		t.Fatalf("preflight=%+v, want unknown suitability and incomplete scan", preflight)
+	}
+}
+
+func TestProviderResumeIdentityNormalizesOnlyKnownInternalProviderPrefix(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+		ok   bool
+	}{
+		{name: "raw provider id", in: "resume-a", want: "resume-a", ok: true},
+		{name: "internal provider prefix", in: "hh-resume-provider-id-resume-a", want: "resume-a", ok: true},
+		{name: "empty", in: "", ok: false},
+		{name: "prefix without identity", in: "hh-resume-provider-id-", ok: false},
+		{name: "other internal id is not fabricated", in: "hh-resume-id-42", ok: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := normalizeProviderResumeID(test.in)
+			if got != test.want || ok != test.ok {
+				t.Fatalf("normalizeProviderResumeID(%q)=(%q,%t), want (%q,%t)", test.in, got, ok, test.want, test.ok)
 			}
 		})
 	}

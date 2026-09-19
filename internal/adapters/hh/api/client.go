@@ -222,6 +222,105 @@ func (c *APIHHClient) ReadSuitableResumeIDs(ctx context.Context, endpoint string
 	return mapSuitableResumePage(value)
 }
 
+// ReadSuitableResumeScan exhausts the provider-supplied suitable-resume
+// resource when pagination metadata proves how to reach its final page.
+// Missing pagination evidence is returned as an incomplete scan, not as a
+// false negative.
+func (c *APIHHClient) ReadSuitableResumeScan(ctx context.Context, endpoint string) (hhread.SuitableResumeScan, error) {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return hhread.SuitableResumeScan{}, errors.New("HH API suitable resumes endpoint is empty")
+	}
+	result := hhread.SuitableResumeScan{}
+	seenEndpoints := map[string]struct{}{}
+	seenIDs := map[string]struct{}{}
+	current := endpoint
+	found := -1
+	rawItems := 0
+	for result.PagesChecked < 1000 {
+		if _, seen := seenEndpoints[current]; seen {
+			return hhread.SuitableResumeScan{}, errors.New("HH API suitable resumes pagination repeated an endpoint")
+		}
+		seenEndpoints[current] = struct{}{}
+		body, _, err := c.getProviderEndpoint(ctx, current)
+		if err != nil {
+			return hhread.SuitableResumeScan{}, err
+		}
+		var value wireSuitableResumePage
+		if err := decodeWire(body, &value); err != nil {
+			return hhread.SuitableResumeScan{}, err
+		}
+		ids, err := mapSuitableResumePage(value)
+		if err != nil {
+			return hhread.SuitableResumeScan{}, err
+		}
+		result.PagesChecked++
+		rawItems += len(ids)
+		for _, id := range ids {
+			if _, ok := seenIDs[id]; ok {
+				continue
+			}
+			seenIDs[id] = struct{}{}
+			result.IDs = append(result.IDs, id)
+		}
+		if value.Found != nil {
+			if *value.Found < 0 || (found >= 0 && found != *value.Found) {
+				return hhread.SuitableResumeScan{}, errors.New("HH API suitable resumes found count is inconsistent")
+			}
+			found = *value.Found
+		}
+		next, complete, err := nextSuitableResumeEndpoint(current, value)
+		if err != nil {
+			return hhread.SuitableResumeScan{}, err
+		}
+		if complete {
+			if found >= 0 && rawItems != found {
+				return hhread.SuitableResumeScan{}, errors.New("HH API suitable resumes scan count is incomplete")
+			}
+			result.Complete = true
+			return result, nil
+		}
+		if next == "" {
+			return result, nil
+		}
+		current = next
+	}
+	return hhread.SuitableResumeScan{}, errors.New("HH API suitable resumes pagination exceeded safety bound")
+}
+
+func nextSuitableResumeEndpoint(current string, value wireSuitableResumePage) (string, bool, error) {
+	if value.Paging != nil && value.Paging.Next != nil && strings.TrimSpace(value.Paging.Next.URL) != "" {
+		return strings.TrimSpace(value.Paging.Next.URL), false, nil
+	}
+	if value.HasNext != nil {
+		if !*value.HasNext {
+			return "", true, nil
+		}
+		return nextProviderPageURLChecked(current, value.Page)
+	}
+	if value.Pages != nil {
+		if *value.Pages < 1 || value.Page == nil || *value.Page < 0 || *value.Page >= *value.Pages {
+			return "", false, errors.New("HH API suitable resumes pagination is invalid")
+		}
+		if *value.Page+1 >= *value.Pages {
+			return "", true, nil
+		}
+		return nextProviderPageURLChecked(current, value.Page)
+	}
+	return "", false, nil
+}
+
+func nextProviderPageURLChecked(current string, page *int) (string, bool, error) {
+	if page == nil || *page < 0 {
+		return "", false, errors.New("HH API suitable resumes page is invalid")
+	}
+	next := nextProviderPageURL(current, *page+1)
+	if next == "" {
+		return "", false, errors.New("HH API suitable resumes next page URL is invalid")
+	}
+	return next, false, nil
+}
+
 // ReadNegotiationCollections follows the vacancy-scoped provider URL and
 // decodes the collection index. It never treats the index as a negotiation
 // item list.

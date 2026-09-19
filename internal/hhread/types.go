@@ -142,6 +142,15 @@ type ResumeRecord struct {
 	UpdatedAt                  time.Time
 }
 
+// SuitableResumeScan is the bounded, read-only result of exhausting the
+// provider's suitable-resume resource. Complete is false when pagination
+// metadata is absent or the caller could not prove that all pages were read.
+type SuitableResumeScan struct {
+	IDs          []string
+	PagesChecked int
+	Complete     bool
+}
+
 type Action struct {
 	Kind     string
 	ID       string

@@ -39,6 +39,13 @@ type ResumeReadSource interface {
 	ReadResume(context.Context, string) (hhread.ResumeRecord, error)
 }
 
+// SuitableResumeScanSource is an optional read-only capability for provider
+// resources whose pagination must be exhausted before a negative suitability
+// result is trusted.
+type SuitableResumeScanSource interface {
+	ReadSuitableResumeScan(context.Context, string) (hhread.SuitableResumeScan, error)
+}
+
 // BoundedConversationReadSource is the optional read capability used by an
 // operator-bounded Career run. Implementations must apply the limit before
 // expanding conversation details; zero means the regular unbounded read.

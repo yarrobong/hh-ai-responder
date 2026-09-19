@@ -149,9 +149,11 @@ func validateCommandArgs(command CommandKind, args []string) error {
 			if len(args) < 2 || strings.HasPrefix(args[1], "-") {
 				return errors.New("hh-api preflight requires a vacancy ID")
 			}
+			hasResumeID, hasAllResumes := false, false
 			for index := 2; index < len(args); index++ {
 				arg := args[index]
 				if arg == "--resume-id" {
+					hasResumeID = true
 					if index+1 >= len(args) || strings.HasPrefix(args[index+1], "-") || args[index+1] == "" {
 						return errors.New("hh-api preflight --resume-id requires a value")
 					}
@@ -159,15 +161,23 @@ func validateCommandArgs(command CommandKind, args []string) error {
 					continue
 				}
 				if strings.HasPrefix(arg, "--resume-id=") && strings.TrimPrefix(arg, "--resume-id=") != "" {
+					hasResumeID = true
+					continue
+				}
+				if arg == "--all-resumes" {
+					hasAllResumes = true
 					continue
 				}
 				if IsHelpFlag(arg) {
 					continue
 				}
 				if strings.HasPrefix(arg, "-") {
-					return errors.New("hh-api preflight accepts only --resume-id")
+					return errors.New("hh-api preflight accepts only --resume-id or --all-resumes")
 				}
 				return errors.New("hh-api preflight accepts one vacancy ID")
+			}
+			if hasResumeID && hasAllResumes {
+				return errors.New("hh-api preflight cannot combine --resume-id with --all-resumes")
 			}
 			return nil
 		}

@@ -99,7 +99,12 @@ type wireRelation struct {
 }
 
 type wireSuitableResumePage struct {
-	Items []wireSuitableResume `json:"items"`
+	Items   []wireSuitableResume `json:"items"`
+	Page    *int                 `json:"page"`
+	Pages   *int                 `json:"pages"`
+	Found   *int                 `json:"found"`
+	HasNext *bool                `json:"has_next"`
+	Paging  *wirePaging          `json:"paging"`
 }
 
 type wireSuitableResume struct {

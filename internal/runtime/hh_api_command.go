@@ -17,6 +17,7 @@ import (
 	"time"
 
 	hhapi "hh-ai-responder/internal/adapters/hh/api"
+	"hh-ai-responder/internal/hhread"
 )
 
 const (
@@ -71,6 +72,7 @@ func runHHAPIPreflight(ctx context.Context, args []string, cfg Config, stdout, s
 	_ = stderr
 	positionals := []string{}
 	resumeID := ""
+	allResumes := false
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
 		switch {
@@ -85,11 +87,16 @@ func runHHAPIPreflight(ctx context.Context, args []string, cfg Config, stdout, s
 			if resumeID == "" {
 				return errors.New("hh-api preflight --resume-id requires a value")
 			}
+		case arg == "--all-resumes":
+			allResumes = true
 		case strings.HasPrefix(arg, "-"):
-			return errors.New("hh-api preflight accepts only --resume-id")
+			return errors.New("hh-api preflight accepts only --resume-id or --all-resumes")
 		default:
 			positionals = append(positionals, arg)
 		}
+	}
+	if allResumes && strings.TrimSpace(resumeID) != "" {
+		return errors.New("hh-api preflight cannot combine --resume-id with --all-resumes")
 	}
 	if len(positionals) != 1 {
 		return errors.New("usage: hh-api preflight <vacancy-id> [--resume-id ID]")
@@ -103,15 +110,16 @@ func runHHAPIPreflight(ctx context.Context, args []string, cfg Config, stdout, s
 	if err != nil {
 		return err
 	}
+	resumes, readErr := client.ReadResumes(ctx)
+	if readErr != nil {
+		return fmt.Errorf("HH API preflight resumes read failed: %w", readErr)
+	}
+	if allResumes {
+		return runHHAPIAllResumePreflight(ctx, client, vacancyID, resumes, stdout)
+	}
 	selectedID := strings.TrimSpace(resumeID)
-	if selectedID == "" {
-		resumes, readErr := client.ReadResumes(ctx)
-		if readErr != nil {
-			return fmt.Errorf("HH API preflight resumes read failed: %w", readErr)
-		}
-		if len(resumes) > 0 {
-			selectedID = strings.TrimSpace(resumes[0].ID)
-		}
+	if selectedID == "" && len(resumes) > 0 {
+		selectedID = strings.TrimSpace(resumes[0].ID)
 	}
 	preflight, err := apiVacancyPreflightWithSource(ctx, client, vacancyID, selectedID)
 	if err != nil {
@@ -119,9 +127,14 @@ func runHHAPIPreflight(ctx context.Context, args []string, cfg Config, stdout, s
 	}
 	evidence := preflight.alreadyRespondedEvidence()
 	_, _ = fmt.Fprintf(stdout, "Vacancy ID: %d\n", vacancyID)
+	_, _ = fmt.Fprintf(stdout, "requested resume ID: %s\n", safeHHAPIResumeID(selectedID))
+	_, _ = fmt.Fprintf(stdout, "selected provider resume title: %s\n", hhAPIResumeTitle(resumes, selectedID))
 	_, _ = fmt.Fprintf(stdout, "got_response relation: %s\n", hhAPIYesNo(preflight.GotResponseRelation))
 	_, _ = fmt.Fprintf(stdout, "negotiations URL present: %s\n", hhAPIYesNo(preflight.NegotiationsURLPresent))
 	_, _ = fmt.Fprintf(stdout, "suitable resumes URL present: %s\n", hhAPIYesNo(preflight.SuitableResumesURLPresent))
+	_, _ = fmt.Fprintf(stdout, "suitable endpoint scan complete: %s\n", hhAPIYesNo(preflight.SuitableResumesScanComplete))
+	_, _ = fmt.Fprintf(stdout, "suitable resume IDs discovered: %d\n", preflight.SuitableResumeIDsDiscovered)
+	_, _ = fmt.Fprintf(stdout, "requested resume present: %s\n", hhAPITriState(preflight.SelectedResumeSuitableKnown, preflight.SelectedResumeSuitable))
 	_, _ = fmt.Fprintf(stdout, "selected resume suitable: %s\n", hhAPITriState(preflight.SelectedResumeSuitableKnown, preflight.SelectedResumeSuitable))
 	_, _ = fmt.Fprintf(stdout, "existing negotiation: %s\n", hhAPITriState(preflight.ExistingNegotiationKnown, preflight.ExistingNegotiation))
 	_, _ = fmt.Fprintf(stdout, "negotiation ID: %s\n", hhAPIPresentAbsent(strings.TrimSpace(preflight.NegotiationID) != ""))
@@ -130,8 +143,62 @@ func runHHAPIPreflight(ctx context.Context, args []string, cfg Config, stdout, s
 	_, _ = fmt.Fprintf(stdout, "negotiation pages checked: %d\n", preflight.NegotiationPagesChecked)
 	_, _ = fmt.Fprintf(stdout, "matching negotiation: %s\n", hhAPIYesNo(preflight.MatchingNegotiation))
 	_, _ = fmt.Fprintf(stdout, "negotiation scan complete: %s\n", hhAPIYesNo(preflight.NegotiationScanComplete))
+	_, _ = fmt.Fprintf(stdout, "application availability: %s\n", hhAPIAvailability(preflight))
 	_, _ = fmt.Fprintf(stdout, "final duplicate state: %s\n", string(evidence.Value))
 	return nil
+}
+
+func runHHAPIAllResumePreflight(ctx context.Context, client *hhapi.APIHHClient, vacancyID int, resumes []hhread.ResumeRecord, stdout io.Writer) error {
+	if len(resumes) == 0 {
+		_, _ = fmt.Fprintln(stdout, "No account resumes discovered")
+		return nil
+	}
+	_, _ = fmt.Fprintf(stdout, "Vacancy ID: %d\n", vacancyID)
+	_, _ = fmt.Fprintln(stdout, "resume matrix: GET-only; no routing or resume switching")
+	for _, resume := range resumes {
+		id := strings.TrimSpace(resume.ID)
+		preflight, err := apiVacancyPreflightWithSource(ctx, client, vacancyID, id)
+		if err != nil {
+			return fmt.Errorf("HH API preflight failed for resume %s: %w", safeHHAPIResumeID(id), err)
+		}
+		_, _ = fmt.Fprintf(stdout, "resume provider ID: %s\n", safeHHAPIResumeID(id))
+		_, _ = fmt.Fprintf(stdout, "resume title: %s\n", firstNonEmpty(strings.TrimSpace(resume.Title), "UNKNOWN"))
+		_, _ = fmt.Fprintf(stdout, "present in suitable_resumes: %s\n", hhAPITriState(preflight.SelectedResumeSuitableKnown, preflight.SelectedResumeSuitable))
+		_, _ = fmt.Fprintf(stdout, "scan complete: %s\n", hhAPIYesNo(preflight.SuitableResumesScanComplete))
+		_, _ = fmt.Fprintf(stdout, "application availability: %s\n", hhAPIAvailability(preflight))
+	}
+	return nil
+}
+
+func safeHHAPIResumeID(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "absent"
+	}
+	if len(value) <= 8 {
+		return "present"
+	}
+	return "present(" + value[:4] + "…" + value[len(value)-4:] + ")"
+}
+
+func hhAPIResumeTitle(resumes []hhread.ResumeRecord, requestedID string) string {
+	requestedID = strings.TrimSpace(requestedID)
+	for _, resume := range resumes {
+		if strings.TrimSpace(resume.ID) == requestedID {
+			return firstNonEmpty(strings.TrimSpace(resume.Title), "UNKNOWN")
+		}
+	}
+	return "UNKNOWN"
+}
+
+func hhAPIAvailability(preflight VacancyPreflight) string {
+	if preflight.Available {
+		return "AVAILABLE"
+	}
+	if (preflight.CanApplyKnown && !preflight.CanApply) || (preflight.SelectedResumeSuitableKnown && !preflight.SelectedResumeSuitable) {
+		return "UNAVAILABLE"
+	}
+	return "UNKNOWN"
 }
 
 func hhAPIYesNo(value bool) string {

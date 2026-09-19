@@ -52,6 +52,8 @@ type VacancyPreflight struct {
 	ExistingNegotiationKnown         bool
 	SelectedResumeSuitable           bool
 	SelectedResumeSuitableKnown      bool
+	SuitableResumeIDsDiscovered      int
+	SuitableResumesScanComplete      bool
 	NegotiationsURLPresent           bool
 	SuitableResumesURLPresent        bool
 	NegotiationCollectionsDiscovered int
@@ -146,6 +148,8 @@ type VacancyPreflightResult struct {
 	ExistingNegotiationKnown         bool                     `json:"existing_negotiation_known"`
 	SelectedResumeSuitable           *bool                    `json:"selected_resume_suitable"`
 	SelectedResumeSuitableKnown      bool                     `json:"selected_resume_suitable_known"`
+	SuitableResumeIDsDiscovered      int                      `json:"suitable_resume_ids_discovered"`
+	SuitableResumesScanComplete      bool                     `json:"suitable_resumes_scan_complete"`
 	NegotiationIDPresent             bool                     `json:"negotiation_id_present"`
 	NegotiationResumeIDPresent       bool                     `json:"negotiation_resume_id_present"`
 	GotResponseRelation              bool                     `json:"got_response_relation"`
@@ -192,6 +196,8 @@ func (p VacancyPreflight) event() VacancyPreflightResult {
 		ExistingNegotiationKnown:         p.ExistingNegotiationKnown,
 		SelectedResumeSuitable:           knownBoolPointer(p.SelectedResumeSuitable, p.SelectedResumeSuitableKnown),
 		SelectedResumeSuitableKnown:      p.SelectedResumeSuitableKnown,
+		SuitableResumeIDsDiscovered:      p.SuitableResumeIDsDiscovered,
+		SuitableResumesScanComplete:      p.SuitableResumesScanComplete,
 		NegotiationIDPresent:             strings.TrimSpace(p.NegotiationID) != "",
 		NegotiationResumeIDPresent:       strings.TrimSpace(p.NegotiationResumeID) != "",
 		GotResponseRelation:              p.GotResponseRelation,
@@ -389,7 +395,7 @@ func (r *HHAIResponder) getVacancyPreflightContext(ctx context.Context, vacancy 
 
 type apiApplicationPreflightSource interface {
 	hhreadport.VacancyDetailSource
-	ReadSuitableResumeIDs(context.Context, string) ([]string, error)
+	hhreadport.SuitableResumeScanSource
 	ReadNegotiationCollections(context.Context, string) (hhread.NegotiationCollectionIndex, error)
 	ReadNegotiationCollection(context.Context, string) (hhread.NegotiationPage, error)
 }
@@ -424,7 +430,7 @@ func apiVacancyPreflightWithSource(ctx context.Context, source apiApplicationPre
 	if err != nil {
 		return VacancyPreflight{}, err
 	}
-	selectedResumeID = strings.TrimSpace(selectedResumeID)
+	selectedResumeID, _ = normalizeProviderResumeID(selectedResumeID)
 	preflight := apiVacancyPreflight(record, vacancyID)
 	if strings.TrimSpace(record.NegotiationsURL) != "" {
 		preflight.NegotiationsURLPresent = true
@@ -433,11 +439,18 @@ func apiVacancyPreflightWithSource(ctx context.Context, source apiApplicationPre
 	if strings.TrimSpace(record.SuitableResumesURL) != "" {
 		preflight.SuitableResumesURLPresent = true
 		if selectedResumeID != "" {
-			suitableIDs, suitableErr := source.ReadSuitableResumeIDs(ctx, record.SuitableResumesURL)
-			if suitableErr == nil {
+			scan, suitableErr := source.ReadSuitableResumeScan(ctx, record.SuitableResumesURL)
+			preflight.SuitableResumeIDsDiscovered = len(scan.IDs)
+			preflight.SuitableResumesScanComplete = suitableErr == nil && scan.Complete
+			if suitableErr == nil && scan.Complete {
 				preflight.SelectedResumeSuitableKnown = true
-				for _, suitableID := range suitableIDs {
-					if strings.TrimSpace(suitableID) == selectedResumeID {
+				for _, suitableID := range scan.IDs {
+					normalizedID, valid := normalizeProviderResumeID(suitableID)
+					if !valid {
+						preflight.SelectedResumeSuitableKnown = false
+						break
+					}
+					if normalizedID == selectedResumeID {
 						preflight.SelectedResumeSuitable = true
 						break
 					}
@@ -447,6 +460,24 @@ func apiVacancyPreflightWithSource(ctx context.Context, source apiApplicationPre
 	}
 	finalizeAPIApplicationAvailability(&preflight)
 	return preflight, nil
+}
+
+func normalizeProviderResumeID(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.ContainsAny(value, "/\\?#\r\n") {
+		return "", false
+	}
+	const providerPrefix = "hh-resume-provider-id-"
+	if strings.HasPrefix(value, providerPrefix) {
+		value = strings.TrimPrefix(value, providerPrefix)
+		if value == "" {
+			return "", false
+		}
+	}
+	if strings.HasPrefix(value, "hh-resume-") {
+		return "", false
+	}
+	return value, true
 }
 
 type apiNegotiationScan struct {
