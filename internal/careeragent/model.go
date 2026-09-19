@@ -250,42 +250,48 @@ type SearchProfileEvidence struct {
 }
 
 type ResumeScore struct {
-	ResumeID             string   `json:"resume_id"`
-	Title                string   `json:"title"`
-	Score                int      `json:"score"`
-	FitScore             int      `json:"fit_score,omitempty"`
-	ProvenanceScore      int      `json:"provenance_score,omitempty"`
-	RoleScore            int      `json:"role_score,omitempty"`
-	SkillScore           int      `json:"skill_score,omitempty"`
-	DomainScore          int      `json:"domain_score,omitempty"`
-	ExperienceScore      int      `json:"experience_score,omitempty"`
-	GenericEvidenceScore int      `json:"generic_evidence_score,omitempty"`
-	RawFit               int      `json:"raw_fit,omitempty"`
-	NormalizedScore      int      `json:"normalized_score,omitempty"`
-	SpecificMatches      []string `json:"specific_matches,omitempty"`
-	PartialMatches       []string `json:"partial_matches,omitempty"`
-	Reasons              []string `json:"reasons,omitempty"`
-	HardBlockers         []string `json:"hard_blockers,omitempty"`
+	ResumeID              string       `json:"resume_id"`
+	Title                 string       `json:"title"`
+	Score                 int          `json:"score"`
+	FitScore              int          `json:"fit_score,omitempty"`
+	ProvenanceScore       int          `json:"provenance_score,omitempty"`
+	RoleScore             int          `json:"role_score,omitempty"`
+	SkillScore            int          `json:"skill_score,omitempty"`
+	DomainScore           int          `json:"domain_score,omitempty"`
+	ExperienceScore       int          `json:"experience_score,omitempty"`
+	GenericEvidenceScore  int          `json:"generic_evidence_score,omitempty"`
+	RawFit                int          `json:"raw_fit,omitempty"`
+	NormalizedScore       int          `json:"normalized_score,omitempty"`
+	SpecificMatches       []string     `json:"specific_matches,omitempty"`
+	PartialMatches        []string     `json:"partial_matches,omitempty"`
+	Reasons               []string     `json:"reasons,omitempty"`
+	HardBlockers          []string     `json:"hard_blockers,omitempty"`
+	MatchedRoleFamilies   []RoleFamily `json:"matched_role_families,omitempty"`
+	StrongRoleEvidence    []string     `json:"strong_role_evidence,omitempty"`
+	SpecificEvidenceCount int          `json:"specific_evidence_count,omitempty"`
+	GenericEvidenceRatio  float64      `json:"generic_evidence_ratio,omitempty"`
+	MismatchSignals       []string     `json:"mismatch_signals,omitempty"`
 }
 
 type RouteDecision struct {
-	VacancyID             int                `json:"vacancy_id"`
-	Status                string             `json:"status"`
-	SelectedResumeID      string             `json:"selected_resume_id,omitempty"`
-	SelectedResumeTitle   string             `json:"selected_resume_title,omitempty"`
-	Score                 int                `json:"score"`
-	TopRawScore           int                `json:"top_raw_score,omitempty"`
-	SecondRawScore        int                `json:"second_raw_score,omitempty"`
-	TopNormalizedScore    int                `json:"top_normalized_score,omitempty"`
-	SecondNormalizedScore int                `json:"second_normalized_score,omitempty"`
-	AbsoluteMargin        int                `json:"absolute_margin,omitempty"`
-	RelativeMargin        float64            `json:"relative_margin,omitempty"`
-	AlternativeScores     []ResumeScore      `json:"alternative_resume_scores,omitempty"`
-	Reasons               []string           `json:"reasons,omitempty"`
-	Confidence            string             `json:"confidence"`
-	HardRequirements      []RequirementState `json:"hard_requirements,omitempty"`
-	HardBlockers          []string           `json:"hard_blockers,omitempty"`
-	ReasonCode            string             `json:"reason_code,omitempty"`
+	VacancyID             int                 `json:"vacancy_id"`
+	Status                string              `json:"status"`
+	SelectedResumeID      string              `json:"selected_resume_id,omitempty"`
+	SelectedResumeTitle   string              `json:"selected_resume_title,omitempty"`
+	Score                 int                 `json:"score"`
+	TopRawScore           int                 `json:"top_raw_score,omitempty"`
+	SecondRawScore        int                 `json:"second_raw_score,omitempty"`
+	TopNormalizedScore    int                 `json:"top_normalized_score,omitempty"`
+	SecondNormalizedScore int                 `json:"second_normalized_score,omitempty"`
+	AbsoluteMargin        int                 `json:"absolute_margin,omitempty"`
+	RelativeMargin        float64             `json:"relative_margin,omitempty"`
+	AlternativeScores     []ResumeScore       `json:"alternative_resume_scores,omitempty"`
+	Reasons               []string            `json:"reasons,omitempty"`
+	Confidence            string              `json:"confidence"`
+	HardRequirements      []RequirementState  `json:"hard_requirements,omitempty"`
+	HardBlockers          []string            `json:"hard_blockers,omitempty"`
+	ReasonCode            string              `json:"reason_code,omitempty"`
+	RoleEvidence          VacancyRoleEvidence `json:"role_evidence,omitempty"`
 }
 
 type PreliminaryRouteDecision struct {
@@ -298,15 +304,19 @@ type PreliminaryRouteDecision struct {
 }
 
 const (
-	PreliminaryClearRoute    = "CLEAR_ROUTE"
-	PreliminaryNeedsDetail   = "NEEDS_DETAIL"
-	PreliminaryObviousReject = "OBVIOUS_REJECT"
-	PreliminaryNoResume      = "NO_ENABLED_RESUME"
-	RouteReasonNeedsDetail   = "ROUTE_NEEDS_DETAIL"
-	RouteReasonAmbiguous     = "ROUTE_AMBIGUOUS_AFTER_DETAIL"
-	RouteReasonUnknownHard   = "UNKNOWN_HARD_REQUIREMENT"
-	RouteReasonNoStrong      = "NO_STRONG_RESUME_AFTER_DETAIL"
-	RouteReasonSelected      = "ROUTE_SELECTED"
+	PreliminaryClearRoute           = "CLEAR_ROUTE"
+	PreliminaryNeedsDetail          = "NEEDS_DETAIL"
+	PreliminaryObviousReject        = "OBVIOUS_REJECT"
+	PreliminaryNoResume             = "NO_ENABLED_RESUME"
+	RouteReasonNeedsDetail          = "ROUTE_NEEDS_DETAIL"
+	RouteReasonAmbiguous            = "ROUTE_AMBIGUOUS"
+	RouteReasonLowEvidence          = "ROUTE_LOW_EVIDENCE"
+	RouteReasonOutOfScope           = "ROLE_OUT_OF_SCOPE"
+	RouteReasonNoSuitable           = "NO_SUITABLE_RESUME"
+	RouteReasonAmbiguousAfterDetail = RouteReasonAmbiguous
+	RouteReasonUnknownHard          = "UNKNOWN_HARD_REQUIREMENT"
+	RouteReasonNoStrong             = RouteReasonNoSuitable
+	RouteReasonSelected             = "ROUTE_SELECTED"
 )
 
 const (
@@ -324,17 +334,12 @@ type RequirementState struct {
 }
 
 func RouteResume(vacancy VacancyInput, resumes []ResumeProfile) RouteDecision {
-	decision := RouteDecision{VacancyID: vacancy.ID, Status: RouteNoResume, Confidence: ConfidenceLow, Reasons: []string{}, ReasonCode: RouteReasonNoStrong}
+	evidence := ClassifyVacancyRole(vacancy, resumes)
 	candidates := make([]ResumeScore, 0)
 	for _, resume := range resumes {
 		if resume.Enabled {
 			candidates = append(candidates, scoreResume(vacancy, resume))
 		}
-	}
-	if len(candidates) == 0 {
-		decision.Reasons = []string{"no enabled resume is available"}
-		decision.ReasonCode = RouteReasonNoStrong
-		return decision
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		if candidates[i].RawFit != candidates[j].RawFit {
@@ -345,71 +350,7 @@ func RouteResume(vacancy VacancyInput, resumes []ResumeProfile) RouteDecision {
 		}
 		return candidates[i].ResumeID < candidates[j].ResumeID
 	})
-	decision.AlternativeScores = append([]ResumeScore(nil), candidates...)
-	compatible := candidates[:0]
-	for _, candidate := range candidates {
-		if len(candidate.HardBlockers) == 0 {
-			compatible = append(compatible, candidate)
-		}
-	}
-	if len(compatible) == 0 {
-		decision.Reasons = []string{"all enabled resumes have explicit hard incompatibilities"}
-		for _, candidate := range candidates {
-			decision.Reasons = append(decision.Reasons, candidate.Title+": "+strings.Join(candidate.HardBlockers, ", "))
-		}
-		decision.HardBlockers = append([]string(nil), candidates[0].HardBlockers...)
-		decision.ReasonCode = RouteReasonNoStrong
-		return decision
-	}
-	candidates = compatible
-	decision.Score = candidates[0].Score
-	decision.TopRawScore, decision.TopNormalizedScore = candidates[0].RawFit, candidates[0].NormalizedScore
-	if len(candidates) > 1 {
-		decision.SecondRawScore, decision.SecondNormalizedScore = candidates[1].RawFit, candidates[1].NormalizedScore
-		decision.AbsoluteMargin = candidates[0].RawFit - candidates[1].RawFit
-		if candidates[0].RawFit > 0 {
-			decision.RelativeMargin = float64(decision.AbsoluteMargin) / float64(candidates[0].RawFit)
-		}
-	}
-	decision.SelectedResumeID, decision.SelectedResumeTitle = candidates[0].ResumeID, candidates[0].Title
-	decision.HardRequirements = requirementStates(vacancy, candidates[0], resumes)
-	for _, requirement := range decision.HardRequirements {
-		if requirement.Status == "met" {
-			decision.Reasons = append(decision.Reasons, "selected resume covers "+requirement.Requirement)
-		} else {
-			decision.Reasons = append(decision.Reasons, "hard requirement remains unknown: "+requirement.Requirement)
-		}
-	}
-	// Provenance is a bounded tie-break signal, never enough to resolve a
-	// genuinely close fit. Compare uncapped fit-only scores for the ambiguity
-	// gate, while exposing the total raw margin for operator review.
-	if len(candidates) > 1 {
-		fitMargin := candidates[0].FitScore - candidates[1].FitScore
-		fitRelative := float64(fitMargin) / float64(maxInt(candidates[0].FitScore, 1))
-		if fitMargin < 10 || fitRelative < 0.12 {
-			decision.Status, decision.Confidence, decision.ReasonCode = RouteReviewRequired, ConfidenceLow, RouteReasonAmbiguous
-			decision.SelectedResumeID, decision.SelectedResumeTitle = "", ""
-			decision.Reasons = append(decision.Reasons, "top resume scores are too close for deterministic selection")
-			return decision
-		}
-	}
-	if decision.Score < 12 {
-		decision.Status, decision.Confidence, decision.ReasonCode = RouteReviewRequired, ConfidenceLow, RouteReasonNoStrong
-		decision.SelectedResumeID, decision.SelectedResumeTitle = "", ""
-		decision.Reasons = append(decision.Reasons, "no strong resume signal was found")
-		return decision
-	}
-	decision.Status = RouteSelected
-	decision.ReasonCode = RouteReasonSelected
-	decision.Reasons = append(decision.Reasons, "selected by deterministic title/skill overlap")
-	if decision.Score >= 60 && (len(decision.HardRequirements) == 0 || allRequirementsMet(decision.HardRequirements)) {
-		decision.Confidence = ConfidenceHigh
-	} else if decision.Score >= 12 {
-		decision.Confidence = ConfidenceMedium
-	} else {
-		decision.Confidence = ConfidenceLow
-	}
-	return decision
+	return finalizeRouteDecision(vacancy, resumes, evidence, candidates)
 }
 
 // PreliminaryRouteResume is deliberately non-terminal for incomplete search
@@ -699,11 +640,12 @@ func canonicalToken(value string) string {
 		"линукс": "linux", "linux": "linux", "сетевая": "network", "сетевой": "network", "сети": "network", "network": "network",
 		"днс": "dns", "dns": "dns", "девопс": "devops", "devops": "devops",
 		"1с": "1c", "1c": "1c", "onec": "onec",
+		"диагностика": "diagnostics", "диагностики": "diagnostics", "diagnostics": "diagnostics",
 		"разработчикa": "developer",
 		"rest":         "rest_api", "restful": "rest_api", "api": "api", "apis": "api",
 		"postgres": "postgresql", "postgresql": "postgresql",
 		"node": "nodejs", "nodejs": "nodejs",
-		"vue": "vuejs", "vuejs": "vuejs",
+		"vue": "vuejs", "vue.js": "vuejs", "vuejs": "vuejs",
 	}
 	if canonical, ok := aliases[value]; ok {
 		return canonical
@@ -819,9 +761,10 @@ const (
 
 func scoreResume(v VacancyInput, resume ResumeProfile) ResumeScore {
 	identity := resume.Identity
-	if len(identity.PrimaryRoles) == 0 && len(identity.StrongSkills) == 0 && len(identity.SupportingSkills) == 0 && len(identity.DomainSignals) == 0 {
+	if len(identity.PrimaryRoles) == 0 && len(identity.StrongSkills) == 0 && len(identity.SupportingSkills) == 0 && len(identity.DomainSignals) == 0 || len(identity.PrimaryRoleFamilies) == 0 {
 		identity = DeriveResumeIdentity(resume)
 	}
+	roleEvidence := ClassifyVacancyRole(v, nil)
 	vacancyText := strings.Join([]string{v.Title, v.Description, strings.Join(v.RequiredSkills, " "), strings.Join(v.KeySkills, " "), strings.Join(v.ProfessionalRoles, " "), v.Experience, v.Employment, v.Schedule, v.Location, v.WorkFormat, v.Salary}, " ")
 	structuredText := strings.Join([]string{v.Title, strings.Join(v.RequiredSkills, " "), strings.Join(v.KeySkills, " "), strings.Join(v.ProfessionalRoles, " ")}, " ")
 	structuredTokens := tokens(structuredText)
@@ -835,6 +778,21 @@ func scoreResume(v VacancyInput, resume ResumeProfile) ResumeScore {
 	}
 
 	roleScore, genericEvidence := 0, 0
+	matchedRoleFamilies := []RoleFamily{}
+	strongRoleEvidence := []string{}
+	mismatchSignals := []string{}
+	for _, familyEvidence := range roleEvidence.Families {
+		if resumeSupportsRoleFamily(identity, familyEvidence.Family) {
+			matchedRoleFamilies = appendUniqueRoleFamily(matchedRoleFamilies, familyEvidence.Family)
+			if familyEvidence.Strength == RoleEvidenceStrong {
+				roleScore += 24
+				strongRoleEvidence = appendUniqueStrings(strongRoleEvidence, familyEvidence.TitleAnchors...)
+				strongRoleEvidence = appendUniqueStrings(strongRoleEvidence, familyEvidence.ExplicitRoleSignals...)
+			}
+		} else if familyEvidence.Strength == RoleEvidenceStrong {
+			mismatchSignals = appendUniqueStrings(mismatchSignals, "unsupported resume family for vacancy role: "+string(familyEvidence.Family))
+		}
+	}
 	for token := range tokens(resume.Title + " " + resume.DesiredRole) {
 		if !roleTokens[token] {
 			continue
@@ -903,6 +861,12 @@ func scoreResume(v VacancyInput, resume ResumeProfile) ResumeScore {
 		}
 	}
 	genericScore := minInt(genericEvidence, 5)
+	specificEvidenceCount := len(specificMatches) + len(partialMatches)
+	evidenceDenominator := specificEvidenceCount + genericScore + len(strongRoleEvidence)
+	genericRatio := 0.0
+	if evidenceDenominator > 0 {
+		genericRatio = float64(genericScore) / float64(evidenceDenominator)
+	}
 	fitScore := roleScore + skillScore + domainScore + experienceScore + genericScore
 	rawFit := fitScore + provenanceScore
 	normalized := normalizeResumeScore(rawFit)
@@ -926,13 +890,19 @@ func scoreResume(v VacancyInput, resume ResumeProfile) ResumeScore {
 	if genericScore > 0 {
 		reasons = append(reasons, fmtScoreReason("generic evidence (bounded)", genericScore))
 	}
+	for _, family := range matchedRoleFamilies {
+		reasons = append(reasons, "matched role family: "+string(family))
+	}
+	for _, mismatch := range mismatchSignals {
+		reasons = append(reasons, "routing mismatch: "+mismatch)
+	}
 	for _, match := range specificMatches {
 		reasons = append(reasons, "specific skill: "+match)
 	}
 	for _, match := range partialMatches {
 		reasons = append(reasons, "partial skill: "+match)
 	}
-	return ResumeScore{ResumeID: resume.ID, Title: resume.Title, Score: normalized, FitScore: fitScore, ProvenanceScore: provenanceScore, RoleScore: roleScore, SkillScore: skillScore, DomainScore: domainScore, ExperienceScore: experienceScore, GenericEvidenceScore: genericScore, RawFit: rawFit, NormalizedScore: normalized, SpecificMatches: specificMatches, PartialMatches: partialMatches, Reasons: reasons, HardBlockers: hardBlockers}
+	return ResumeScore{ResumeID: resume.ID, Title: resume.Title, Score: normalized, FitScore: fitScore, ProvenanceScore: provenanceScore, RoleScore: roleScore, SkillScore: skillScore, DomainScore: domainScore, ExperienceScore: experienceScore, GenericEvidenceScore: genericScore, RawFit: rawFit, NormalizedScore: normalized, SpecificMatches: specificMatches, PartialMatches: partialMatches, Reasons: reasons, HardBlockers: hardBlockers, MatchedRoleFamilies: matchedRoleFamilies, StrongRoleEvidence: strongRoleEvidence, SpecificEvidenceCount: specificEvidenceCount, GenericEvidenceRatio: genericRatio, MismatchSignals: mismatchSignals}
 }
 
 func classifySkillMatch(skill, vacancyText string, vacancyTokens map[string]bool) skillMatchKind {

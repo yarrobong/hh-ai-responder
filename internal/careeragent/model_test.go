@@ -208,7 +208,7 @@ func TestRussianEnglishCanonicalGroupsProduceExplainableScore(t *testing.T) {
 
 func TestSearchProfileProvenanceIsSoftOnly(t *testing.T) {
 	decision := RouteResume(VacancyInput{ID: 204, Title: "Unrelated role", SearchProfiles: []SearchProfileEvidence{{ResumeID: "python"}}}, []ResumeProfile{{ID: "python", Title: "Python developer", Enabled: true}, {ID: "support", Title: "Support", Enabled: true}})
-	if decision.Status != RouteReviewRequired || decision.ReasonCode != RouteReasonAmbiguous || decision.SelectedResumeID != "" {
+	if decision.Status != RouteReviewRequired || decision.ReasonCode != RouteReasonLowEvidence || decision.SelectedResumeID != "" {
 		t.Fatalf("provenance selected a resume without fit evidence: %+v", decision)
 	}
 }

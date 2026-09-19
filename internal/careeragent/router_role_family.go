@@ -165,7 +165,7 @@ func ClassifyVacancyRole(v VacancyInput, resumes []ResumeProfile) VacancyRoleEvi
 				evidence.GenericSignals = appendUniqueCanonical(evidence.GenericSignals, token)
 			}
 		}
-		if len(evidence.TitleAnchors) > 0 || len(evidence.ExplicitRoleSignals) >= 2 {
+		if len(evidence.TitleAnchors) > 0 || len(evidence.ExplicitRoleSignals) >= 2 || (len(evidence.ExplicitRoleSignals) > 0 && len(evidence.SpecificSignals) > 0) {
 			evidence.Strength = RoleEvidenceStrong
 		} else if len(evidence.ExplicitRoleSignals) > 0 || len(evidence.SpecificSignals) >= 2 {
 			evidence.Strength = RoleEvidenceWeak
@@ -178,6 +178,22 @@ func ClassifyVacancyRole(v VacancyInput, resumes []ResumeProfile) VacancyRoleEvi
 		if evidence.Strength == RoleEvidenceStrong {
 			result.StrongFamilies = append(result.StrongFamilies, evidence.Family)
 		}
+	}
+	if containsRoleFamily(result.StrongFamilies, RoleFamilyPythonBackend) {
+		filteredFamilies := result.Families[:0]
+		for _, family := range result.Families {
+			if family.Family != RoleFamilyWebBackend || family.Strength != RoleEvidenceStrong {
+				filteredFamilies = append(filteredFamilies, family)
+			}
+		}
+		result.Families = filteredFamilies
+		filteredStrong := result.StrongFamilies[:0]
+		for _, family := range result.StrongFamilies {
+			if family != RoleFamilyWebBackend {
+				filteredStrong = append(filteredStrong, family)
+			}
+		}
+		result.StrongFamilies = filteredStrong
 	}
 	result.EvidenceAvailable = len(result.Families) > 0 || len(result.GenericSignals) > 0
 	return result
@@ -240,4 +256,156 @@ func appendUniqueStrings(values []string, additions ...string) []string {
 		}
 	}
 	return values
+}
+
+func appendUniqueRoleFamily(values []RoleFamily, additions ...RoleFamily) []RoleFamily {
+	seen := map[RoleFamily]bool{}
+	for _, value := range values {
+		seen[value] = true
+	}
+	for _, value := range additions {
+		if value != "" && !seen[value] {
+			values = append(values, value)
+			seen[value] = true
+		}
+	}
+	return values
+}
+
+func containsRoleFamily(values []RoleFamily, want RoleFamily) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func resumeSupportsRoleFamily(identity ResumeIdentity, family RoleFamily) bool {
+	return containsRoleFamily(identity.PrimaryRoleFamilies, family) || containsRoleFamily(identity.SecondaryRoleFamilies, family)
+}
+
+func finalizeRouteDecision(v VacancyInput, resumes []ResumeProfile, evidence VacancyRoleEvidence, candidates []ResumeScore) RouteDecision {
+	decision := RouteDecision{
+		VacancyID:         v.ID,
+		Status:            RouteNoResume,
+		Confidence:        ConfidenceLow,
+		Reasons:           []string{},
+		ReasonCode:        RouteReasonNoStrong,
+		AlternativeScores: append([]ResumeScore(nil), candidates...),
+		RoleEvidence:      evidence,
+	}
+	if len(candidates) == 0 {
+		decision.Reasons = append(decision.Reasons, "no enabled resume is available")
+		return decision
+	}
+
+	compatible := make([]ResumeScore, 0, len(candidates))
+	for _, candidate := range candidates {
+		if len(candidate.HardBlockers) == 0 {
+			compatible = append(compatible, candidate)
+		}
+	}
+	if len(compatible) == 0 {
+		decision.Status = RouteReviewRequired
+		decision.ReasonCode = RouteReasonNoSuitable
+		decision.Reasons = append(decision.Reasons, "all enabled resumes have explicit hard incompatibilities")
+		for _, candidate := range candidates {
+			decision.Reasons = append(decision.Reasons, candidate.Title+": "+strings.Join(candidate.HardBlockers, ", "))
+		}
+		decision.HardBlockers = append([]string(nil), candidates[0].HardBlockers...)
+		return decision
+	}
+	decision.Score = compatible[0].Score
+	decision.TopRawScore, decision.TopNormalizedScore = compatible[0].RawFit, compatible[0].NormalizedScore
+	if len(compatible) > 1 {
+		decision.SecondRawScore, decision.SecondNormalizedScore = compatible[1].RawFit, compatible[1].NormalizedScore
+		decision.AbsoluteMargin = compatible[0].RawFit - compatible[1].RawFit
+		if compatible[0].RawFit > 0 {
+			decision.RelativeMargin = float64(decision.AbsoluteMargin) / float64(compatible[0].RawFit)
+		}
+	}
+
+	if len(evidence.StrongFamilies) == 0 {
+		decision.Status = RouteReviewRequired
+		decision.ReasonCode = RouteReasonLowEvidence
+		decision.Reasons = append(decision.Reasons, "vacancy role family cannot be determined with sufficient evidence")
+		return decision
+	}
+
+	supportedStrong := []RoleFamily{}
+	for _, family := range evidence.StrongFamilies {
+		for _, resume := range resumes {
+			if resume.Enabled && resumeSupportsRoleFamily(resume.IdentityOrDerived(), family) {
+				supportedStrong = appendUniqueRoleFamily(supportedStrong, family)
+				break
+			}
+		}
+	}
+	if len(supportedStrong) == 0 {
+		decision.Status = RouteReviewRequired
+		decision.ReasonCode = RouteReasonOutOfScope
+		decision.Reasons = append(decision.Reasons, "vacancy role family is not supported by any enabled resume")
+		return decision
+	}
+	if len(supportedStrong) > 1 {
+		decision.Status = RouteReviewRequired
+		decision.ReasonCode = RouteReasonAmbiguous
+		decision.Reasons = append(decision.Reasons, "multiple supported role families have strong competing evidence")
+		return decision
+	}
+
+	targetFamily := supportedStrong[0]
+	qualified := make([]ResumeScore, 0, len(compatible))
+	for _, candidate := range compatible {
+		if !containsRoleFamily(candidate.MatchedRoleFamilies, targetFamily) || candidate.SpecificEvidenceCount == 0 || len(candidate.StrongRoleEvidence) == 0 || candidate.GenericEvidenceRatio >= 0.80 || len(candidate.MismatchSignals) > 0 || candidate.Score < 12 {
+			continue
+		}
+		qualified = append(qualified, candidate)
+	}
+	if len(qualified) == 0 {
+		decision.Status = RouteReviewRequired
+		decision.ReasonCode = RouteReasonNoSuitable
+		decision.Reasons = append(decision.Reasons, "supported role family has no resume above the evidence floor")
+		return decision
+	}
+	if len(qualified) > 1 {
+		fitMargin := qualified[0].FitScore - qualified[1].FitScore
+		fitRelative := float64(fitMargin) / float64(maxInt(qualified[0].FitScore, 1))
+		if fitMargin < 10 || fitRelative < 0.12 {
+			decision.Status = RouteReviewRequired
+			decision.ReasonCode = RouteReasonAmbiguous
+			decision.Reasons = append(decision.Reasons, "multiple resumes have competing strong evidence for the supported role family")
+			return decision
+		}
+	}
+
+	selected := qualified[0]
+	decision.Status = RouteSelected
+	decision.ReasonCode = RouteReasonSelected
+	decision.SelectedResumeID, decision.SelectedResumeTitle = selected.ResumeID, selected.Title
+	decision.Score = selected.Score
+	decision.HardRequirements = requirementStates(v, selected, resumes)
+	for _, requirement := range decision.HardRequirements {
+		if requirement.Status == "met" {
+			decision.Reasons = append(decision.Reasons, "selected resume covers "+requirement.Requirement)
+		} else {
+			decision.Reasons = append(decision.Reasons, "hard requirement remains unknown: "+requirement.Requirement)
+		}
+	}
+	decision.Reasons = append(decision.Reasons, "selected by role-family evidence and specific supporting signals")
+	if decision.Score >= 60 && (len(decision.HardRequirements) == 0 || allRequirementsMet(decision.HardRequirements)) {
+		decision.Confidence = ConfidenceHigh
+	} else {
+		decision.Confidence = ConfidenceMedium
+	}
+	return decision
+}
+
+func (resume ResumeProfile) IdentityOrDerived() ResumeIdentity {
+	identity := resume.Identity
+	if len(identity.PrimaryRoleFamilies) == 0 {
+		identity = DeriveResumeIdentity(resume)
+	}
+	return identity
 }
