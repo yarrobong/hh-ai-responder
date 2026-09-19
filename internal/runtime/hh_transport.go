@@ -27,6 +27,7 @@ const (
 	transportBrowserUnavailable = "BROWSER_UNAVAILABLE"
 	transportWriteDisabled      = "WRITE_DISABLED"
 	transportNotImplemented     = "NOT_IMPLEMENTED"
+	transportResumeNotFound     = "RESUME_NOT_FOUND"
 
 	fallbackAPIProbeFailed  = "API_PROBE_FAILED"
 	fallbackAPIAuthRequired = "API_AUTH_REQUIRED"
@@ -260,6 +261,9 @@ func bootstrapAPIResumeDataForUser(ctx context.Context, responder *HHAIResponder
 		}
 	}
 	if selected < 0 {
+		if selectedResumeID != "" {
+			return &TransportError{Code: transportResumeNotFound, Reason: "configured API resume is unavailable"}
+		}
 		selected = 0
 	}
 	detail, err := source.ReadResume(ctx, resumes[selected].ID)

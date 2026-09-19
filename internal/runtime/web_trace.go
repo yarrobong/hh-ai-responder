@@ -162,6 +162,9 @@ func (r *HHAIResponder) traceVacancyWeb(ctx context.Context, vacancyID int) ([]W
 	if r == nil || r.requester == nil || r.baseURL == nil {
 		return nil, errors.New("HH web read client is not configured")
 	}
+	if r.transport == transportAPI {
+		return nil, &TransportError{Code: transportNotImplemented, Reason: "API transport does not expose browser web trace reads"}
+	}
 	if vacancyID <= 0 {
 		return nil, errors.New("vacancy ID is required")
 	}

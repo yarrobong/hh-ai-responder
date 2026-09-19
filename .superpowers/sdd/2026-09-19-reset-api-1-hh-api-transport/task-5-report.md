@@ -68,3 +68,32 @@ operator-supplied only.
 - `internal/runtime/runtime.go`
 - `internal/runtime/hh_read_sync.go`
 - `.superpowers/sdd/2026-09-19-reset-api-1-hh-api-transport/task-5-report.md`
+
+## Reviewer follow-up fix
+
+The focused fix closes the remaining explicit-API browser/HTML bypasses:
+
+- `getVacancyPreflightContext` now fails with a typed transport capability
+  error before browser or legacy requester access;
+- `getVacancyTestsContext`, uncached `GetResumeFacts`, and the browser web-trace
+  diagnostic are guarded the same way;
+- cached API resume facts remain available from the API bootstrap projection;
+- a configured non-empty resume ID/hash that is absent from `/resumes/mine`
+  now returns typed `RESUME_NOT_FOUND` instead of selecting the first resume.
+
+Regression coverage uses a browser sentinel and an HTTP round-tripper sentinel
+to assert zero calls under explicit API mode, plus a missing configured-resume
+case. Browser/default and selector behavior remain unchanged.
+
+Reviewer-fix verification passed:
+
+```text
+HH_DRY_RUN=true HH_WRITE_ENABLED=false go test -count=1 ./internal/runtime -run 'TestSelectHHTransport|TestExplicitAPIReadPathsNeverCallBrowserOrLegacyRequester|TestBootstrapAPIResume|Test.*Browser|Test.*HHRead|Test.*CareerAgent|TestAPITransportWriteGuard'
+HH_DRY_RUN=true HH_WRITE_ENABLED=false go test -count=1 ./internal/runtime
+HH_DRY_RUN=true HH_WRITE_ENABLED=false go test -race -count=1 ./internal/runtime
+HH_DRY_RUN=true HH_WRITE_ENABLED=false go test -count=1 ./internal/adapters/hh/api ./internal/adapters/hh/read ./internal/ports/hhread
+HH_DRY_RUN=true HH_WRITE_ENABLED=false go test -count=1 ./...
+HH_DRY_RUN=true HH_WRITE_ENABLED=false go vet ./...
+HH_DRY_RUN=true HH_WRITE_ENABLED=false go build ./...
+git diff --check
+```

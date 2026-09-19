@@ -3,10 +3,13 @@ package runtime
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
 	hhapi "hh-ai-responder/internal/adapters/hh/api"
+	"hh-ai-responder/internal/browsersession"
 	"hh-ai-responder/internal/hhread"
 )
 
@@ -213,6 +216,82 @@ func TestBootstrapAPIResumePopulatesExistingResponderInputs(t *testing.T) {
 	if responder.firstName != "" || responder.lastName != "" {
 		t.Fatalf("API bootstrap invented profile identity: %q %q", responder.firstName, responder.lastName)
 	}
+}
+
+func TestExplicitAPIReadPathsNeverCallBrowserOrLegacyRequester(t *testing.T) {
+	baseURL, err := url.Parse("https://hh.ru")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name string
+		call func(*HHAIResponder) error
+	}{
+		{name: "vacancy preflight", call: func(r *HHAIResponder) error {
+			_, err := r.getVacancyPreflightContext(context.Background(), Vacancy{ID: 42})
+			return err
+		}},
+		{name: "vacancy tests", call: func(r *HHAIResponder) error {
+			_, err := r.getVacancyTestsContext(context.Background(), "https://hh.ru/applicant/vacancy_response?vacancyId=42")
+			return err
+		}},
+		{name: "resume facts", call: func(r *HHAIResponder) error {
+			_, err := r.GetResumeFacts()
+			return err
+		}},
+		{name: "web trace", call: func(r *HHAIResponder) error {
+			_, err := r.traceVacancyWeb(context.Background(), 42)
+			return err
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			browser := &transportBrowserSentinel{}
+			var requesterCalls int
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				requesterCalls++
+				return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Header: make(http.Header)}, nil
+			})}
+			responder := &HHAIResponder{
+				ctx:           context.Background(),
+				baseURL:       baseURL,
+				transport:     transportAPI,
+				browserSource: browser,
+				requester:     NewHHRequester(context.Background(), client, 0),
+			}
+			err := test.call(responder)
+			if transportErrorCode(err) != transportNotImplemented {
+				t.Fatalf("error code=%q err=%v", transportErrorCode(err), err)
+			}
+			if browser.calls != 0 || requesterCalls != 0 {
+				t.Fatalf("API read used browser/requester: browser=%d requester=%d", browser.calls, requesterCalls)
+			}
+		})
+	}
+}
+
+func TestBootstrapAPIResumeRejectsMissingConfiguredResume(t *testing.T) {
+	source := &transportFakeResumeSource{resumes: []hhread.ResumeRecord{{ID: "42", Hash: "available-hash", Title: "Python backend"}}}
+	responder := &HHAIResponder{}
+	err := bootstrapAPIResumeData(context.Background(), responder, source, "missing-hash")
+	if transportErrorCode(err) != "RESUME_NOT_FOUND" {
+		t.Fatalf("error code=%q err=%v", transportErrorCode(err), err)
+	}
+	if len(responder.resumes) != 0 {
+		t.Fatalf("missing configured resume silently selected a fallback: %+v", responder.resumes)
+	}
+}
+
+type transportBrowserSentinel struct{ calls int }
+
+func (s *transportBrowserSentinel) GetPage(context.Context, string) (browsersession.PageState, error) {
+	s.calls++
+	return browsersession.PageState{Authenticated: true, FinalURL: "https://hh.ru"}, nil
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 type transportFakeResumeSource struct {

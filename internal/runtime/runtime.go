@@ -2501,6 +2501,9 @@ func (r *HHAIResponder) getVacancyTestsContext(ctx context.Context, responseURL 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if r != nil && r.transport == transportAPI {
+		return nil, &TransportError{Code: transportNotImplemented, Reason: "API vacancy tests are not supported"}
+	}
 
 	req, err := r.buildRequest(http.MethodGet, responseURL, nil, nil)
 	if err != nil {
@@ -2596,6 +2599,12 @@ func (r *HHAIResponder) GetResumeExperience() (string, error) {
 func (r *HHAIResponder) GetResumeFacts() (ResumeFacts, error) {
 	if err := r.ctx.Err(); err != nil {
 		return ResumeFacts{}, err
+	}
+	if r.transport == transportAPI {
+		if facts, ok := r.resumeFactsByHash[r.resumeHash]; ok {
+			return facts, nil
+		}
+		return ResumeFacts{}, &TransportError{Code: transportNotImplemented, Reason: "API resume facts are unavailable for the selected resume"}
 	}
 
 	req, err := r.buildRequest(http.MethodGet, fmt.Sprintf("/resume/%s", r.resumeHash), nil, nil)

@@ -288,6 +288,9 @@ func (r *HHAIResponder) getVacancyPreflightContext(ctx context.Context, vacancy 
 	if err := ctx.Err(); err != nil {
 		return VacancyPreflight{}, err
 	}
+	if r != nil && r.transport == transportAPI {
+		return VacancyPreflight{}, &TransportError{Code: transportNotImplemented, Reason: "API application preflight is not supported"}
+	}
 	responseURL := r.ResolveURL(fmt.Sprintf("/applicant/vacancy_response?vacancyId=%d&startedWithQuestion=false&hhtmFrom=vacancy", vacancy.ID))
 	if r.browserSource != nil && r.baseURL != nil && isHHHost(r.baseURL.Hostname()) {
 		vacancyURL := r.ResolveURL(fmt.Sprintf("/vacancy/%d", vacancy.ID))
