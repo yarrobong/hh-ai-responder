@@ -23,6 +23,14 @@ type VacancyDetailSource interface {
 	ReadVacancyDetail(context.Context, int) (hhread.VacancyRecord, error)
 }
 
+// VacancyDuplicateStateSource is an optional read-only capability for callers
+// that require authoritative applicant duplicate-state evidence. Implementors
+// must return a typed capability error when the provider relation is absent or
+// ambiguous rather than turning unknown state into false.
+type VacancyDuplicateStateSource interface {
+	ReadVacancyDetailRequiringRelation(context.Context, int) (hhread.VacancyRecord, error)
+}
+
 // ResumeReadSource is an optional read-only capability. It is deliberately
 // separate from HHReadSource because the browser reader's existing profile
 // parser remains authoritative for browser mode.

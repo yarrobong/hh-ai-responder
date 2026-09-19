@@ -93,7 +93,7 @@ func mapVacancyWire(value wireVacancy) (hhread.VacancyRecord, error) {
 		ExternalID: scalarString(value.ID), ID: id, Title: firstNonEmpty(value.Name, value.Title), Description: strings.TrimSpace(value.Description),
 		Company: namedValue(company), Requirements: append([]string(nil), value.Requirements...), KeySkills: skills,
 		Salary: salaryValue(salary), Currency: strings.TrimSpace(salary.Currency), Location: namedValue(value.Area), AreaName: namedValue(value.Area),
-		Address: addressValue(value.Address), WorkFormat: canonicalWorkFormat(append(append(append(wireNames{}, value.WorkFormat...), value.Workplace...), value.WorkFormats...)), Experience: namedIDOrValue(value.Experience),
+		Address: addressValue(value.Address), WorkFormat: canonicalWorkFormat(append(append(append(wireWorkFormats{}, value.WorkFormat...), value.Workplace...), value.WorkFormats...)), Experience: namedIDOrValue(value.Experience),
 		EmploymentType: namedValue(value.Employment), Schedule: namedValue(value.Schedule), URL: firstNonEmpty(value.URL, value.Links.Desktop, value.Links.Alternate),
 		PublishedAt: parseAPITime(value.PublishedAt), UpdatedAt: parseAPITime(value.UpdatedAt), ProfessionalRoles: roles,
 		Metadata: map[string]string{"hh_read_source": "api"},
@@ -244,17 +244,21 @@ func addressValue(value wireAddress) string {
 	return strings.Join(parts, ", ")
 }
 
-func canonicalWorkFormat(values wireNames) string {
+func canonicalWorkFormat(values wireWorkFormats) string {
 	hasRemote, hasOffice := false, false
-	for _, raw := range values {
-		value := strings.ToLower(strings.TrimSpace(raw))
-		switch {
-		case strings.Contains(value, "remote"), strings.Contains(value, "дистан"):
-			hasRemote = true
-		case strings.Contains(value, "hybrid"), strings.Contains(value, "гибрид"):
-			return "hybrid"
-		case strings.Contains(value, "office"), strings.Contains(value, "onsite"), strings.Contains(value, "on_site"), strings.Contains(value, "on-site"), strings.Contains(value, "workplace"), strings.Contains(value, "офис"):
-			hasOffice = true
+	for _, format := range values {
+		for _, raw := range []string{format.Code, format.Slug, scalarString(format.ID), format.Value, format.Name, format.Title} {
+			value := strings.ToLower(strings.TrimSpace(raw))
+			switch {
+			case value == "":
+				continue
+			case strings.Contains(value, "hybrid"), strings.Contains(value, "гибрид"):
+				return "hybrid"
+			case strings.Contains(value, "remote"), strings.Contains(value, "дистан"), strings.Contains(value, "удален"), strings.Contains(value, "удалён"), strings.Contains(value, "из дома"), strings.Contains(value, "на дому"), value == "home", value == "at_home", value == "from_home":
+				hasRemote = true
+			case strings.Contains(value, "office"), strings.Contains(value, "onsite"), strings.Contains(value, "on_site"), strings.Contains(value, "on-site"), strings.Contains(value, "workplace"), strings.Contains(value, "employer"), strings.Contains(value, "на месте работодателя"), strings.Contains(value, "на территории работодателя"), strings.Contains(value, "в офисе"), strings.Contains(value, "офис"):
+				hasOffice = true
+			}
 		}
 	}
 	if hasRemote && hasOffice {

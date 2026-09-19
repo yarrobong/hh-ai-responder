@@ -12,7 +12,7 @@ func TestMapVacancyWireNormalizesStructuredFields(t *testing.T) {
 		Salary:    wireSalary{From: "70000", To: "100000", Currency: "RUR"},
 		KeySkills: wireNames{"Python", "Django"}, ProfessionalRoles: wireNames{"Developer"},
 		Experience: wireNamed{ID: "between1And3", Name: "1-3 years"}, Employment: wireNamed{Name: "Full time"},
-		Schedule: wireNamed{Name: "Flexible"}, WorkFormat: wireNames{"Remote"},
+		Schedule: wireNamed{Name: "Flexible"}, WorkFormat: wireWorkFormats{{Name: "Remote"}},
 		PublishedAt: "2026-09-17T08:00:00Z", Archived: boolPtr(true), ResponseLetterRequired: boolPtr(false), UserTestPresent: boolPtr(true),
 	})
 	if err != nil {
@@ -57,7 +57,10 @@ func TestMapResumeWireDoesNotPromoteFreeTextSkills(t *testing.T) {
 }
 
 func TestCanonicalWorkFormatReturnsHybridWhenRemoteAndOfficeArePresent(t *testing.T) {
-	if got := canonicalWorkFormat(wireNames{"REMOTE", "ON_SITE"}); got != "hybrid" {
+	if got := canonicalWorkFormat(wireWorkFormats{
+		{ID: "REMOTE", Name: "Из дома"},
+		{Code: "ON_SITE", Name: "На месте работодателя"},
+	}); got != "hybrid" {
 		t.Fatalf("work format=%q, want hybrid", got)
 	}
 }

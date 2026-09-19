@@ -31,60 +31,60 @@ type wireResumePage struct {
 }
 
 type wireResume struct {
-	ID              any        `json:"id"`
-	Hash            string     `json:"hash"`
-	Title           string     `json:"title"`
-	Description     string     `json:"description"`
-	SkillsText      string     `json:"skills"`
-	SkillSet        wireNames  `json:"skill_set"`
-	Area            wireNamed  `json:"area"`
-	Salary          wireSalary `json:"salary"`
-	Experience      any        `json:"experience"`
-	TotalExperience any        `json:"total_experience"`
-	Employment      wireNamed  `json:"employment"`
-	Schedule        wireNamed  `json:"schedule"`
-	WorkFormat      wireNames  `json:"work_format"`
-	URL             string     `json:"alternate_url"`
-	Links           wireLinks  `json:"links"`
-	CreatedAt       string     `json:"created_at"`
-	UpdatedAt       string     `json:"updated_at"`
+	ID              any             `json:"id"`
+	Hash            string          `json:"hash"`
+	Title           string          `json:"title"`
+	Description     string          `json:"description"`
+	SkillsText      string          `json:"skills"`
+	SkillSet        wireNames       `json:"skill_set"`
+	Area            wireNamed       `json:"area"`
+	Salary          wireSalary      `json:"salary"`
+	Experience      any             `json:"experience"`
+	TotalExperience any             `json:"total_experience"`
+	Employment      wireNamed       `json:"employment"`
+	Schedule        wireNamed       `json:"schedule"`
+	WorkFormat      wireWorkFormats `json:"work_format"`
+	URL             string          `json:"alternate_url"`
+	Links           wireLinks       `json:"links"`
+	CreatedAt       string          `json:"created_at"`
+	UpdatedAt       string          `json:"updated_at"`
 }
 
 type wireVacancy struct {
-	ID                     any           `json:"id"`
-	Name                   string        `json:"name"`
-	Title                  string        `json:"title"`
-	Description            string        `json:"description"`
-	Employer               wireNamed     `json:"employer"`
-	Company                wireNamed     `json:"company"`
-	Area                   wireNamed     `json:"area"`
-	Address                wireAddress   `json:"address"`
-	Salary                 wireSalary    `json:"salary"`
-	SalaryRange            wireSalary    `json:"salary_range"`
-	Requirements           wireNames     `json:"requirements"`
-	Skills                 wireNames     `json:"skills"`
-	KeySkills              wireNames     `json:"key_skills"`
-	ProfessionalRoles      wireNames     `json:"professional_roles"`
-	Experience             wireNamed     `json:"experience"`
-	Employment             wireNamed     `json:"employment"`
-	Schedule               wireNamed     `json:"schedule"`
-	WorkFormat             wireNames     `json:"work_format"`
-	Workplace              wireNames     `json:"workplace"`
-	WorkFormats            wireNames     `json:"work_formats"`
-	URL                    string        `json:"alternate_url"`
-	Links                  wireLinks     `json:"links"`
-	PublishedAt            string        `json:"published_at"`
-	UpdatedAt              string        `json:"updated_at"`
-	TotalResponsesCount    *int          `json:"responses_count"`
-	Archived               *bool         `json:"archived"`
-	ResponseLetterRequired *bool         `json:"response_letter_required"`
-	UserTestPresent        *bool         `json:"has_test"`
-	TestPresent            *bool         `json:"test_present"`
-	ResponseURL            string        `json:"response_url"`
-	AlreadyResponded       *bool         `json:"already_responded"`
-	Responded              *bool         `json:"responded"`
-	Relation               *wireRelation `json:"relation"`
-	Relations              *wireRelation `json:"relations"`
+	ID                     any             `json:"id"`
+	Name                   string          `json:"name"`
+	Title                  string          `json:"title"`
+	Description            string          `json:"description"`
+	Employer               wireNamed       `json:"employer"`
+	Company                wireNamed       `json:"company"`
+	Area                   wireNamed       `json:"area"`
+	Address                wireAddress     `json:"address"`
+	Salary                 wireSalary      `json:"salary"`
+	SalaryRange            wireSalary      `json:"salary_range"`
+	Requirements           wireNames       `json:"requirements"`
+	Skills                 wireNames       `json:"skills"`
+	KeySkills              wireNames       `json:"key_skills"`
+	ProfessionalRoles      wireNames       `json:"professional_roles"`
+	Experience             wireNamed       `json:"experience"`
+	Employment             wireNamed       `json:"employment"`
+	Schedule               wireNamed       `json:"schedule"`
+	WorkFormat             wireWorkFormats `json:"work_format"`
+	Workplace              wireWorkFormats `json:"workplace"`
+	WorkFormats            wireWorkFormats `json:"work_formats"`
+	URL                    string          `json:"alternate_url"`
+	Links                  wireLinks       `json:"links"`
+	PublishedAt            string          `json:"published_at"`
+	UpdatedAt              string          `json:"updated_at"`
+	TotalResponsesCount    *int            `json:"responses_count"`
+	Archived               *bool           `json:"archived"`
+	ResponseLetterRequired *bool           `json:"response_letter_required"`
+	UserTestPresent        *bool           `json:"has_test"`
+	TestPresent            *bool           `json:"test_present"`
+	ResponseURL            string          `json:"response_url"`
+	AlreadyResponded       *bool           `json:"already_responded"`
+	Responded              *bool           `json:"responded"`
+	Relation               *wireRelation   `json:"relation"`
+	Relations              *wireRelation   `json:"relations"`
 }
 
 type wireRelation struct {
@@ -156,6 +156,48 @@ func (v *wireNames) UnmarshalJSON(data []byte) error {
 				result = append(result, strings.TrimSpace(value))
 			}
 		}
+	}
+	*v = result
+	return nil
+}
+
+type wireWorkFormat struct {
+	ID    any    `json:"id"`
+	Code  string `json:"code"`
+	Slug  string `json:"slug"`
+	Name  string `json:"name"`
+	Title string `json:"title"`
+	Value string `json:"value"`
+}
+
+type wireWorkFormats []wireWorkFormat
+
+func (v *wireWorkFormats) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if string(trimmed) == "null" {
+		*v = nil
+		return nil
+	}
+	var values []json.RawMessage
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		if err := json.Unmarshal(trimmed, &values); err != nil {
+			return err
+		}
+	} else {
+		values = []json.RawMessage{trimmed}
+	}
+	result := make(wireWorkFormats, 0, len(values))
+	for _, raw := range values {
+		var text string
+		if err := json.Unmarshal(raw, &text); err == nil {
+			result = append(result, wireWorkFormat{Name: strings.TrimSpace(text)})
+			continue
+		}
+		var item wireWorkFormat
+		if err := json.Unmarshal(raw, &item); err != nil {
+			return err
+		}
+		result = append(result, item)
 	}
 	*v = result
 	return nil

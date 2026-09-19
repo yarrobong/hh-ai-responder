@@ -117,6 +117,7 @@ func (c *APIHHClient) Get(ctx context.Context, path string) ([]byte, error) {
 
 var _ hhreadport.HHReadSource = (*APIHHClient)(nil)
 var _ hhreadport.VacancyDetailSource = (*APIHHClient)(nil)
+var _ hhreadport.VacancyDuplicateStateSource = (*APIHHClient)(nil)
 var _ hhreadport.ResumeReadSource = (*APIHHClient)(nil)
 
 // CurrentUser reads only the safe identity metadata needed by API transport
@@ -196,18 +197,37 @@ func (c *APIHHClient) ReadVacancies(ctx context.Context, cursor string) (hhread.
 }
 
 func (c *APIHHClient) ReadVacancyDetail(ctx context.Context, id int) (hhread.VacancyRecord, error) {
-	if id <= 0 {
-		return hhread.VacancyRecord{}, errors.New("HH API vacancy id is invalid")
-	}
-	body, err := c.get(ctx, "/vacancies/"+strconv.Itoa(id), nil)
+	value, err := c.readVacancyDetailWire(ctx, id)
 	if err != nil {
 		return hhread.VacancyRecord{}, err
 	}
-	var value wireVacancy
-	if err := decodeWire(body, &value); err != nil {
+	return mapVacancyWire(value)
+}
+
+// ReadVacancyDetailRequiringRelation is the explicit duplicate-state probe.
+// It fails closed when the API does not provide one unambiguous applicant
+// relation instead of treating unknown relation data as an unresponded state.
+func (c *APIHHClient) ReadVacancyDetailRequiringRelation(ctx context.Context, id int) (hhread.VacancyRecord, error) {
+	value, err := c.readVacancyDetailWire(ctx, id)
+	if err != nil {
 		return hhread.VacancyRecord{}, err
 	}
 	return mapVacancyWireRequiringRelation(value)
+}
+
+func (c *APIHHClient) readVacancyDetailWire(ctx context.Context, id int) (wireVacancy, error) {
+	if id <= 0 {
+		return wireVacancy{}, errors.New("HH API vacancy id is invalid")
+	}
+	body, err := c.get(ctx, "/vacancies/"+strconv.Itoa(id), nil)
+	if err != nil {
+		return wireVacancy{}, err
+	}
+	var value wireVacancy
+	if err := decodeWire(body, &value); err != nil {
+		return wireVacancy{}, err
+	}
+	return value, nil
 }
 
 // Applicant negotiation semantics are not proven for the API transport. A

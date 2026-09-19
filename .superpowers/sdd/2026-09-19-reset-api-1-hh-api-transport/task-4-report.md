@@ -83,12 +83,40 @@ Vacancy mapping now uses `salary_range` when the primary salary projection is
 absent. Work-format normalization aggregates all values and returns `hybrid`
 when remote and office/on-site evidence coexist.
 
-Vacancy detail reads now require explicit, non-conflicting applicant relation
-evidence. Missing or conflicting duplicate state returns typed
-`CapabilityError{Capability: "duplicate-state"}` with an empty detail result;
-it never becomes `AlreadyResponded=false`, an empty successful page, or a
-browser fallback.
+Vacancy detail reads preserve a valid detail with unknown applicant relation
+when relation evidence is absent or ambiguous. The optional
+`VacancyDuplicateStateSource` / `ReadVacancyDetailRequiringRelation` path
+requires explicit, non-conflicting evidence and returns typed
+`CapabilityError{Capability: "duplicate-state"}` with an empty result when it
+cannot prove it; it never becomes `AlreadyResponded=false`, an empty
+successful page, or a browser fallback.
 
 Follow-up focused endpoint, mapping, package, race, full-suite, vet, build,
 diff-check, and normalization-file secret-scan verification passed. The fixes
 were committed separately from the original Task 4 implementation.
+
+## Re-review correction
+
+Work-format wire decoding now accepts raw strings, singleton objects, and
+object arrays while preferring stable IDs/codes and recognizing localized
+display names such as `Из дома` and `На месте работодателя`; combined remote
+and on-site evidence normalizes to `hybrid`. The endpoint fixture covers the
+object forms.
+
+`ReadVacancyDetail` now preserves provider-unknown applicant relation state in
+the valid vacancy detail. Callers that require duplicate-state proof must opt
+into `ReadVacancyDetailRequiringRelation`; missing or conflicting evidence
+returns the typed capability error. Applications and conversations remain
+explicit capability errors, with no browser fallback behavior added.
+
+Re-review verification:
+
+- RED confirmed the object-form work-format and explicit relation-required
+  tests failed before the correction.
+- GREEN: focused API tests passed with object-form localized work formats,
+  unknown detail relation preservation, and typed duplicate-state capability
+  errors.
+- Package tests, API race tests, `go test ./...`, `go vet ./...`,
+  `go build ./...`, and `git diff --check` passed.
+- Targeted token/credential-reference secret scan passed. No real HH request or
+  write was performed; unrelated untracked files were not staged.
