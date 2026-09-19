@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -88,6 +89,12 @@ type SearchProfileSummary struct {
 	UnionNewContribution     int                           `json:"union_new_contribution"`
 	ProcessedVacancies       int                           `json:"processed_vacancies,omitempty"`
 	PagesFetched             int                           `json:"pages_fetched"`
+	APIQueryParams           url.Values                    `json:"api_query_params,omitempty"`
+	PlannerOnlyParams        url.Values                    `json:"planner_only_params,omitempty"`
+	APIFound                 int                           `json:"api_found"`
+	APIFoundKnown            bool                          `json:"api_found_known"`
+	FirstVacancyID           int                           `json:"first_vacancy_id,omitempty"`
+	LastVacancyID            int                           `json:"last_vacancy_id,omitempty"`
 	Truncated                bool                          `json:"truncated,omitempty"`
 	TruncationReason         string                        `json:"truncation_reason,omitempty"`
 }

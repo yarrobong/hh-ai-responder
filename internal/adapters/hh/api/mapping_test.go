@@ -56,6 +56,20 @@ func TestMapVacancyWireUsesGotResponseAsPositiveRelationEvidence(t *testing.T) {
 	}
 }
 
+func TestMapVacancyWirePreservesApplicantPreflightResources(t *testing.T) {
+	value, err := mapVacancyWire(wireVacancy{
+		ID: "42", Relations: []string{"favorited", "got_response"},
+		NegotiationsURL: "/negotiations?vacancy_id=42", SuitableResumesURL: "/vacancies/42/suitable_resumes",
+		ClosedForApplicants: boolPtr(false), QuickResponsesAllowed: boolPtr(true),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(value.Relations) != 2 || value.Relations[1] != "got_response" || value.NegotiationsURL == "" || value.SuitableResumesURL == "" || !value.ClosedForApplicantsKnown || value.ClosedForApplicants || !value.QuickResponsesAllowedKnown || !value.QuickResponsesAllowed {
+		t.Fatalf("applicant preflight fields were not preserved: %+v", value)
+	}
+}
+
 func TestMapVacancyWireDoesNotFabricateNegativeRelationFromNonResponseIDs(t *testing.T) {
 	var wireValue wireVacancy
 	if err := decodeWire([]byte(`{"id":"42","relations":["favorited"]}`), &wireValue); err != nil {

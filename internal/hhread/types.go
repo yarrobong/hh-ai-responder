@@ -41,6 +41,13 @@ type VacancyRecord struct {
 	UserTestPresent             bool
 	UserTestPresentKnown        bool
 	ResponseURL                 string
+	NegotiationsURL             string
+	SuitableResumesURL          string
+	Relations                   []string
+	ClosedForApplicants         bool
+	ClosedForApplicantsKnown    bool
+	QuickResponsesAllowed       bool
+	QuickResponsesAllowedKnown  bool
 	AlreadyResponded            *bool
 	AlreadyRespondedEvidence    string
 	ProfessionalRoles           []string
@@ -50,6 +57,8 @@ type VacancyRecord struct {
 type VacancyPage struct {
 	Items      []VacancyRecord
 	NextCursor string
+	Found      int
+	FoundKnown bool
 }
 
 type ApplicationRecord struct {
@@ -64,6 +73,8 @@ type ApplicationRecord struct {
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
 	ConversationExternal string
+	ResumeID             string
+	URL                  string
 	Metadata             map[string]string
 }
 

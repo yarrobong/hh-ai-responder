@@ -268,6 +268,54 @@ func TestHHAPIDoctorClassifiesVacancyDecodeErrorAsReadError(t *testing.T) {
 	assertHHAPISafeOutput(t, output+errOut.String())
 }
 
+func TestHHAPIPreflightIsGETOnlyAndSanitized(t *testing.T) {
+	var methods []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		methods = append(methods, r.Method)
+		switch r.URL.Path {
+		case "/vacancies/42":
+			writeHHAPIJSON(t, w, map[string]any{
+				"id": "42", "relations": []string{"favorited"},
+				"negotiations_url":     "/negotiations?vacancy_id=42",
+				"suitable_resumes_url": "/vacancies/42/suitable_resumes",
+				"archived":             false, "has_test": false, "response_letter_required": false,
+			})
+		case "/vacancies/42/suitable_resumes":
+			writeHHAPIJSON(t, w, map[string]any{"items": []any{map[string]any{"id": "resume-1"}}})
+		case "/negotiations":
+			writeHHAPIJSON(t, w, map[string]any{"items": []any{}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	tokenFile := filepath.Join(t.TempDir(), "api-token.json")
+	if err := hhapi.NewFileTokenStore(tokenFile).Save(context.Background(), hhapi.OAuthTokens{AccessToken: hhAPIAccessTokenSentinel, TokenType: "bearer", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testHHAPIConfig(t, server.URL, server.URL+"/token", tokenFile, "https://operator.example/callback")
+	var out, errOut bytes.Buffer
+	if err := runHHAPICommandWithDeps(context.Background(), []string{"preflight", "42", "--resume-id", "resume-1"}, cfg, strings.NewReader(""), &out, &errOut, HHAPICommandDeps{}); err != nil {
+		t.Fatal(err)
+	}
+	output := out.String()
+	for _, want := range []string{"Vacancy ID: 42", "got_response relation: NO", "negotiations URL present: YES", "suitable resumes URL present: YES", "selected resume suitable: YES", "existing negotiation: UNKNOWN", "negotiation ID: absent", "final duplicate state: UNKNOWN"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output=%q, missing %q", output, want)
+		}
+	}
+	if strings.Contains(output, server.URL) || strings.Contains(output, "resume-1") {
+		t.Fatalf("preflight output exposed provider details: %q", output)
+	}
+	for _, method := range methods {
+		if method != http.MethodGet {
+			t.Fatalf("methods=%v, want GET only", methods)
+		}
+	}
+	assertHHAPISafeOutput(t, output+errOut.String())
+}
+
 func TestHHAPIDoctorReportsMissingTokenWithoutNetworkAccess(t *testing.T) {
 	tokenFile := filepath.Join(t.TempDir(), "missing-token.json")
 	cfg := testHHAPIConfig(t, "http://127.0.0.1:1", "http://127.0.0.1:1/token", tokenFile, "https://operator.example/callback")

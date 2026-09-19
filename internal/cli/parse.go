@@ -99,13 +99,13 @@ func firstSubcommand(args []string) string {
 func validateCommandArgs(command CommandKind, args []string) error {
 	if len(args) == 0 {
 		if command == CommandHHAPI {
-			return errors.New("hh-api requires a subcommand: auth, doctor, or logout")
+			return errors.New("hh-api requires a subcommand: auth, doctor, logout, or preflight")
 		}
 		return nil
 	}
 	if strings.HasPrefix(args[0], "-") {
 		if command == CommandHHAPI && !IsHelpFlag(args[0]) {
-			return errors.New("hh-api requires a subcommand: auth, doctor, or logout")
+			return errors.New("hh-api requires a subcommand: auth, doctor, logout, or preflight")
 		}
 		return nil
 	}
@@ -139,8 +139,37 @@ func validateCommandArgs(command CommandKind, args []string) error {
 			return fmt.Errorf("unknown hh reliability action %q", args[2])
 		}
 	case CommandHHAPI:
-		if !known(args[0], "auth", "doctor", "logout") {
+		if !known(args[0], "auth", "doctor", "logout", "preflight") {
 			return errors.New("unknown hh-api subcommand")
+		}
+		if args[0] == "preflight" {
+			if len(args) > 1 && IsHelpFlag(args[1]) {
+				return nil
+			}
+			if len(args) < 2 || strings.HasPrefix(args[1], "-") {
+				return errors.New("hh-api preflight requires a vacancy ID")
+			}
+			for index := 2; index < len(args); index++ {
+				arg := args[index]
+				if arg == "--resume-id" {
+					if index+1 >= len(args) || strings.HasPrefix(args[index+1], "-") || args[index+1] == "" {
+						return errors.New("hh-api preflight --resume-id requires a value")
+					}
+					index++
+					continue
+				}
+				if strings.HasPrefix(arg, "--resume-id=") && strings.TrimPrefix(arg, "--resume-id=") != "" {
+					continue
+				}
+				if IsHelpFlag(arg) {
+					continue
+				}
+				if strings.HasPrefix(arg, "-") {
+					return errors.New("hh-api preflight accepts only --resume-id")
+				}
+				return errors.New("hh-api preflight accepts one vacancy ID")
+			}
+			return nil
 		}
 		for _, arg := range args[1:] {
 			if !strings.HasPrefix(arg, "-") {

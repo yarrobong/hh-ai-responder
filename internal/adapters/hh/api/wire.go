@@ -24,6 +24,7 @@ type wirePage struct {
 	Items []wireVacancy `json:"items"`
 	Page  int           `json:"page"`
 	Pages int           `json:"pages"`
+	Found *int          `json:"found"`
 }
 
 type wireResumePage struct {
@@ -81,6 +82,10 @@ type wireVacancy struct {
 	UserTestPresent        *bool           `json:"has_test"`
 	TestPresent            *bool           `json:"test_present"`
 	ResponseURL            string          `json:"response_url"`
+	NegotiationsURL        string          `json:"negotiations_url"`
+	SuitableResumesURL     string          `json:"suitable_resumes_url"`
+	ClosedForApplicants    *bool           `json:"closed_for_applicants"`
+	QuickResponsesAllowed  *bool           `json:"quick_responses_allowed"`
 	AlreadyResponded       *bool           `json:"already_responded"`
 	Responded              *bool           `json:"responded"`
 	Relation               *wireRelation   `json:"relation"`
@@ -91,6 +96,31 @@ type wireRelation struct {
 	AlreadyResponded *bool  `json:"already_responded"`
 	Responded        *bool  `json:"responded"`
 	State            string `json:"state"`
+}
+
+type wireSuitableResumePage struct {
+	Items []wireSuitableResume `json:"items"`
+}
+
+type wireSuitableResume struct {
+	ID any `json:"id"`
+}
+
+type wireNegotiationPage struct {
+	Items []wireNegotiation `json:"items"`
+}
+
+type wireNegotiation struct {
+	ID        any                   `json:"id"`
+	URL       string                `json:"url"`
+	Vacancy   wireNamed             `json:"vacancy"`
+	Resume    wireNegotiationResume `json:"resume"`
+	VacancyID any                   `json:"vacancy_id"`
+	ResumeID  any                   `json:"resume_id"`
+}
+
+type wireNegotiationResume struct {
+	ID any `json:"id"`
 }
 
 type wireNamed struct {

@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	xhtml "golang.org/x/net/html"
+	"hh-ai-responder/internal/hhread"
+	hhreadport "hh-ai-responder/internal/ports/hhread"
 	"hh-ai-responder/internal/usecase/hhwritepreflight"
 )
 
@@ -42,6 +44,15 @@ type VacancyPreflight struct {
 	ResponseURL                  string
 	ResponseIdentifierPresent    bool
 	NegotiationIdentifierPresent bool
+	NegotiationID                string `json:"-"`
+	NegotiationResumeID          string `json:"-"`
+	GotResponseRelation          bool
+	ExistingNegotiation          bool
+	ExistingNegotiationKnown     bool
+	SelectedResumeSuitable       bool
+	SelectedResumeSuitableKnown  bool
+	NegotiationsURLPresent       bool
+	SuitableResumesURLPresent    bool
 	ActiveState                  VacancyActiveState
 	ActiveEvidence               []VacancyActiveEvidenceCode
 }
@@ -125,6 +136,15 @@ type VacancyPreflightResult struct {
 	WorkExperience               string                   `json:"work_experience,omitempty"`
 	Active                       string                   `json:"active"`
 	ActiveEvidence               []string                 `json:"active_evidence,omitempty"`
+	ExistingNegotiation          *bool                    `json:"existing_negotiation"`
+	ExistingNegotiationKnown     bool                     `json:"existing_negotiation_known"`
+	SelectedResumeSuitable       *bool                    `json:"selected_resume_suitable"`
+	SelectedResumeSuitableKnown  bool                     `json:"selected_resume_suitable_known"`
+	NegotiationIDPresent         bool                     `json:"negotiation_id_present"`
+	NegotiationResumeIDPresent   bool                     `json:"negotiation_resume_id_present"`
+	GotResponseRelation          bool                     `json:"got_response_relation"`
+	NegotiationsURLPresent       bool                     `json:"negotiations_url_present"`
+	SuitableResumesURLPresent    bool                     `json:"suitable_resumes_url_present"`
 }
 
 func (p VacancyPreflight) event() VacancyPreflightResult {
@@ -157,6 +177,15 @@ func (p VacancyPreflight) event() VacancyPreflightResult {
 		WorkExperience:               p.WorkExperience,
 		Active:                       string(p.activeState()),
 		ActiveEvidence:               activeEvidence,
+		ExistingNegotiation:          knownBoolPointer(p.ExistingNegotiation, p.ExistingNegotiationKnown),
+		ExistingNegotiationKnown:     p.ExistingNegotiationKnown,
+		SelectedResumeSuitable:       knownBoolPointer(p.SelectedResumeSuitable, p.SelectedResumeSuitableKnown),
+		SelectedResumeSuitableKnown:  p.SelectedResumeSuitableKnown,
+		NegotiationIDPresent:         strings.TrimSpace(p.NegotiationID) != "",
+		NegotiationResumeIDPresent:   strings.TrimSpace(p.NegotiationResumeID) != "",
+		GotResponseRelation:          p.GotResponseRelation,
+		NegotiationsURLPresent:       p.NegotiationsURLPresent,
+		SuitableResumesURLPresent:    p.SuitableResumesURLPresent,
 	}
 }
 
@@ -289,7 +318,7 @@ func (r *HHAIResponder) getVacancyPreflightContext(ctx context.Context, vacancy 
 		return VacancyPreflight{}, err
 	}
 	if r != nil && r.transport == transportAPI {
-		return VacancyPreflight{}, &TransportError{Code: transportNotImplemented, Reason: "API application preflight is not supported"}
+		return r.getAPIVacancyPreflightContext(ctx, vacancy)
 	}
 	responseURL := r.ResolveURL(fmt.Sprintf("/applicant/vacancy_response?vacancyId=%d&startedWithQuestion=false&hhtmFrom=vacancy", vacancy.ID))
 	if r.browserSource != nil && r.baseURL != nil && isHHHost(r.baseURL.Hostname()) {
@@ -340,6 +369,128 @@ func (r *HHAIResponder) getVacancyPreflightContext(ctx context.Context, vacancy 
 	}
 	r.rememberVacancyPreflight(preflight)
 	return preflight, nil
+}
+
+type apiApplicationPreflightSource interface {
+	hhreadport.VacancyDetailSource
+	ReadSuitableResumeIDs(context.Context, string) ([]string, error)
+	ReadNegotiations(context.Context, string) (hhread.ApplicationPage, error)
+}
+
+func (r *HHAIResponder) getAPIVacancyPreflightContext(ctx context.Context, vacancy Vacancy) (VacancyPreflight, error) {
+	if r == nil || r.readSource == nil {
+		return VacancyPreflight{}, &TransportError{Code: transportNotImplemented, Reason: "API application preflight read capability is unavailable"}
+	}
+	source, ok := r.readSource.(apiApplicationPreflightSource)
+	if !ok {
+		return VacancyPreflight{}, &TransportError{Code: transportNotImplemented, Reason: "API application preflight read capability is unavailable"}
+	}
+	selectedResumeID := strings.TrimSpace(r.resumeIdentifier)
+	if selectedResumeID == "" {
+		if current := r.GetCurrentResume(); current != nil {
+			selectedResumeID = r.resumeIdentifierForValue(*current)
+		}
+	}
+	preflight, err := apiVacancyPreflightWithSource(ctx, source, vacancy.ID, selectedResumeID)
+	if err != nil {
+		return VacancyPreflight{}, err
+	}
+	r.rememberVacancyPreflight(preflight)
+	return preflight, nil
+}
+
+func apiVacancyPreflightWithSource(ctx context.Context, source apiApplicationPreflightSource, vacancyID int, selectedResumeID string) (VacancyPreflight, error) {
+	if source == nil || vacancyID <= 0 {
+		return VacancyPreflight{}, errors.New("API application preflight input is invalid")
+	}
+	record, err := source.ReadVacancyDetail(ctx, vacancyID)
+	if err != nil {
+		return VacancyPreflight{}, err
+	}
+	preflight := apiVacancyPreflight(record, vacancyID)
+	if strings.TrimSpace(record.NegotiationsURL) != "" {
+		preflight.NegotiationsURLPresent = true
+		negotiations, negotiationErr := source.ReadNegotiations(ctx, record.NegotiationsURL)
+		if negotiationErr == nil {
+			for _, item := range negotiations.Items {
+				if item.VacancyID != vacancyID || strings.TrimSpace(item.ExternalID) == "" {
+					continue
+				}
+				preflight.ExistingNegotiation = true
+				preflight.ExistingNegotiationKnown = true
+				preflight.NegotiationID = strings.TrimSpace(item.ExternalID)
+				preflight.NegotiationResumeID = strings.TrimSpace(item.ResumeID)
+				preflight.NegotiationIdentifierPresent = true
+				if preflight.alreadyRespondedEvidence().Value != AlreadyRespondedYes {
+					setAlreadyRespondedEvidence(&preflight, AlreadyRespondedYes, EvidenceNegotiationIDFound)
+				}
+				break
+			}
+		}
+	}
+	selectedResumeID = strings.TrimSpace(selectedResumeID)
+	if strings.TrimSpace(record.SuitableResumesURL) != "" {
+		preflight.SuitableResumesURLPresent = true
+		if selectedResumeID != "" {
+			suitableIDs, suitableErr := source.ReadSuitableResumeIDs(ctx, record.SuitableResumesURL)
+			if suitableErr == nil {
+				preflight.SelectedResumeSuitableKnown = true
+				for _, suitableID := range suitableIDs {
+					if strings.TrimSpace(suitableID) == selectedResumeID {
+						preflight.SelectedResumeSuitable = true
+						break
+					}
+				}
+			}
+		}
+	}
+	return preflight, nil
+}
+
+func apiVacancyPreflight(record hhread.VacancyRecord, vacancyID int) VacancyPreflight {
+	preflight := VacancyPreflight{
+		VacancyID: vacancyID, Archived: record.Archived, ArchivedKnown: record.ArchivedKnown,
+		TestPresent: record.UserTestPresent, TestPresentKnown: record.UserTestPresentKnown,
+		LetterRequired: record.ResponseLetterRequired, LetterRequiredKnown: record.ResponseLetterRequiredKnown,
+		Area: record.AreaName, AreaKnown: strings.TrimSpace(record.AreaName) != "",
+		WorkSchedule: record.Schedule, WorkScheduleKnown: strings.TrimSpace(record.Schedule) != "",
+		WorkExperience: record.Experience, WorkExperienceKnown: strings.TrimSpace(record.Experience) != "",
+		ResponseURL: record.ResponseURL, ResponseIdentifierPresent: strings.TrimSpace(record.ResponseURL) != "",
+		ActiveState: VacancyActiveStateUnknown,
+	}
+	if record.AlreadyResponded != nil {
+		if *record.AlreadyResponded {
+			setAlreadyRespondedEvidence(&preflight, AlreadyRespondedYes, EvidenceExplicitRespondedMarker)
+		} else {
+			setAlreadyRespondedEvidence(&preflight, AlreadyRespondedNo, EvidenceExplicitNotResponded)
+		}
+	} else {
+		setAlreadyRespondedEvidence(&preflight, AlreadyRespondedUnknown, EvidenceAmbiguousPage)
+	}
+	if record.AlreadyRespondedEvidence == "vacancy.relations.got_response" {
+		setAlreadyRespondedEvidence(&preflight, AlreadyRespondedYes, EvidenceExplicitRespondedMarker)
+		preflight.GotResponseRelation = true
+	}
+	for _, relation := range record.Relations {
+		if strings.TrimSpace(relation) == "got_response" {
+			setAlreadyRespondedEvidence(&preflight, AlreadyRespondedYes, EvidenceExplicitRespondedMarker)
+			preflight.GotResponseRelation = true
+			break
+		}
+	}
+	if record.ClosedForApplicantsKnown && record.ClosedForApplicants {
+		preflight.CanApply, preflight.CanApplyKnown = false, true
+		setActiveEvidence(&preflight, VacancyActiveStateInactive, ActiveEvidenceProviderClosedForApplicants)
+	} else if record.ArchivedKnown && record.Archived {
+		setActiveEvidence(&preflight, VacancyActiveStateInactive, ActiveEvidenceProviderArchivedTrue)
+	} else if record.QuickResponsesAllowedKnown && record.QuickResponsesAllowed {
+		preflight.CanApply, preflight.CanApplyKnown = true, true
+		setActiveEvidence(&preflight, VacancyActiveStateActive, ActiveEvidenceProviderCanApply)
+	} else if record.ArchivedKnown && !record.Archived {
+		setActiveEvidence(&preflight, VacancyActiveStateActive, ActiveEvidenceProviderArchivedFalse)
+	}
+	preflight.Available = preflight.activeState() == VacancyActiveStateActive
+	return preflight
 }
 
 func (r *HHAIResponder) rememberVacancyPreflight(preflight VacancyPreflight) {

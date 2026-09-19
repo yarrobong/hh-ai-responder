@@ -98,6 +98,15 @@ func mapVacancyWire(value wireVacancy) (hhread.VacancyRecord, error) {
 		PublishedAt: parseAPITime(value.PublishedAt), UpdatedAt: parseAPITime(value.UpdatedAt), ProfessionalRoles: roles,
 		Metadata: map[string]string{"hh_read_source": "api"},
 	}
+	result.Relations = append([]string(nil), value.Relations...)
+	result.NegotiationsURL = strings.TrimSpace(value.NegotiationsURL)
+	result.SuitableResumesURL = strings.TrimSpace(value.SuitableResumesURL)
+	if value.ClosedForApplicants != nil {
+		result.ClosedForApplicants, result.ClosedForApplicantsKnown = *value.ClosedForApplicants, true
+	}
+	if value.QuickResponsesAllowed != nil {
+		result.QuickResponsesAllowed, result.QuickResponsesAllowedKnown = *value.QuickResponsesAllowed, true
+	}
 	if value.TotalResponsesCount != nil {
 		result.TotalResponsesCount = *value.TotalResponsesCount
 		result.TotalResponsesCountKnown = true
@@ -122,6 +131,40 @@ func mapVacancyWire(value wireVacancy) (hhread.VacancyRecord, error) {
 		result.AlreadyRespondedEvidence = evidence
 	}
 	return result, nil
+}
+
+func mapSuitableResumePage(value wireSuitableResumePage) ([]string, error) {
+	result := make([]string, 0, len(value.Items))
+	for _, item := range value.Items {
+		id := strings.TrimSpace(scalarString(item.ID))
+		if id == "" {
+			return nil, errors.New("HH API suitable resume has no id")
+		}
+		result = append(result, id)
+	}
+	return result, nil
+}
+
+func mapNegotiationPage(value wireNegotiationPage, endpointVacancyID int) (hhread.ApplicationPage, error) {
+	result := hhread.ApplicationPage{Items: make([]hhread.ApplicationRecord, 0, len(value.Items))}
+	for _, item := range value.Items {
+		externalID := strings.TrimSpace(scalarString(item.ID))
+		if externalID == "" {
+			return hhread.ApplicationPage{}, errors.New("HH API negotiation has no id")
+		}
+		vacancyID := int(parseProviderID(firstNonEmpty(scalarString(item.Vacancy.ID), scalarString(item.VacancyID))))
+		if vacancyID <= 0 {
+			vacancyID = endpointVacancyID
+		}
+		resumeID := firstNonEmpty(scalarString(item.Resume.ID), scalarString(item.ResumeID))
+		result.Items = append(result.Items, hhread.ApplicationRecord{ExternalID: externalID, VacancyID: vacancyID, ResumeID: resumeID, URL: strings.TrimSpace(item.URL), Metadata: map[string]string{"hh_read_source": "api"}})
+	}
+	return result, nil
+}
+
+func parseProviderID(value string) int64 {
+	parsed, _ := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	return parsed
 }
 
 func mapVacancyWireRequiringRelation(value wireVacancy) (hhread.VacancyRecord, error) {

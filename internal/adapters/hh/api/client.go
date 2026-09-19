@@ -193,7 +193,11 @@ func (c *APIHHClient) ReadVacancies(ctx context.Context, cursor string) (hhread.
 		}
 		items = append(items, mapped)
 	}
-	return hhread.VacancyPage{Items: items, NextCursor: nextAPICursor(page, value.Pages, len(items))}, nil
+	result := hhread.VacancyPage{Items: items, NextCursor: nextAPICursor(page, value.Pages, len(items))}
+	if value.Found != nil {
+		result.Found, result.FoundKnown = *value.Found, true
+	}
+	return result, nil
 }
 
 func (c *APIHHClient) ReadVacancyDetail(ctx context.Context, id int) (hhread.VacancyRecord, error) {
@@ -202,6 +206,35 @@ func (c *APIHHClient) ReadVacancyDetail(ctx context.Context, id int) (hhread.Vac
 		return hhread.VacancyRecord{}, err
 	}
 	return mapVacancyWire(value)
+}
+
+// ReadSuitableResumeIDs follows the provider-supplied vacancy URL and returns
+// only the opaque provider resume IDs exposed by that read-only resource.
+func (c *APIHHClient) ReadSuitableResumeIDs(ctx context.Context, endpoint string) ([]string, error) {
+	body, _, err := c.getProviderEndpoint(ctx, endpoint)
+	if err != nil {
+		return nil, err
+	}
+	var value wireSuitableResumePage
+	if err := decodeWire(body, &value); err != nil {
+		return nil, err
+	}
+	return mapSuitableResumePage(value)
+}
+
+// ReadNegotiations follows the provider-supplied negotiations URL. The
+// normalized records retain only IDs and safe provider URLs needed for
+// duplicate-state evidence; this method cannot issue a mutation.
+func (c *APIHHClient) ReadNegotiations(ctx context.Context, endpoint string) (hhread.ApplicationPage, error) {
+	body, endpointVacancyID, err := c.getProviderEndpoint(ctx, endpoint)
+	if err != nil {
+		return hhread.ApplicationPage{}, err
+	}
+	var value wireNegotiationPage
+	if err := decodeWire(body, &value); err != nil {
+		return hhread.ApplicationPage{}, err
+	}
+	return mapNegotiationPage(value, endpointVacancyID)
 }
 
 // ReadVacancyDetailRequiringRelation is the explicit duplicate-state probe.
@@ -316,6 +349,25 @@ func (c *APIHHClient) get(ctx context.Context, path string, query url.Values) ([
 		return body, nil
 	}
 	return nil, apiErr
+}
+
+func (c *APIHHClient) getProviderEndpoint(ctx context.Context, endpoint string) ([]byte, int, error) {
+	if c == nil || c.baseURL == nil {
+		return nil, 0, newAPIError(APIErrorRemote, 0, "/", "", 0, errAPINetworkRequest)
+	}
+	endpoint = strings.TrimSpace(endpoint)
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed == nil || parsed.Fragment != "" || parsed.Path == "" {
+		return nil, 0, newAPIError(APIErrorRemote, 0, "/", "", 0, errAPINetworkRequest)
+	}
+	if parsed.IsAbs() && (parsed.Scheme != c.baseURL.Scheme || parsed.Host != c.baseURL.Host) {
+		return nil, 0, newAPIError(APIErrorRemote, 0, "/", "", 0, errAPINetworkRequest)
+	}
+	body, err := c.get(ctx, parsed.Path, parsed.Query())
+	if err != nil {
+		return nil, 0, err
+	}
+	return body, int(parseProviderID(parsed.Query().Get("vacancy_id"))), nil
 }
 
 func (c *APIHHClient) refreshAndSave(ctx context.Context, path string, previous OAuthTokens) (OAuthTokens, error) {

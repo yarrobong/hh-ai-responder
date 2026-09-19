@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"hh-ai-responder/internal/hhread"
 	hhreadport "hh-ai-responder/internal/ports/hhread"
 )
 
@@ -442,7 +443,7 @@ func TestAPIHHClientReadsVacanciesWithAPIQueryAndPagination(t *testing.T) {
 			t.Fatalf("path=%q", r.URL.Path)
 		}
 		gotQuery = r.URL.Query()
-		_, _ = io.WriteString(w, `{"items":[{"id":"42","name":"Integration specialist","employer":{"name":"Fixture employer"},"area":{"name":"Yekaterinburg"},"alternate_url":"https://hh.example/vacancy/42","published_at":"2026-09-17T08:00:00Z"}],"page":1,"pages":3}`)
+		_, _ = io.WriteString(w, `{"items":[{"id":"42","name":"Integration specialist","employer":{"name":"Fixture employer"},"area":{"name":"Yekaterinburg"},"alternate_url":"https://hh.example/vacancy/42","published_at":"2026-09-17T08:00:00Z"}],"page":1,"pages":3,"found":123}`)
 	}))
 	defer server.Close()
 
@@ -464,7 +465,7 @@ func TestAPIHHClientReadsVacanciesWithAPIQueryAndPagination(t *testing.T) {
 	if gotQuery.Get("page") != "1" || gotQuery.Get("text") != "Python backend" || gotQuery.Get("area") != "3" || gotQuery.Get("period") != "7" || gotQuery.Get("per_page") != "50" || gotQuery.Get("career_agent_include") != "" || gotQuery.Get("resume") != "" {
 		t.Fatalf("query=%v", gotQuery)
 	}
-	if page.NextCursor != "2" || len(page.Items) != 1 || page.Items[0].ID != 42 || page.Items[0].Company != "Fixture employer" || page.Items[0].URL != "https://hh.example/vacancy/42" {
+	if page.NextCursor != "2" || len(page.Items) != 1 || page.Items[0].ID != 42 || page.Items[0].Company != "Fixture employer" || page.Items[0].URL != "https://hh.example/vacancy/42" || page.Found != 123 || !page.FoundKnown {
 		t.Fatalf("page=%+v", page)
 	}
 }
@@ -545,6 +546,93 @@ func TestAPIHHClientVacancyDetailMissingRelationRequiredCapabilityReturnsError(t
 	}
 	if got.ID != 0 || got.Title != "" {
 		t.Fatalf("required relation returned successful detail: %+v", got)
+	}
+}
+
+func TestAPIHHClientReadsProviderSuppliedSuitableResumes(t *testing.T) {
+	var methods []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		methods = append(methods, r.Method)
+		if r.URL.Path != "/vacancies/42/suitable_resumes" || r.URL.Query().Get("page") != "2" {
+			t.Fatalf("request=%s %s", r.Method, r.URL.RequestURI())
+		}
+		_, _ = io.WriteString(w, `{"items":[{"id":"provider-resume-1","real_id":"123"},{"id":"provider-resume-2"}],"page":2,"pages":3}`)
+	}))
+	defer server.Close()
+
+	got, err := newAPIClient(t, server.URL, &memoryTokenStore{loaded: validTokens()}).ReadSuitableResumeIDs(context.Background(), server.URL+"/vacancies/42/suitable_resumes?page=2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0] != "provider-resume-1" || got[1] != "provider-resume-2" {
+		t.Fatalf("suitable resume IDs=%v", got)
+	}
+	if len(methods) != 1 || methods[0] != http.MethodGet {
+		t.Fatalf("methods=%v, want one GET", methods)
+	}
+}
+
+func TestAPIHHClientReadsProviderSuppliedNegotiations(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/negotiations" || r.URL.Query().Get("vacancy_id") != "42" {
+			t.Fatalf("request=%s %s", r.Method, r.URL.RequestURI())
+		}
+		_, _ = io.WriteString(w, `{"items":[{"id":"neg-7","url":"https://hh.example/negotiation/neg-7","vacancy":{"id":"42"},"resume":{"id":"provider-resume-1"},"state":{"id":"response"}}],"page":0,"pages":1}`)
+	}))
+	defer server.Close()
+
+	page, err := newAPIClient(t, server.URL, &memoryTokenStore{loaded: validTokens()}).ReadNegotiations(context.Background(), server.URL+"/negotiations?vacancy_id=42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 {
+		t.Fatalf("negotiations=%+v", page)
+	}
+	got := page.Items[0]
+	if got.ExternalID != "neg-7" || got.VacancyID != 42 || got.ResumeID != "provider-resume-1" || got.URL != "https://hh.example/negotiation/neg-7" {
+		t.Fatalf("negotiation=%+v", got)
+	}
+}
+
+func TestAPIHHClientRejectsMalformedSuitableResumes(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"items":[{"title":"missing provider id"}]}`)
+	}))
+	defer server.Close()
+
+	if _, err := newAPIClient(t, server.URL, &memoryTokenStore{loaded: validTokens()}).ReadSuitableResumeIDs(context.Background(), server.URL+"/vacancies/42/suitable_resumes"); err == nil {
+		t.Fatal("malformed suitable-resume response unexpectedly decoded")
+	}
+}
+
+func TestAPIHHClientKeepsNegotiationFailuresTypedAndReadOnly(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{name: "forbidden", status: http.StatusForbidden, body: `{"error":"forbidden"}`},
+		{name: "not found", status: http.StatusNotFound, body: `{"error":"not found"}`},
+		{name: "decode", status: http.StatusOK, body: `{"items":[`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			methods := []string{}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				methods = append(methods, r.Method)
+				w.WriteHeader(test.status)
+				_, _ = io.WriteString(w, test.body)
+			}))
+			defer server.Close()
+
+			_, err := newAPIClient(t, server.URL, &memoryTokenStore{loaded: validTokens()}).ReadNegotiations(context.Background(), server.URL+"/negotiations?vacancy_id=42")
+			if err == nil {
+				t.Fatal("negotiation failure unexpectedly succeeded")
+			}
+			if len(methods) != 1 || methods[0] != http.MethodGet {
+				t.Fatalf("methods=%v, want one GET", methods)
+			}
+			var _ hhread.ApplicationPage
+		})
 	}
 }
 

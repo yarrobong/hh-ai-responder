@@ -901,9 +901,6 @@ func (c *HHAIResponderReadClient) ReadVacancyPreflight(ctx context.Context, vaca
 	if vacancyID <= 0 {
 		return VacancyPreflight{}, errors.New("HH vacancy ID is required")
 	}
-	if c.responder.transport == transportAPI {
-		return VacancyPreflight{}, &TransportError{Code: transportNotImplemented, Reason: "API application preflight is not supported"}
-	}
 	return c.responder.getVacancyPreflightContext(ctx, Vacancy{ID: vacancyID})
 }
 

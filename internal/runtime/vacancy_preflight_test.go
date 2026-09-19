@@ -2,12 +2,15 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"hh-ai-responder/internal/hhread"
 )
 
 func knownVacancyPreflight() VacancyPreflight {
@@ -144,6 +147,125 @@ func TestAlreadyRespondedEvidenceIsFailClosed(t *testing.T) {
 				t.Fatalf("evidence=%+v, want %s/%s", evidence, test.want, test.code)
 			}
 		})
+	}
+}
+
+type apiApplicationPreflightFake struct {
+	detail          hhread.VacancyRecord
+	suitableIDs     []string
+	suitableErr     error
+	negotiations    hhread.ApplicationPage
+	negotiationsErr error
+	negotiationURL  string
+	suitableURL     string
+}
+
+func (f *apiApplicationPreflightFake) ReadVacancies(context.Context, string) (hhread.VacancyPage, error) {
+	return hhread.VacancyPage{}, nil
+}
+
+func (f *apiApplicationPreflightFake) ReadApplications(context.Context, string) (hhread.ApplicationPage, error) {
+	return hhread.ApplicationPage{}, nil
+}
+
+func (f *apiApplicationPreflightFake) ReadConversations(context.Context, string) (hhread.ConversationPage, error) {
+	return hhread.ConversationPage{}, nil
+}
+
+func (f *apiApplicationPreflightFake) ReadVacancyDetail(context.Context, int) (hhread.VacancyRecord, error) {
+	return f.detail, nil
+}
+
+func (f *apiApplicationPreflightFake) ReadSuitableResumeIDs(context.Context, string) ([]string, error) {
+	return append([]string(nil), f.suitableIDs...), f.suitableErr
+}
+
+func (f *apiApplicationPreflightFake) ReadNegotiations(context.Context, string) (hhread.ApplicationPage, error) {
+	return f.negotiations, f.negotiationsErr
+}
+
+func newAPIApplicationPreflightResponder(source *apiApplicationPreflightFake) *HHAIResponder {
+	r := &HHAIResponder{ctx: context.Background(), transport: transportAPI, readSource: source, resumeIdentifier: "resume-1"}
+	r.readClient = NewHHAIResponderReadClient(r)
+	return r
+}
+
+func TestAPIApplicationPreflightUsesGotResponseBeforeOptionalProbes(t *testing.T) {
+	source := &apiApplicationPreflightFake{detail: hhread.VacancyRecord{
+		ID: 42, Relations: []string{"favorited", "got_response"}, NegotiationsURL: "https://api.example/negotiations?vacancy_id=42", SuitableResumesURL: "https://api.example/suitable",
+	}, suitableIDs: []string{"resume-1"}, negotiations: hhread.ApplicationPage{Items: []hhread.ApplicationRecord{{ExternalID: "neg-7", VacancyID: 42}}}}
+	preflight, err := newAPIApplicationPreflightResponder(source).GetVacancyPreflight(Vacancy{ID: 42})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := preflight.alreadyRespondedEvidence(); got.Value != AlreadyRespondedYes || got.EvidenceCode != EvidenceExplicitRespondedMarker && got.EvidenceCode != "vacancy.relations.got_response" || preflight.NegotiationID != "neg-7" {
+		t.Fatalf("duplicate evidence=%+v", got)
+	}
+}
+
+func TestAPIApplicationPreflightKeepsNonResponseRelationsUnknown(t *testing.T) {
+	for _, relations := range [][]string{nil, {}, {"favorited"}} {
+		source := &apiApplicationPreflightFake{detail: hhread.VacancyRecord{ID: 42, Relations: relations, NegotiationsURL: "https://api.example/negotiations?vacancy_id=42"}}
+		preflight, err := newAPIApplicationPreflightResponder(source).GetVacancyPreflight(Vacancy{ID: 42})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := preflight.alreadyRespondedEvidence(); got.Value != AlreadyRespondedUnknown {
+			t.Fatalf("relations=%v became duplicate evidence=%+v", relations, got)
+		}
+	}
+}
+
+func TestAPIApplicationPreflightUsesNegotiationAsPositiveEvidence(t *testing.T) {
+	source := &apiApplicationPreflightFake{detail: hhread.VacancyRecord{ID: 42, NegotiationsURL: "https://api.example/negotiations?vacancy_id=42"}, negotiations: hhread.ApplicationPage{Items: []hhread.ApplicationRecord{{ExternalID: "neg-7", VacancyID: 42, ResumeID: "resume-1"}}}}
+	preflight, err := newAPIApplicationPreflightResponder(source).GetVacancyPreflight(Vacancy{ID: 42})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := preflight.alreadyRespondedEvidence(); got.Value != AlreadyRespondedYes || got.EvidenceCode != EvidenceNegotiationIDFound {
+		t.Fatalf("negotiation evidence=%+v", got)
+	}
+	if preflight.NegotiationID != "neg-7" {
+		t.Fatalf("negotiation ID=%q", preflight.NegotiationID)
+	}
+}
+
+func TestAPIApplicationPreflightSuitableResumeTriState(t *testing.T) {
+	tests := []struct {
+		name      string
+		ids       []string
+		err       error
+		wantKnown bool
+		wantValue bool
+	}{
+		{name: "present", ids: []string{"resume-1"}, wantKnown: true, wantValue: true},
+		{name: "absent", ids: []string{"other"}, wantKnown: true, wantValue: false},
+		{name: "unavailable", err: errors.New("403"), wantKnown: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			source := &apiApplicationPreflightFake{detail: hhread.VacancyRecord{ID: 42, SuitableResumesURL: "https://api.example/suitable"}, suitableIDs: test.ids, suitableErr: test.err}
+			preflight, err := newAPIApplicationPreflightResponder(source).GetVacancyPreflight(Vacancy{ID: 42})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if preflight.SelectedResumeSuitableKnown != test.wantKnown || preflight.SelectedResumeSuitable != test.wantValue {
+				t.Fatalf("suitable=%+v", preflight)
+			}
+		})
+	}
+}
+
+func TestAPIApplicationPreflightNegotiationFailuresRemainUnknown(t *testing.T) {
+	for _, failure := range []error{errors.New("403"), errors.New("404"), errors.New("decode")} {
+		source := &apiApplicationPreflightFake{detail: hhread.VacancyRecord{ID: 42, NegotiationsURL: "https://api.example/negotiations?vacancy_id=42"}, negotiationsErr: failure}
+		preflight, err := newAPIApplicationPreflightResponder(source).GetVacancyPreflight(Vacancy{ID: 42})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := preflight.alreadyRespondedEvidence(); got.Value != AlreadyRespondedUnknown || preflight.ExistingNegotiationKnown {
+			t.Fatalf("failure=%v produced non-unknown state: evidence=%+v preflight=%+v", failure, got, preflight)
+		}
 	}
 }
 

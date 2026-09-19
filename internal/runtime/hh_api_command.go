@@ -47,8 +47,8 @@ func runHHAPICommandWithDeps(ctx context.Context, args []string, cfg Config, std
 	if stderr == nil {
 		stderr = io.Discard
 	}
-	if len(args) != 1 || strings.HasPrefix(args[0], "-") {
-		return errors.New("hh-api command requires exactly one subcommand: auth, doctor, or logout")
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		return errors.New("hh-api command requires a subcommand: auth, doctor, logout, or preflight")
 	}
 	switch args[0] {
 	case "auth":
@@ -56,10 +56,98 @@ func runHHAPICommandWithDeps(ctx context.Context, args []string, cfg Config, std
 	case "doctor":
 		return runHHAPIDoctor(ctx, cfg, stdout, deps)
 	case "logout":
+		if len(args) != 1 {
+			return errors.New("hh-api logout does not accept arguments")
+		}
 		return runHHAPILogout(ctx, cfg, stdout)
+	case "preflight":
+		return runHHAPIPreflight(ctx, args[1:], cfg, stdout, stderr, deps)
 	default:
 		return errors.New("unknown hh-api subcommand")
 	}
+}
+
+func runHHAPIPreflight(ctx context.Context, args []string, cfg Config, stdout, stderr io.Writer, deps HHAPICommandDeps) error {
+	_ = stderr
+	positionals := []string{}
+	resumeID := ""
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		switch {
+		case arg == "--resume-id":
+			if index+1 >= len(args) || strings.HasPrefix(args[index+1], "-") || strings.TrimSpace(args[index+1]) == "" {
+				return errors.New("hh-api preflight --resume-id requires a value")
+			}
+			resumeID = strings.TrimSpace(args[index+1])
+			index++
+		case strings.HasPrefix(arg, "--resume-id="):
+			resumeID = strings.TrimSpace(strings.TrimPrefix(arg, "--resume-id="))
+			if resumeID == "" {
+				return errors.New("hh-api preflight --resume-id requires a value")
+			}
+		case strings.HasPrefix(arg, "-"):
+			return errors.New("hh-api preflight accepts only --resume-id")
+		default:
+			positionals = append(positionals, arg)
+		}
+	}
+	if len(positionals) != 1 {
+		return errors.New("usage: hh-api preflight <vacancy-id> [--resume-id ID]")
+	}
+	vacancyID, err := strconv.Atoi(strings.TrimSpace(positionals[0]))
+	if err != nil || vacancyID <= 0 {
+		return errors.New("HH API preflight vacancy ID is invalid")
+	}
+	oauthConfig := hhAPIReadOAuthConfig(cfg)
+	_, client, err := newHHAPIClient(cfg, oauthConfig, deps)
+	if err != nil {
+		return err
+	}
+	selectedID := strings.TrimSpace(resumeID)
+	if selectedID == "" {
+		resumes, readErr := client.ReadResumes(ctx)
+		if readErr != nil {
+			return fmt.Errorf("HH API preflight resumes read failed: %w", readErr)
+		}
+		if len(resumes) > 0 {
+			selectedID = strings.TrimSpace(resumes[0].ID)
+		}
+	}
+	preflight, err := apiVacancyPreflightWithSource(ctx, client, vacancyID, selectedID)
+	if err != nil {
+		return fmt.Errorf("HH API preflight vacancy read failed: %w", err)
+	}
+	evidence := preflight.alreadyRespondedEvidence()
+	_, _ = fmt.Fprintf(stdout, "Vacancy ID: %d\n", vacancyID)
+	_, _ = fmt.Fprintf(stdout, "got_response relation: %s\n", hhAPIYesNo(preflight.GotResponseRelation))
+	_, _ = fmt.Fprintf(stdout, "negotiations URL present: %s\n", hhAPIYesNo(preflight.NegotiationsURLPresent))
+	_, _ = fmt.Fprintf(stdout, "suitable resumes URL present: %s\n", hhAPIYesNo(preflight.SuitableResumesURLPresent))
+	_, _ = fmt.Fprintf(stdout, "selected resume suitable: %s\n", hhAPITriState(preflight.SelectedResumeSuitableKnown, preflight.SelectedResumeSuitable))
+	_, _ = fmt.Fprintf(stdout, "existing negotiation: %s\n", hhAPITriState(preflight.ExistingNegotiationKnown, preflight.ExistingNegotiation))
+	_, _ = fmt.Fprintf(stdout, "negotiation ID: %s\n", hhAPIPresentAbsent(strings.TrimSpace(preflight.NegotiationID) != ""))
+	_, _ = fmt.Fprintf(stdout, "final duplicate state: %s\n", string(evidence.Value))
+	return nil
+}
+
+func hhAPIYesNo(value bool) string {
+	if value {
+		return "YES"
+	}
+	return "NO"
+}
+
+func hhAPITriState(known, value bool) string {
+	if !known {
+		return "UNKNOWN"
+	}
+	return hhAPIYesNo(value)
+}
+
+func hhAPIPresentAbsent(value bool) string {
+	if value {
+		return "present"
+	}
+	return "absent"
 }
 
 func runHHAPIAuth(ctx context.Context, cfg Config, stdin io.Reader, stdout io.Writer, deps HHAPICommandDeps) error {

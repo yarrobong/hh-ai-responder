@@ -1232,6 +1232,72 @@ type vacancySearchProfile struct {
 	EligibilityEvidence []string
 }
 
+var apiSearchParamKeys = map[string]struct{}{
+	"text": {}, "area": {}, "salary": {}, "currency": {}, "date_from": {}, "date_to": {},
+	"employment": {}, "schedule": {}, "experience": {}, "professional_role": {}, "work_format": {},
+	"search_field": {}, "order_by": {}, "clusters": {}, "only_with_salary": {}, "part_time": {},
+	"accept_temporary": {}, "label": {}, "locale": {}, "host": {}, "premium": {}, "no_magic": {},
+	"responses_count_enabled": {}, "period": {}, "search_period": {}, "per_page": {}, "items_on_page": {},
+}
+
+var apiSearchDirectParamKeys = []string{
+	"text", "area", "salary", "currency", "date_from", "date_to", "employment", "schedule", "experience",
+	"professional_role", "work_format", "search_field", "order_by", "clusters", "only_with_salary", "part_time",
+	"accept_temporary", "label", "locale", "host", "premium", "no_magic", "responses_count_enabled",
+}
+
+func apiSearchAuditQuery(params url.Values, page int) url.Values {
+	result := url.Values{}
+	for _, key := range apiSearchDirectParamKeys {
+		for _, value := range params[key] {
+			result.Add(key, value)
+		}
+	}
+	if len(result["period"]) == 0 {
+		for _, value := range params["search_period"] {
+			result.Add("period", value)
+		}
+	}
+	if len(result["per_page"]) == 0 {
+		for _, value := range params["items_on_page"] {
+			result.Add("per_page", value)
+		}
+	}
+	result.Set("page", strconv.Itoa(page))
+	return result
+}
+
+func plannerOnlySearchParams(params url.Values) url.Values {
+	result := url.Values{}
+	for key, values := range params {
+		if _, serverSide := apiSearchParamKeys[key]; serverSide {
+			continue
+		}
+		result[key] = append([]string(nil), values...)
+	}
+	return result
+}
+
+func mergeSearchAuditParams(target url.Values, source url.Values) {
+	if target == nil {
+		return
+	}
+	for key, values := range source {
+		for _, value := range values {
+			seen := false
+			for _, existing := range target[key] {
+				if existing == value {
+					seen = true
+					break
+				}
+			}
+			if !seen {
+				target.Add(key, value)
+			}
+		}
+	}
+}
+
 type HHRequester struct {
 	readOnly        bool
 	ctx             context.Context
@@ -2769,54 +2835,81 @@ func (r *HHAIResponder) fetchVacancyPage(page int) ([]Vacancy, error) {
 }
 
 func (r *HHAIResponder) fetchVacancyPageForProfile(profile vacancySearchProfile, page int) ([]Vacancy, error) {
-	return r.fetchVacancyPageWithSearch(profile.Params, profile.BaseURL, page)
+	result, err := r.fetchVacancyPageWithSearchMetadata(profile.Params, profile.BaseURL, page)
+	if err != nil {
+		return nil, err
+	}
+	return result.Vacancies, nil
 }
 
 func (r *HHAIResponder) fetchVacancyPageWithSearch(searchParams url.Values, baseURL *url.URL, page int) ([]Vacancy, error) {
-	return r.fetchVacancyPageContext(r.ctx, searchParams, baseURL, page)
+	result, err := r.fetchVacancyPageWithSearchMetadata(searchParams, baseURL, page)
+	if err != nil {
+		return nil, err
+	}
+	return result.Vacancies, nil
 }
+
+type vacancyPageFetchResult struct {
+	Vacancies  []Vacancy
+	Found      int
+	FoundKnown bool
+}
+
+func (r *HHAIResponder) fetchVacancyPageWithSearchMetadata(searchParams url.Values, baseURL *url.URL, page int) (vacancyPageFetchResult, error) {
+	return r.fetchVacancyPageContextMetadata(r.ctx, searchParams, baseURL, page)
+}
+
 func (r *HHAIResponder) fetchVacancyPageContext(ctx context.Context, searchParams url.Values, baseURL *url.URL, page int) ([]Vacancy, error) {
+	result, err := r.fetchVacancyPageContextMetadata(ctx, searchParams, baseURL, page)
+	if err != nil {
+		return nil, err
+	}
+	return result.Vacancies, nil
+}
+
+func (r *HHAIResponder) fetchVacancyPageContextMetadata(ctx context.Context, searchParams url.Values, baseURL *url.URL, page int) (vacancyPageFetchResult, error) {
 	reader := r.hhReadClient()
 	if reader == nil {
-		return nil, errors.New("HH responder is not configured")
+		return vacancyPageFetchResult{}, errors.New("HH responder is not configured")
 	}
 	if reader.responder != nil && reader.responder.transport == transportAPI {
 		pageValue, err := reader.readVacanciesWithSearch(ctx, searchParams, page)
 		if err != nil {
-			return nil, err
+			return vacancyPageFetchResult{}, err
 		}
 		values := make([]Vacancy, 0, len(pageValue.Items))
 		for _, record := range pageValue.Items {
 			value, mapErr := mapHHVacancy(record)
 			if mapErr != nil {
-				return nil, mapErr
+				return vacancyPageFetchResult{}, mapErr
 			}
 			values = append(values, value)
 		}
-		return values, nil
+		return vacancyPageFetchResult{Vacancies: values, Found: pageValue.Found, FoundKnown: pageValue.FoundKnown}, nil
 	}
 	if reader.browser != nil && baseURL != nil && isHHHost(baseURL.Hostname()) {
 		browserReader, browserErr := hhreadadapter.NewBrowserHHReader(reader.browser, baseURL, searchParams)
 		if browserErr != nil {
-			return nil, browserErr
+			return vacancyPageFetchResult{}, browserErr
 		}
 		pageValue, browserErr := browserReader.ReadVacancies(ctx, strconv.Itoa(page))
 		if browserErr != nil {
-			return nil, browserErr
+			return vacancyPageFetchResult{}, browserErr
 		}
 		values := make([]Vacancy, 0, len(pageValue.Items))
 		for _, record := range pageValue.Items {
 			value, mapErr := mapHHVacancy(record)
 			if mapErr != nil {
-				return nil, mapErr
+				return vacancyPageFetchResult{}, mapErr
 			}
 			values = append(values, value)
 		}
-		return values, nil
+		return vacancyPageFetchResult{Vacancies: values, Found: pageValue.Found, FoundKnown: pageValue.FoundKnown}, nil
 	}
 	adapter, err := reader.readAdapter()
 	if err != nil {
-		return nil, err
+		return vacancyPageFetchResult{}, err
 	}
 	// Search profiles historically carry their own base URL. Preserve that
 	// compatibility case with the same typed read client and its configured
@@ -2840,22 +2933,22 @@ func (r *HHAIResponder) fetchVacancyPageContext(ctx context.Context, searchParam
 			RequestInterval: interval, ReadConcurrency: concurrency,
 		})
 		if err != nil {
-			return nil, err
+			return vacancyPageFetchResult{}, err
 		}
 	}
 	pageValue, err := adapter.ReadVacanciesWithSearch(ctx, searchParams, page)
 	if err != nil {
-		return nil, err
+		return vacancyPageFetchResult{}, err
 	}
 	values := make([]Vacancy, 0, len(pageValue.Items))
 	for _, record := range pageValue.Items {
 		value, mapErr := mapHHVacancy(record)
 		if mapErr != nil {
-			return nil, mapErr
+			return vacancyPageFetchResult{}, mapErr
 		}
 		values = append(values, value)
 	}
-	return values, nil
+	return vacancyPageFetchResult{Vacancies: values, Found: pageValue.Found, FoundKnown: pageValue.FoundKnown}, nil
 }
 
 func (r *HHAIResponder) fetchVacanciesFromSearchProfiles(summary *RunSummaryResult) ([]Vacancy, error) {
@@ -2932,6 +3025,10 @@ func (r *HHAIResponder) fetchVacanciesFromSearchProfilesWithLimit(summary *RunSu
 			ProfileType: profile.ProfileType, RoleFamily: profile.RoleFamily,
 			SourceResumeIDs: append([]string(nil), profile.SourceResumeIDs...),
 		}
+		if r.transport == transportAPI {
+			profileSummary.APIQueryParams = url.Values{}
+			profileSummary.PlannerOnlyParams = plannerOnlySearchParams(profile.Params)
+		}
 		if r.maxSearchPagesPerRun > 0 && pagesFetched >= r.maxSearchPagesPerRun {
 			markTruncated(&profileSummary, "MAX_SEARCH_PAGES_PER_RUN")
 			summary.SearchProfiles = append(summary.SearchProfiles, profileSummary)
@@ -2974,7 +3071,10 @@ func (r *HHAIResponder) fetchVacanciesFromSearchProfilesWithLimit(summary *RunSu
 				pageProfile.Params.Set("items_on_page", fmt.Sprint(pageSize))
 			}
 
-			vacancies, err := r.fetchVacancyPageForProfile(pageProfile, page)
+			if r.transport == transportAPI {
+				mergeSearchAuditParams(profileSummary.APIQueryParams, apiSearchAuditQuery(pageProfile.Params, page))
+			}
+			pageResult, err := r.fetchVacancyPageWithSearchMetadata(pageProfile.Params, pageProfile.BaseURL, page)
 			if err != nil {
 				summary.SearchProfiles = append(summary.SearchProfiles, profileSummary)
 				summary.VacanciesAfterDedup = len(uniqueVacancies)
@@ -2983,6 +3083,17 @@ func (r *HHAIResponder) fetchVacanciesFromSearchProfilesWithLimit(summary *RunSu
 			pagesFetched++
 			profileSummary.PagesFetched++
 			summary.SearchPagesFetched++
+			if pageResult.FoundKnown {
+				profileSummary.APIFound = pageResult.Found
+				profileSummary.APIFoundKnown = true
+			}
+			if len(pageResult.Vacancies) > 0 {
+				if profileSummary.FirstVacancyID == 0 {
+					profileSummary.FirstVacancyID = pageResult.Vacancies[0].ID
+				}
+				profileSummary.LastVacancyID = pageResult.Vacancies[len(pageResult.Vacancies)-1].ID
+			}
+			vacancies := pageResult.Vacancies
 			profileSummary.VacanciesFetched += len(vacancies)
 			profileSummary.RawHits += len(vacancies)
 			summary.VacanciesFetchedRaw += len(vacancies)
