@@ -261,8 +261,10 @@ func (r *HHAIResponder) ApplyVacancies() error {
 			r.writeEvent(careerAgentRouteEvent(route))
 			trace.ResumeCandidates = append([]careeragent.ResumeScore(nil), route.AlternativeScores...)
 			trace.SelectedResume, trace.SelectedResumeTitle, trace.ResumeConfidence = route.SelectedResumeID, route.SelectedResumeTitle, route.Confidence
+			trace.RoleEvidence = route.RoleEvidence
 			trace.FinalRouteReasonCode = route.ReasonCode
-			if route.Status != careeragent.RouteSelected || route.Confidence == careeragent.ConfidenceLow || (r.careerAgentMode == "canary" && (route.Confidence != careeragent.ConfidenceHigh || !routeRequirementsConfirmed(route))) {
+			recordRouteReason(&summary, route.ReasonCode)
+			if !careerAgentRouteAllowsAI(route, r.careerAgentMode) {
 				recordStage(stageStats, "resume_routing", strings.Join(route.Reasons, "; "), false, true)
 				summary.ReviewRequired++
 				summary.ReviewAfterDetail++
@@ -483,6 +485,29 @@ func routeRequirementsConfirmed(route careeragent.RouteDecision) bool {
 		}
 	}
 	return true
+}
+
+func careerAgentRouteAllowsAI(route careeragent.RouteDecision, mode string) bool {
+	if route.Status != careeragent.RouteSelected || route.Confidence == careeragent.ConfidenceLow {
+		return false
+	}
+	if mode == "canary" && (route.Confidence != careeragent.ConfidenceHigh || !routeRequirementsConfirmed(route)) {
+		return false
+	}
+	return true
+}
+
+func recordRouteReason(summary *RunSummaryResult, reason string) {
+	if summary == nil {
+		return
+	}
+	switch reason {
+	case careeragent.RouteReasonAmbiguous, careeragent.RouteReasonLowEvidence, careeragent.RouteReasonOutOfScope, careeragent.RouteReasonNoSuitable:
+		if summary.RouteReasonCounts == nil {
+			summary.RouteReasonCounts = map[string]int{}
+		}
+		summary.RouteReasonCounts[reason]++
+	}
 }
 
 func applicationPreflight(id int, value applicationprocessing.Applicability) VacancyPreflight {

@@ -171,8 +171,8 @@ func (r *HHAIResponder) fetchCareerAgentDetail(ctx context.Context, value Vacanc
 
 func mergeCareerAgentVacancy(search, detail Vacancy) Vacancy {
 	merged := search
-	merged.Title = firstNonEmpty(detail.Title, search.Title)
-	merged.Name = firstNonEmpty(detail.Name, search.Name)
+	merged.Title = firstNonEmpty(search.Title, search.Name, detail.Title, detail.Name)
+	merged.Name = firstNonEmpty(search.Name, search.Title, detail.Name, detail.Title)
 	merged.Description = firstNonEmpty(detail.Description, search.Description)
 	merged.Salary = firstNonEmpty(detail.Salary, search.Salary)
 	merged.SalaryCurrency = firstNonEmpty(detail.SalaryCurrency, search.SalaryCurrency)
