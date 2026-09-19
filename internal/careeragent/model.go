@@ -192,7 +192,7 @@ func DeriveEligibleSearchFamilies(resume ResumeProfile) []EligibleSearchFamily {
 				break
 			}
 		}
-		eligible := len(evidence) > 0 && (hasTitleEvidence || (roleEvidence > 0 && specificEvidence > 0) || specificEvidence >= 2)
+		eligible := len(evidence) > 0 && (hasTitleEvidence || (roleEvidence > 0 && specificEvidence > 0) || (specificEvidence >= 2 && searchFamilyAllowsSpecificOnly(rule.family)))
 		if eligible {
 			sort.Strings(evidence)
 			result = append(result, EligibleSearchFamily{Family: rule.family, ResumeID: resume.ID, Evidence: evidence})
@@ -200,6 +200,15 @@ func DeriveEligibleSearchFamilies(resume ResumeProfile) []EligibleSearchFamily {
 	}
 	sort.SliceStable(result, func(i, j int) bool { return result[i].Family < result[j].Family })
 	return result
+}
+
+func searchFamilyAllowsSpecificOnly(family RoleFamily) bool {
+	switch family {
+	case RoleFamilyPythonBackend, RoleFamilyWebBackend, RoleFamilyAutomationIntegrations, RoleFamilyTechSupport:
+		return true
+	default:
+		return false
+	}
 }
 
 func canonicalSearchProfileKey(profile SearchProfile) string {

@@ -48,6 +48,42 @@ func TestDeriveEligibleSearchFamiliesDoesNotPromoteGenericSecondary(t *testing.T
 	}
 }
 
+func TestDeriveEligibleSearchFamiliesDoesNotPromoteFrontendFromAdjacentSkills(t *testing.T) {
+	resume := ResumeProfile{
+		ID:      "automation",
+		Title:   "Специалист по автоматизации и интеграциям / инженер внедрения",
+		Skills:  []string{"React", "TypeScript", "JavaScript", "Git", "API"},
+		Enabled: true,
+	}
+	if family := eligibleFamilyByName(DeriveEligibleSearchFamilies(resume), RoleFamilyFrontend); family != nil {
+		t.Fatalf("adjacent frontend skills created an unsupported search family: %+v", family)
+	}
+}
+
+func TestDeriveEligibleSearchFamiliesDoesNotPromoteSystemAnalystFromAdjacentSkills(t *testing.T) {
+	resume := ResumeProfile{
+		ID:      "backend",
+		Title:   "Backend-разработчик",
+		Skills:  []string{"SOAP", "SQL", "API", "Git"},
+		Enabled: true,
+	}
+	if family := eligibleFamilyByName(DeriveEligibleSearchFamilies(resume), RoleFamilySystemAnalyst); family != nil {
+		t.Fatalf("adjacent analyst skills created an unsupported search family: %+v", family)
+	}
+}
+
+func TestDeriveEligibleSearchFamiliesKeepsWebBackendForBackendResume(t *testing.T) {
+	resume := ResumeProfile{
+		ID:      "backend",
+		Title:   "Backend-разработчик",
+		Skills:  []string{"PHP", "Laravel", "React"},
+		Enabled: true,
+	}
+	if family := eligibleFamilyByName(DeriveEligibleSearchFamilies(resume), RoleFamilyWebBackend); family == nil {
+		t.Fatalf("backend resume lost WEB_BACKEND eligibility: %+v", DeriveEligibleSearchFamilies(resume))
+	}
+}
+
 func TestSearchProfileMetadataIsOptionalForLegacyJSON(t *testing.T) {
 	var profile SearchProfile
 	if err := json.Unmarshal([]byte(`{"id":"search-1","resume_id":"r","query":"Python backend","reason":"resume role/title","params":{}}`), &profile); err != nil {

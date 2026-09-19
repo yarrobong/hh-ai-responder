@@ -170,3 +170,136 @@ HH_DRY_RUN=true HH_WRITE_ENABLED=false go vet ./...
 HH_DRY_RUN=true HH_WRITE_ENABLED=false go build ./...
 git diff --check
 ```
+
+## Final gate addendum
+
+The checks below were run after the initial report. They are the final RESET-7
+gate result and supersede the preliminary union counts above where the current
+provider returned a different bounded read set.
+
+### Unexpected family eligibility audit
+
+The production-default run after the fix emitted only the supported planner
+families:
+
+```json
+{
+  "AUTOMATION_INTEGRATIONS": 3,
+  "PYTHON_BACKEND": 6,
+  "TECH_SUPPORT": 3,
+  "WEB_BACKEND": 4,
+  "FRONTEND": 0,
+  "SYSTEM_ANALYST": 0
+}
+```
+
+The two unexpected profiles in the pre-fix run were:
+
+| profile/query | family | source resume | title / desired role | search hints | strong role anchor | core/adjacent evidence | pre-fix rule |
+|---|---|---|---|---|---|---|---|
+| `frontend developer` | `FRONTEND` | `hh-resume-6aac4e53ff110b3a8e0039ed1f4f5a68684d41` | `Специалист по автоматизации и интеграциям / инженер внедрения` / same | none | none | `JavaScript`, `React`, `TypeScript` | `specificEvidence >= 2` |
+| `system analyst` | `SYSTEM_ANALYST` | `hh-resume-9d9a7b3aff10b8e0070039ed1f756941615344` | `Backend-разработчик` / same | none | none | `SOAP`, `SQL` | `specificEvidence >= 2` |
+
+These were regressions: adjacent/core technology tokens were allowed to
+activate unsupported families without a trusted family anchor. The fix keeps
+specific-only eligibility for the four supported RESET-6 planner families, so
+secondary `WEB_BACKEND` and `TECH_SUPPORT` evidence is preserved, while
+`SYSTEM_ADMIN`, `FRONTEND`, `FLUTTER`, `ONE_C` and `SYSTEM_ANALYST` require a
+title/desired-role/search-hint family anchor. Focused fixtures cover both
+leakage cases and verify that a backend resume still derives `WEB_BACKEND`.
+
+### Five strong-role missing vacancies audit
+
+The exact five requested baseline misses were checked against the production
+default run, the `4/48` diagnostic, the `5/80` diagnostic, and direct read-only
+provider pages. The old source query and old router result come from the
+frozen baseline; selected resume means the old route's selected resume, when
+one existed.
+
+| vacancy | old title | old family | old source query | old router / selected resume | current bounded result | provider state | query conclusion |
+|---:|---|---|---|---|---|---|---|
+| `137495670` | Middle backend developer | `PYTHON_BACKEND` | `Backend-разработчик` | `ROUTE_AMBIGUOUS` / none | missing in `3/48`, `4/48`, `5/80` | HTTP 200, page marker `Вакансия закрыта` | current `Backend-разработчик` vocabulary remains; not a live recall regression |
+| `136813509` | Бизнес-аналитик/специалист по внедрению CRM | `AUTOMATION_INTEGRATIONS` | `Технический специалист` | `ROUTE_SELECTED` / automation-integration resume; old fact verification was `403` | missing in all current runs | HTTP 200, page marker `Вакансия закрыта` | old broad query was replaced by bounded implementation/integration phrases; current state is unavailable |
+| `136970301` | Старший специалист технической поддержки (L1) | `TECH_SUPPORT` | `Технический специалист` | `ROUTE_AMBIGUOUS` / none | recovered in `3/48`, `4/48`, `5/80`; then bounded by vacancy cap | HTTP 200, page marker `Вакансия закрыта` | support-specific query discovers it; cap was not a remaining current recall defect |
+| `137026634` | Инженер технической поддержки (Fortinet) | `TECH_SUPPORT` | `Технический специалист` | `ROUTE_SELECTED` / `Технический специалист` resume | recovered in `3/48`, `4/48`, `5/80`; then bounded by vacancy cap | HTTP 200, page marker `Вакансия закрыта` | support-specific query discovers it; cap was not a remaining current recall defect |
+| `137540483` | Специалист технической поддержки | `TECH_SUPPORT` | `Технический специалист` | `ROUTE_SELECTED` / `Технический специалист` resume | recovered in `3/48`, `4/48`, `5/80`; then bounded by vacancy cap | HTTP 200, page marker `Вакансия закрыта` | support-specific query discovers it; cap was not a remaining current recall defect |
+
+The two still-missing IDs were not replaced by other vacancies. Both are
+provider-unavailable at the time of this audit, so neither is classified as an
+active search regression.
+
+### High-cap diagnostic
+
+Commands were read-only with `HH_DRY_RUN=true` and
+`HH_WRITE_ENABLED=false`.
+
+| run | raw hits | distinct discovered | pages fetched | profile truncation | run truncation | complete |
+|---|---:|---:|---:|---:|---:|---|
+| production `3/profile + 48/run` | 502 | 211 | 43 | 3 (`TECH_SUPPORT`) | 0 | no |
+| diagnostic `4/profile + 48/run` | 502 | 211 | 46 | 0 | 0 | yes |
+| diagnostic `5/profile + 80/run` | 502 | 211 | 46 | 0 | 0 | yes |
+
+The `4/48` and `5/80` runs were identical on this provider sample and both
+recovered the same three support IDs. The final production run also retained
+those three IDs; the higher cap added no distinct IDs. No unbounded retry or
+cap escalation was performed.
+
+### Support profile quality
+
+The final production run emitted three `TECH_SUPPORT` profiles because two
+eligible resumes share the family:
+
+| query | source | raw / distinct | pages | status |
+|---|---|---:|---:|---|
+| `специалист технической поддержки` | automation/integration resume | 60 / 60 | 3 | truncated at profile cap |
+| `инженер технической поддержки` | automation/integration resume | 57 / 57 | 3 | truncated at profile cap |
+| `инженер технической поддержки` | technical-specialist resume | 52 / 52 | 3 | truncated at profile cap |
+
+Their union contained 113 discovered vacancies. Among the six that entered the
+router sample, outcomes were: `SELECTED=0`, `AMBIGUOUS=3`,
+`NO_SUITABLE=0`, `OUT_OF_SCOPE=1`, `LOW_EVIDENCE=2`. The remaining support
+discoveries were outside the bounded 50-vacancy router sample, not silently
+treated as negative matches.
+
+### Production cap decision
+
+Keep the production defaults at `3/profile + 48/run`. On the current data this
+is the smallest tested policy with the same 211-ID union as `4/48` and `5/80`;
+raising the cap would make the run complete but did not recover any additional
+currently readable vacancy. The explicit truncation remains visible in the
+telemetry and report. Revisit only if a future read-only comparison shows an
+active supported-role ID missing at `3/48` and present at a bounded higher cap.
+
+### Recall conclusion
+
+The family leakage is resolved by deterministic regression tests. Of the exact
+five strong-role baseline misses, three are recovered by the current role-safe
+support queries and two are proven closed by provider-side read evidence. No
+active supported-role loss remains unexplained.
+
+```text
+SUPPORTED_ROLE_RECALL_ACCEPTABLE
+```
+
+Final production-default handoff:
+
+```text
+Eligible search families: AUTOMATION_INTEGRATIONS=3, PYTHON_BACKEND=6, TECH_SUPPORT=3, WEB_BACKEND=4
+Raw hits: 502
+Distinct discovered: 211
+Processed: 50
+Production page caps: 3/profile, 48/run
+Discovery complete/truncated: false/true
+Five strong-role baseline misses: recovered=3, provider-unavailable=2, actual regressions=0
+Supported-role recall verdict: SUPPORTED_ROLE_RECALL_ACCEPTABLE
+Router selected: 12
+Ambiguous: 12
+No suitable: 6
+Out of scope: 3
+Low evidence: 17
+AI evaluated: 12
+MATCH: 0
+Fallback OR: NOT_ENABLED
+Real HH writes: 0
+Application POST: 0
+```
