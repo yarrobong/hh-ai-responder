@@ -284,6 +284,7 @@ type CareerAgentVacancyResult struct {
 	RoleEvidence            careeragent.VacancyRoleEvidence `json:"role_evidence,omitempty"`
 	FinalRouteReasonCode    string                          `json:"final_route_reason_code,omitempty"`
 	FinalReasonCode         string                          `json:"final_reason_code,omitempty"`
+	LocalPolicyGate         string                          `json:"local_policy_gate,omitempty"`
 	FinalDecision           string                          `json:"final_decision"`
 	WouldApply              bool                            `json:"would_apply"`
 	BlockedReason           string                          `json:"blocked_reason,omitempty"`

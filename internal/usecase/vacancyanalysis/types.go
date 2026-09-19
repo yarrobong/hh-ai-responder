@@ -34,6 +34,28 @@ const (
 	RecommendationReasonOther           = "OTHER"
 )
 
+const (
+	RequirementExtractionExplicitHard = "EXPLICIT_HARD"
+	RequirementExtractionPreference   = "PREFERENCE"
+	RequirementExtractionAmbiguous    = "AMBIGUOUS"
+	RequirementExtractionNotRequired  = "NOT_A_REQUIREMENT"
+
+	CandidateEvidenceHHResume           = "HH_RESUME"
+	CandidateEvidenceProfile            = "CANDIDATE_PROFILE"
+	CandidateEvidenceTrustedProject     = "TRUSTED_PROJECT"
+	CandidateEvidenceWorkExperience     = "WORK_EXPERIENCE"
+	CandidateEvidenceEducation          = "EDUCATION"
+	CandidateEvidenceExplicitConstraint = "EXPLICIT_CONSTRAINT"
+	CandidateEvidenceLegacyAggregate    = "LEGACY_AGGREGATE"
+	CandidateEvidenceUnknownSource      = "UNKNOWN_SOURCE"
+	CandidateEvidenceNone               = "NONE"
+
+	ExperienceClassificationGenericTotal = "GENERIC_TOTAL_DURATION"
+	ExperienceClassificationRoleSpecific = "ROLE_SPECIFIC_DURATION"
+	ExperienceClassificationTechnology   = "TECHNOLOGY_SPECIFIC_DURATION"
+	ExperienceClassificationNotDuration  = "NOT_DURATION"
+)
+
 // CandidateFacts is the bounded candidate projection used by vacancy AI. It
 // deliberately carries no contacts or storage handles and preserves exact
 // experience duration, including the distinction between unknown and zero.
@@ -72,13 +94,24 @@ type HardRequirementCandidate struct {
 	VacancyEvidence string `json:"vacancy_evidence"`
 }
 
+type RequirementTelemetry struct {
+	SourceContext               string   `json:"source_context,omitempty"`
+	SourceField                 string   `json:"source_field,omitempty"`
+	ExtractionClassification    string   `json:"extraction_classification,omitempty"`
+	MandatoryCue                string   `json:"mandatory_cue,omitempty"`
+	CandidateEvidenceProvenance string   `json:"candidate_evidence_provenance,omitempty"`
+	ExperienceClassification    string   `json:"experience_classification,omitempty"`
+	ClassificationDiagnostics   []string `json:"classification_diagnostics,omitempty"`
+}
+
 type HardRequirementEvaluation struct {
-	Requirement       string `json:"requirement"`
-	Category          string `json:"category"`
-	Status            string `json:"status"`
-	VacancyEvidence   string `json:"vacancy_evidence"`
-	CandidateEvidence string `json:"candidate_evidence"`
-	Soft              bool   `json:"soft,omitempty"`
+	Requirement       string                `json:"requirement"`
+	Category          string                `json:"category"`
+	Status            string                `json:"status"`
+	VacancyEvidence   string                `json:"vacancy_evidence"`
+	CandidateEvidence string                `json:"candidate_evidence"`
+	Soft              bool                  `json:"soft,omitempty"`
+	Telemetry         *RequirementTelemetry `json:"telemetry,omitempty"`
 }
 
 type AIResponse struct {
