@@ -4,16 +4,95 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func newMultiSearchResponder(t *testing.T, pages map[int][]Vacancy) (*HHAIResponder, *httptest.Server) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodGet || req.URL.Path != "/search/vacancy" {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		page, err := strconv.Atoi(req.URL.Query().Get("page"))
+		if err != nil {
+			page = 0
+		}
+		items := pages[page]
+		records := make([]string, 0, len(items))
+		for _, item := range items {
+			records = append(records, fmt.Sprintf(`{"vacancyId":%d,"name":"vacancy-%d","links":{"desktop":"/vacancy/%d"}}`, item.ID, item.ID, item.ID))
+		}
+		_, _ = fmt.Fprintf(w, `prefix,"vacancies":[%s]}`, strings.Join(records, ","))
+	}))
+	base := mustURL(t, server.URL)
+	profiles := []vacancySearchProfile{
+		{ID: "a", Name: "profile-a", BaseURL: base, Params: url.Values{"profile": {"a"}, "items_on_page": {"50"}}},
+		{ID: "b", Name: "profile-b", BaseURL: base, Params: url.Values{"profile": {"b"}, "items_on_page": {"50"}}},
+	}
+	ctx := context.Background()
+	responder := &HHAIResponder{
+		ctx: ctx, baseURL: base, requester: NewHHRequester(ctx, server.Client(), 0), searchProfiles: profiles,
+		maxSearchPagesPerProfile: 3, maxSearchPagesPerRun: 48,
+	}
+	return responder, server
+}
+
+func TestProfilePageCapStopsOnlyCurrentProfile(t *testing.T) {
+	responder, server := newMultiSearchResponder(t, map[int][]Vacancy{
+		0: {{ID: 1}, {ID: 2}},
+		1: {{ID: 3}, {ID: 4}},
+		2: {{ID: 5}, {ID: 6}},
+		3: {{ID: 7}},
+	})
+	defer server.Close()
+	responder.maxSearchPagesPerProfile = 2
+	responder.maxSearchPagesPerRun = 48
+	summary := RunSummaryResult{}
+	_, err := responder.fetchVacanciesFromSearchProfilesWithLimit(&summary, responder.searchProfiles, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !summary.DiscoveryTruncated || summary.DiscoveryComplete || summary.SearchPagesTruncated == 0 {
+		t.Fatalf("profile-cap truncation was not explicit: %+v", summary)
+	}
+	if len(summary.SearchProfiles) != 2 || summary.SearchProfiles[0].PagesFetched != 2 || summary.SearchProfiles[1].PagesFetched != 2 {
+		t.Fatalf("later profile did not continue after profile cap: %+v", summary.SearchProfiles)
+	}
+}
+
+func TestRunPageCapMarksUnstartedProfiles(t *testing.T) {
+	responder, server := newMultiSearchResponder(t, map[int][]Vacancy{
+		0: {{ID: 1}, {ID: 2}},
+		1: {{ID: 3}, {ID: 4}},
+		2: {{ID: 5}},
+	})
+	defer server.Close()
+	responder.maxSearchPagesPerProfile = 48
+	responder.maxSearchPagesPerRun = 2
+	summary := RunSummaryResult{}
+	_, err := responder.fetchVacanciesFromSearchProfilesWithLimit(&summary, responder.searchProfiles, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !summary.DiscoveryTruncated || summary.DiscoveryComplete || summary.SearchPagesTruncated == 0 {
+		t.Fatalf("run-cap truncation was not explicit: %+v", summary)
+	}
+	if len(summary.SearchProfiles) != 2 || summary.SearchProfiles[0].PagesFetched != 2 || summary.SearchProfiles[1].PagesFetched != 0 || !summary.SearchProfiles[1].Truncated {
+		t.Fatalf("unstarted profile accounting is wrong: %+v", summary.SearchProfiles)
+	}
+}
 
 func TestConfiguredSearchURLsFallsBackToLegacyURL(t *testing.T) {
 	got, err := configuredSearchURLs("", "https://hh.example/search/vacancy?text=python")

@@ -33,6 +33,8 @@ type Config struct {
 	SearchURLs                   []string
 	SearchPeriodDays             int
 	CareerAgentMaxSearchProfiles int
+	MaxSearchPagesPerProfile     int
+	MaxSearchPagesPerRun         int
 	CareerAgentResultPath        string
 	CareerAgentFeedbackPath      string
 	ResumeRegistryPath           string

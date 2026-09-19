@@ -86,6 +86,22 @@ func Load(args []string, lookup LookupEnv, workingDir string) (Config, error) {
 			}
 		}
 	}
+	if !flags["max-search-pages-per-profile"] {
+		if raw, ok := lookupValue("HH_MAX_SEARCH_PAGES_PER_PROFILE"); ok && raw != "" {
+			cfg.MaxSearchPagesPerProfile, err = atoiEnv(raw, "HH_MAX_SEARCH_PAGES_PER_PROFILE")
+			if err != nil {
+				return Config{}, err
+			}
+		}
+	}
+	if !flags["max-search-pages-per-run"] {
+		if raw, ok := lookupValue("HH_MAX_SEARCH_PAGES_PER_RUN"); ok && raw != "" {
+			cfg.MaxSearchPagesPerRun, err = atoiEnv(raw, "HH_MAX_SEARCH_PAGES_PER_RUN")
+			if err != nil {
+				return Config{}, err
+			}
+		}
+	}
 	if !flags["storage-backend"] {
 		cfg.StorageBackend = get("STORAGE_BACKEND", cfg.StorageBackend)
 	}
@@ -357,6 +373,8 @@ func registerFlags(fs *flag.FlagSet, cfg *Config, includeKeywordsRaw, excludeKey
 	fs.StringVar(&cfg.SearchURL, "u", "", "URL для поиска вакансий")
 	fs.IntVar(&cfg.SearchPeriodDays, "search-period-days", DefaultSearchPeriodDays, "Период свежести HH search в днях")
 	fs.IntVar(&cfg.CareerAgentMaxSearchProfiles, "max-search-profiles", DefaultCareerAgentMaxSearchProfiles, "Максимум автоматически построенных search profiles")
+	fs.IntVar(&cfg.MaxSearchPagesPerProfile, "max-search-pages-per-profile", DefaultMaxSearchPagesPerProfile, "Максимум страниц HH search на профиль")
+	fs.IntVar(&cfg.MaxSearchPagesPerRun, "max-search-pages-per-run", DefaultMaxSearchPagesPerRun, "Максимум страниц HH search на запуск")
 	fs.StringVar(&cfg.StorageBackend, "storage-backend", cfg.StorageBackend, "Хранилище вакансий: json или postgres")
 	fs.StringVar(&cfg.DatabaseURL, "database-url", "", "PostgreSQL connection URL (только при storage-backend=postgres)")
 	fs.StringVar(&cfg.CandidateID, "candidate-id", cfg.CandidateID, "Стабильный canonical ID кандидата")

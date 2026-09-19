@@ -22,6 +22,8 @@ const (
 	DefaultMaxApplicationsPerRun        = 10
 	DefaultSearchPeriodDays             = 7
 	DefaultCareerAgentMaxSearchProfiles = 16
+	DefaultMaxSearchPagesPerProfile     = 3
+	DefaultMaxSearchPagesPerRun         = 48
 	DefaultCandidateID                  = "candidate-local"
 	DefaultStorageBackend               = "json"
 	DefaultChatMode                     = "review"
@@ -76,6 +78,8 @@ func defaults(workingDir string) Config {
 		BrowserTransport:             DefaultBrowserTransport,
 		SearchPeriodDays:             DefaultSearchPeriodDays,
 		CareerAgentMaxSearchProfiles: DefaultCareerAgentMaxSearchProfiles,
+		MaxSearchPagesPerProfile:     DefaultMaxSearchPagesPerProfile,
+		MaxSearchPagesPerRun:         DefaultMaxSearchPagesPerRun,
 		HHSyncStatePath:              filepath.Join(workingDir, "hh_sync_state.json"),
 		MonitorInterval:              DefaultMonitorInterval,
 		NotificationCooldown:         DefaultNotificationCooldown,

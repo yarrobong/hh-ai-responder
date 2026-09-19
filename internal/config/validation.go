@@ -218,6 +218,12 @@ func Validate(c Config) error {
 	if c.CareerAgentMaxSearchProfiles <= 0 {
 		return errors.New("max-search-profiles must be greater than 0")
 	}
+	if c.MaxSearchPagesPerProfile <= 0 {
+		return errors.New("max-search-pages-per-profile must be greater than 0")
+	}
+	if c.MaxSearchPagesPerRun <= 0 {
+		return errors.New("max-search-pages-per-run must be greater than 0")
+	}
 	if _, err := NormalizeAutoApplyMode(c.AutoApplyMode); err != nil {
 		return err
 	}

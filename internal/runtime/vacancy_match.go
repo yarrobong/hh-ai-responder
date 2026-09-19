@@ -76,11 +76,18 @@ type SearchProfileSummary struct {
 	Name             string `json:"name"`
 	URL              string `json:"url,omitempty"`
 	VacanciesFetched int    `json:"vacancies_fetched"`
+	PagesFetched     int    `json:"pages_fetched"`
+	Truncated        bool   `json:"truncated,omitempty"`
+	TruncationReason string `json:"truncation_reason,omitempty"`
 }
 
 type RunSummaryResult struct {
 	Type                       string                 `json:"type"`
 	SearchProfiles             []SearchProfileSummary `json:"search_profiles,omitempty"`
+	DiscoveryTruncated         bool                   `json:"discovery_truncated"`
+	DiscoveryComplete          bool                   `json:"discovery_complete"`
+	SearchPagesFetched         int                    `json:"search_pages_fetched"`
+	SearchPagesTruncated       int                    `json:"search_pages_truncated"`
 	VacanciesSeen              int                    `json:"vacancies_seen"`
 	VacanciesFetched           int                    `json:"vacancies_fetched"`
 	VacanciesFetchedRaw        int                    `json:"vacancies_fetched_raw"`

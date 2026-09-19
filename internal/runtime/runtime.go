@@ -85,6 +85,8 @@ type Config struct {
 	SearchURLs                   []string
 	SearchPeriodDays             int
 	CareerAgentMaxSearchProfiles int
+	MaxSearchPagesPerProfile     int
+	MaxSearchPagesPerRun         int
 	CareerAgentResultPath        string
 	CareerAgentFeedbackPath      string
 	ResumeRegistryPath           string
@@ -1165,6 +1167,8 @@ type HHAIResponder struct {
 	maxApplicationsPerRun        int
 	searchPeriodDays             int
 	careerAgentMaxSearchProfiles int
+	maxSearchPagesPerProfile     int
+	maxSearchPagesPerRun         int
 	careerAgentIncludeKeywords   []string
 	careerAgentExcludeKeywords   []string
 	careerAgentMode              string
@@ -1645,6 +1649,8 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 		maxApplicationsPerRun:        cfg.MaxApplicationsPerRun,
 		searchPeriodDays:             cfg.SearchPeriodDays,
 		careerAgentMaxSearchProfiles: cfg.CareerAgentMaxSearchProfiles,
+		maxSearchPagesPerProfile:     cfg.MaxSearchPagesPerProfile,
+		maxSearchPagesPerRun:         cfg.MaxSearchPagesPerRun,
 		careerAgentIncludeKeywords:   append([]string(nil), cfg.IncludeKeywords...),
 		careerAgentExcludeKeywords:   append([]string(nil), cfg.ExcludeKeywords...),
 		alreadyRespondedStatePath:    cfg.AlreadyRespondedStatePath,
@@ -2784,14 +2790,42 @@ func (r *HHAIResponder) fetchVacanciesFromSearchProfilesWithLimit(summary *RunSu
 	if r.careerAgentSearchSources == nil {
 		r.careerAgentSearchSources = map[int][]careeragent.SearchProfileEvidence{}
 	}
-	for _, profile := range profiles {
+	pagesFetched := 0
+	markTruncated := func(profileSummary *SearchProfileSummary, reason string) {
+		if profileSummary.Truncated {
+			return
+		}
+		profileSummary.Truncated = true
+		profileSummary.TruncationReason = reason
+		summary.DiscoveryTruncated = true
+		summary.SearchPagesTruncated++
+	}
+	for profileIndex, profile := range profiles {
 		if maxUnique > 0 && len(seenIDs) >= maxUnique {
 			break
 		}
 		profileSummary := SearchProfileSummary{Name: profile.Name, URL: profile.URL}
+		if r.maxSearchPagesPerRun > 0 && pagesFetched >= r.maxSearchPagesPerRun {
+			markTruncated(&profileSummary, "MAX_SEARCH_PAGES_PER_RUN")
+			summary.SearchProfiles = append(summary.SearchProfiles, profileSummary)
+			for _, unstarted := range profiles[profileIndex+1:] {
+				unstartedSummary := SearchProfileSummary{Name: unstarted.Name, URL: unstarted.URL}
+				markTruncated(&unstartedSummary, "MAX_SEARCH_PAGES_PER_RUN")
+				summary.SearchProfiles = append(summary.SearchProfiles, unstartedSummary)
+			}
+			break
+		}
 		for page := 0; ; page++ {
 			if err := ctxOrBackground(r.ctx).Err(); err != nil {
 				return nil, err
+			}
+			if r.maxSearchPagesPerProfile > 0 && profileSummary.PagesFetched >= r.maxSearchPagesPerProfile {
+				markTruncated(&profileSummary, "MAX_SEARCH_PAGES_PER_PROFILE")
+				break
+			}
+			if r.maxSearchPagesPerRun > 0 && pagesFetched >= r.maxSearchPagesPerRun {
+				markTruncated(&profileSummary, "MAX_SEARCH_PAGES_PER_RUN")
+				break
 			}
 			pageProfile := profile
 			if maxUnique > 0 {
@@ -2816,6 +2850,9 @@ func (r *HHAIResponder) fetchVacanciesFromSearchProfilesWithLimit(summary *RunSu
 				summary.VacanciesAfterDedup = len(uniqueVacancies)
 				return nil, err
 			}
+			pagesFetched++
+			profileSummary.PagesFetched++
+			summary.SearchPagesFetched++
 			profileSummary.VacanciesFetched += len(vacancies)
 			summary.VacanciesFetchedRaw += len(vacancies)
 			summary.VacanciesFetched += len(vacancies)
@@ -2847,6 +2884,7 @@ func (r *HHAIResponder) fetchVacanciesFromSearchProfilesWithLimit(summary *RunSu
 		summary.SearchProfiles = append(summary.SearchProfiles, profileSummary)
 	}
 	summary.VacanciesAfterDedup = len(seenIDs)
+	summary.DiscoveryComplete = !summary.DiscoveryTruncated
 	return uniqueVacancies, nil
 }
 
@@ -3189,6 +3227,8 @@ func legacyConfigFromPackage(value appconfig.Config) Config {
 		SearchURLs:                   value.SearchURLs,
 		SearchPeriodDays:             value.SearchPeriodDays,
 		CareerAgentMaxSearchProfiles: value.CareerAgentMaxSearchProfiles,
+		MaxSearchPagesPerProfile:     value.MaxSearchPagesPerProfile,
+		MaxSearchPagesPerRun:         value.MaxSearchPagesPerRun,
 		CareerAgentResultPath:        value.CareerAgentResultPath,
 		CareerAgentFeedbackPath:      value.CareerAgentFeedbackPath,
 		ResumeRegistryPath:           value.ResumeRegistryPath,

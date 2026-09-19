@@ -235,6 +235,36 @@ func TestEmbeddingDimensionsAreValidatedOnlyByContractBounds(t *testing.T) {
 	}
 }
 
+func TestConfigDefaultsBoundSearchPagination(t *testing.T) {
+	cfg, err := Load(nil, lookupFrom(map[string]string{}), ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MaxSearchPagesPerProfile != 3 || cfg.MaxSearchPagesPerRun != 48 {
+		t.Fatalf("unexpected search read bounds: profile=%d run=%d", cfg.MaxSearchPagesPerProfile, cfg.MaxSearchPagesPerRun)
+	}
+}
+
+func TestConfigRejectsNonPositiveSearchPaginationBounds(t *testing.T) {
+	_, err := Load(nil, lookupFrom(map[string]string{"HH_MAX_SEARCH_PAGES_PER_PROFILE": "0"}), ".")
+	if err == nil || !strings.Contains(err.Error(), "max-search-pages-per-profile") {
+		t.Fatalf("non-positive page bound was accepted: %v", err)
+	}
+}
+
+func TestConfigCLIOverridesSearchPaginationEnv(t *testing.T) {
+	cfg, err := Load([]string{"--max-search-pages-per-profile=5", "--max-search-pages-per-run=9"}, lookupFrom(map[string]string{
+		"HH_MAX_SEARCH_PAGES_PER_PROFILE": "2",
+		"HH_MAX_SEARCH_PAGES_PER_RUN":     "4",
+	}), ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MaxSearchPagesPerProfile != 5 || cfg.MaxSearchPagesPerRun != 9 {
+		t.Fatalf("CLI did not override env: profile=%d run=%d", cfg.MaxSearchPagesPerProfile, cfg.MaxSearchPagesPerRun)
+	}
+}
+
 func TestLoadInvalidValuesFailClosed(t *testing.T) {
 	tests := []struct {
 		name string
