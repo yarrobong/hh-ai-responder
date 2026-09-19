@@ -236,6 +236,10 @@ func locationRequirementIsNonBlocking(value vacancy.Vacancy, description string,
 	if containsAnyText(text, "релокац", "переезд", "relocat") {
 		return false
 	}
+	mode := classifyWorkMode(strings.Join([]string{requirement.Requirement, requirement.VacancyEvidence, value.WorkSchedule, description}, " "))
+	if mode == WorkModeOfficeAvailable || mode == WorkModeRemoteAvailable {
+		return true
+	}
 	if containsAnyText(text, "удалён", "удален", "remote", "дистанцион") && !containsAnyText(text, "офис", "office", "onsite", "on-site", "на месте") {
 		return true
 	}
