@@ -602,12 +602,14 @@ type HHAIResponderReadClient struct {
 	responder *HHAIResponder
 	adapter   *hhreadadapter.Client
 	browser   browsersession.BrowserPageSource
+	source    hhreadports.HHReadSource
 }
 
 func NewHHAIResponderReadClient(responder *HHAIResponder) *HHAIResponderReadClient {
 	client := &HHAIResponderReadClient{responder: responder}
 	if responder != nil {
 		client.browser = responder.browserSource
+		client.source = responder.readSource
 		responder.readClient = client
 	}
 	return client
@@ -773,6 +775,9 @@ func (c *HHAIResponderReadClient) readAdapter() (*hhreadadapter.Client, error) {
 	if c == nil || c.responder == nil {
 		return nil, errors.New("HH responder is not configured")
 	}
+	if c.responder.transport == transportAPI {
+		return nil, &TransportError{Code: transportNotImplemented, Reason: "API transport does not expose browser HTML reads"}
+	}
 	if c.adapter != nil {
 		return c.adapter, nil
 	}
@@ -809,6 +814,12 @@ func (c *HHAIResponderReadClient) readAdapter() (*hhreadadapter.Client, error) {
 }
 
 func (c *HHAIResponderReadClient) ReadVacancies(ctx context.Context, cursor string) (HHVacancyPage, error) {
+	if c != nil && c.responder != nil && c.responder.transport == transportAPI {
+		if c.source == nil {
+			return HHVacancyPage{}, errors.New("API HH read source is unavailable")
+		}
+		return c.source.ReadVacancies(ctx, cursor)
+	}
 	if c != nil && c.browser != nil && c.responder != nil {
 		reader, err := hhreadadapter.NewBrowserHHReader(c.browser, c.responder.baseURL, c.responder.searchParams)
 		if err != nil {
@@ -824,6 +835,13 @@ func (c *HHAIResponderReadClient) ReadVacancies(ctx context.Context, cursor stri
 }
 
 func (c *HHAIResponderReadClient) ReadVacancyDetail(ctx context.Context, id int) (HHVacancyRecord, error) {
+	if c != nil && c.responder != nil && c.responder.transport == transportAPI {
+		detail, ok := c.source.(hhreadports.VacancyDetailSource)
+		if !ok {
+			return HHVacancyRecord{}, &TransportError{Code: transportNotImplemented, Reason: "API vacancy detail read is unavailable"}
+		}
+		return detail.ReadVacancyDetail(ctx, id)
+	}
 	if c != nil && c.browser != nil && c.responder != nil {
 		reader, err := hhreadadapter.NewBrowserHHReader(c.browser, c.responder.baseURL, nil)
 		if err != nil {
@@ -839,6 +857,12 @@ func (c *HHAIResponderReadClient) ReadVacancyDetail(ctx context.Context, id int)
 }
 
 func (c *HHAIResponderReadClient) ReadApplications(ctx context.Context, cursor string) (HHApplicationPage, error) {
+	if c != nil && c.responder != nil && c.responder.transport == transportAPI {
+		if c.source == nil {
+			return HHApplicationPage{}, errors.New("API HH read source is unavailable")
+		}
+		return c.source.ReadApplications(ctx, cursor)
+	}
 	if c != nil && c.browser != nil && c.responder != nil {
 		reader, err := hhreadadapter.NewBrowserHHReader(c.browser, c.responder.baseURL, nil)
 		if err != nil {
@@ -858,6 +882,9 @@ func (c *HHAIResponderReadClient) ReadConversations(ctx context.Context, cursor 
 }
 
 func (c *HHAIResponderReadClient) ReadConversation(ctx context.Context, externalID string) (HHConversationRecord, error) {
+	if c != nil && c.responder != nil && c.responder.transport == transportAPI {
+		return HHConversationRecord{}, &TransportError{Code: transportNotImplemented, Reason: "API conversations are not supported"}
+	}
 	adapter, err := c.readAdapter()
 	if err != nil {
 		return HHConversationRecord{}, err
@@ -874,7 +901,25 @@ func (c *HHAIResponderReadClient) ReadVacancyPreflight(ctx context.Context, vaca
 	if vacancyID <= 0 {
 		return VacancyPreflight{}, errors.New("HH vacancy ID is required")
 	}
+	if c.responder.transport == transportAPI {
+		return VacancyPreflight{}, &TransportError{Code: transportNotImplemented, Reason: "API application preflight is not supported"}
+	}
 	return c.responder.getVacancyPreflightContext(ctx, Vacancy{ID: vacancyID})
+}
+
+func (c *HHAIResponderReadClient) readVacanciesWithSearch(ctx context.Context, searchParams url.Values, page int) (HHVacancyPage, error) {
+	if c == nil || c.responder == nil || c.responder.transport != transportAPI {
+		return HHVacancyPage{}, errors.New("API search source is not selected")
+	}
+	source := c.source
+	if c.responder.apiReadFactory != nil {
+		var err error
+		source, err = c.responder.apiReadFactory(searchParams)
+		if err != nil {
+			return HHVacancyPage{}, err
+		}
+	}
+	return source.ReadVacancies(ctx, strconv.Itoa(page))
 }
 
 func (c *HHAIResponderReadClient) ReadConversationState(ctx context.Context, externalID string) (HHConversationReadState, error) {

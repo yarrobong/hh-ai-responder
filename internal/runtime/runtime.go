@@ -31,6 +31,7 @@ import (
 	appconfig "hh-ai-responder/internal/config"
 	attemptport "hh-ai-responder/internal/ports/applicationattempt"
 	autochatattemptport "hh-ai-responder/internal/ports/autochatattempt"
+	hhreadports "hh-ai-responder/internal/ports/hhread"
 	hhwriteport "hh-ai-responder/internal/ports/hhwrite"
 	llmport "hh-ai-responder/internal/ports/llm"
 	autochatorchestration "hh-ai-responder/internal/usecase/autochatorchestration"
@@ -1197,6 +1198,10 @@ type HHAIResponder struct {
 	ignoredChatTriggers          map[string]struct{}
 	preflightCache               map[int]VacancyPreflight
 	readClient                   *HHAIResponderReadClient
+	readSource                   hhreadports.HHReadSource
+	apiReadFactory               func(url.Values) (hhreadports.HHReadSource, error)
+	transport                    string
+	transportMetadata            TransportMetadata
 	browserSource                browsersession.BrowserPageSource
 	browserClose                 func() error
 
@@ -1570,6 +1575,15 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 		// application logger.
 		logger = NewLogger(io.Discard, LevelError)
 	}
+	transportMode := strings.ToLower(strings.TrimSpace(cfg.HHTransport))
+	if transportMode == "" {
+		transportMode = "browser"
+	}
+	if transportMode == "api" {
+		if err := validateAPITransportWrites(cfg.DryRun, cfg.HHWriteEnabled); err != nil {
+			return nil, err
+		}
+	}
 	backend, err := normalizeStorageBackend(cfg.StorageBackend)
 	if err != nil {
 		return nil, err
@@ -1734,7 +1748,9 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 		responder.baseURL = &url.URL{Scheme: "https", Host: host}
 	}
 	logger.Debug("baseURL resolved to %s", responder.baseURL.String())
-	if shouldUseBrowserTransport(cfg, responder.baseURL) {
+	var browserReadSource hhreadports.HHReadSource
+	var browserDoctor func(context.Context) (string, error)
+	if (transportMode == "browser" || transportMode == "auto") && shouldUseBrowserTransport(cfg, responder.baseURL) {
 		browser, browserErr := browsersession.NewPlaywrightAdapter(ctx, browsersession.PlaywrightOptions{CookiePath: cfg.CookiesPath, Headless: cfg.BrowserHeadless, HHURL: responder.baseURL.String()})
 		if browserErr != nil {
 			return nil, fmt.Errorf("initialize BrowserHHClient: %w", browserErr)
@@ -1742,7 +1758,45 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 		responder.browserSource = browser
 		responder.browserClose = browser.Close
 		closeBrowser = browser.Close
+		browserReadSource, err = hhreadadapter.NewBrowserHHClient(browser, responder.baseURL, responder.searchParams)
+		if err != nil {
+			return nil, err
+		}
+		browserDoctor = browserDoctorForSource(browser, responder.baseURL)
+	} else if transportMode == "browser" {
+		browserReadSource, err = newLegacyBrowserReadSource(responder)
+		if err != nil {
+			return nil, err
+		}
 	}
+
+	var apiReadSource apiTransportSource
+	var apiSetupErr error
+	if transportMode == "api" || transportMode == "auto" {
+		apiReadSource, apiSetupErr = newRuntimeAPIClient(cfg, nil, responder.searchParams)
+		if apiSetupErr != nil && transportMode == "api" {
+			return nil, &TransportError{Code: transportAuthRequired, Reason: "API transport is not configured", Cause: apiSetupErr}
+		}
+	}
+	selectedSource, transportMetadata, selectErr := selectHHReadSource(ctx, TransportOptions{
+		Mode:          transportMode,
+		API:           apiReadSource,
+		APISetupError: apiSetupErr,
+		Browser:       browserReadSource,
+		BrowserDoctor: browserDoctor,
+	})
+	if selectErr != nil {
+		return nil, selectErr
+	}
+	responder.readSource = selectedSource
+	responder.transport = transportMetadata.Selected
+	responder.transportMetadata = transportMetadata
+	if responder.transport == transportAPI {
+		responder.apiReadFactory = func(params url.Values) (hhreadports.HHReadSource, error) {
+			return newRuntimeAPIClient(cfg, nil, params)
+		}
+	}
+	NewHHAIResponderReadClient(responder)
 
 	if err := responder.LoadProfileData(); err != nil {
 		return nil, err
@@ -1762,9 +1816,12 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 
 	logger.Debug("Current resume loaded (title_characters=%d)", len(resume.Title))
 
-	resumeFacts, err := responder.GetResumeFacts()
-	if err != nil {
-		return nil, errors.New("can't load resume experience")
+	resumeFacts := responder.resumeFacts
+	if responder.transport != transportAPI {
+		resumeFacts, err = responder.GetResumeFacts()
+		if err != nil {
+			return nil, errors.New("can't load resume experience")
+		}
 	}
 	responder.resumeFacts = resumeFacts
 	responder.resumeExperience = resumeFacts.ExperienceText
@@ -2244,6 +2301,13 @@ func (r *HHAIResponder) LoadProfileData() error {
 	if err := r.ctx.Err(); err != nil {
 		return err
 	}
+	if r.transport == transportAPI {
+		source, ok := r.readSource.(apiResumeTransportSource)
+		if !ok {
+			return &TransportError{Code: transportNotImplemented, Reason: "API resume capability is unavailable"}
+		}
+		return bootstrapAPIResumeDataForUser(r.ctx, r, source, r.resumeHash, r.transportMetadata.APIUser)
+	}
 	var bodyText string
 	if r.browserSource != nil && r.baseURL != nil && isHHHost(r.baseURL.Hostname()) {
 		state, err := r.browserSource.GetPage(r.ctx, r.ResolveURL("/applicant/my_resumes"))
@@ -2693,6 +2757,21 @@ func (r *HHAIResponder) fetchVacancyPageContext(ctx context.Context, searchParam
 	reader := r.hhReadClient()
 	if reader == nil {
 		return nil, errors.New("HH responder is not configured")
+	}
+	if reader.responder != nil && reader.responder.transport == transportAPI {
+		pageValue, err := reader.readVacanciesWithSearch(ctx, searchParams, page)
+		if err != nil {
+			return nil, err
+		}
+		values := make([]Vacancy, 0, len(pageValue.Items))
+		for _, record := range pageValue.Items {
+			value, mapErr := mapHHVacancy(record)
+			if mapErr != nil {
+				return nil, mapErr
+			}
+			values = append(values, value)
+		}
+		return values, nil
 	}
 	if reader.browser != nil && baseURL != nil && isHHHost(baseURL.Hostname()) {
 		browserReader, browserErr := hhreadadapter.NewBrowserHHReader(reader.browser, baseURL, searchParams)
