@@ -223,7 +223,15 @@ func DeriveHardRequirements(candidate CandidateFacts, value vacancy.Vacancy, des
 			continue
 		}
 		status, evidence := deriveHardRequirementStatus(candidate, requirement)
-		result = append(result, HardRequirementEvaluation{Requirement: strings.TrimSpace(requirement.Requirement), Category: requirement.Category, Status: status, VacancyEvidence: strings.TrimSpace(requirement.VacancyEvidence), CandidateEvidence: evidence, Soft: requirement.Category == HardRequirementCategoryExperienceYears && status == HardRequirementStatusUnknown && genericDescriptionExperienceSoftGap(candidate, requirement)})
+		result = append(result, HardRequirementEvaluation{
+			Requirement:       strings.TrimSpace(requirement.Requirement),
+			Category:          requirement.Category,
+			Status:            status,
+			VacancyEvidence:   strings.TrimSpace(requirement.VacancyEvidence),
+			CandidateEvidence: evidence,
+			Soft:              requirement.Category == HardRequirementCategoryExperienceYears && status == HardRequirementStatusUnknown && genericDescriptionExperienceSoftGap(candidate, requirement),
+			Telemetry:         buildRequirementTelemetry(candidate, value, description, requirement, status),
+		})
 	}
 	return result
 }
@@ -333,15 +341,132 @@ func containsNormalizedText(haystack, needle string) bool {
 }
 
 func candidateRequirementMentioned(candidate CandidateFacts, requirement string) bool {
+	return resolveCandidateEvidence(candidate, requirement).Matched
+}
+
+type CandidateEvidenceMatch struct {
+	Matched    bool
+	Provenance string
+}
+
+func resolveCandidateEvidence(candidate CandidateFacts, requirement string) CandidateEvidenceMatch {
 	if skill, ok := candidate.Profile.ResolveSkill(requirement); ok {
-		if skill.Negative || skill.Source == domaincandidate.CandidateSourceUserConfirmed {
-			return !skill.Negative && skill.Level != domaincandidate.SkillLevelUnknown && skill.Level != domaincandidate.SkillLevelHeardOf
+		if skill.Negative || skill.Level == domaincandidate.SkillLevelUnknown || skill.Level == domaincandidate.SkillLevelHeardOf {
+			return CandidateEvidenceMatch{}
 		}
-		if skill.Level != domaincandidate.SkillLevelUnknown && skill.Level != domaincandidate.SkillLevelHeardOf {
-			return true
-		}
+		return CandidateEvidenceMatch{Matched: true, Provenance: profileFactProvenance(skill.ProfileFact)}
 	}
-	return explicitTermMentioned(candidate.Skills, requirement) || explicitTermMentioned(candidate.Experience, requirement)
+	if explicitTermMentioned(candidate.Skills, requirement) || explicitTermMentioned(candidate.Experience, requirement) {
+		return CandidateEvidenceMatch{Matched: true, Provenance: CandidateEvidenceLegacyAggregate}
+	}
+	return CandidateEvidenceMatch{}
+}
+
+func candidateEvidenceProvenance(match CandidateEvidenceMatch) string {
+	if !match.Matched {
+		return CandidateEvidenceNone
+	}
+	if match.Provenance == "" {
+		return CandidateEvidenceUnknownSource
+	}
+	return match.Provenance
+}
+
+func profileFactProvenance(fact domaincandidate.ProfileFact) string {
+	switch fact.Source {
+	case domaincandidate.CandidateSourceHHResume:
+		return CandidateEvidenceHHResume
+	case domaincandidate.CandidateSourceUserConfirmed:
+		return CandidateEvidenceProfile
+	case domaincandidate.CandidateSourceGithubVerified:
+		return CandidateEvidenceTrustedProject
+	case domaincandidate.CandidateSourceDerived:
+		return CandidateEvidenceUnknownSource
+	default:
+		return CandidateEvidenceUnknownSource
+	}
+}
+
+func buildRequirementTelemetry(candidate CandidateFacts, value vacancy.Vacancy, description string, requirement HardRequirementCandidate, status string) *RequirementTelemetry {
+	source, sourceField := requirementSource(value, description, requirement)
+	classification := classifyRequirementContext(source, requirement.VacancyEvidence)
+	telemetry := &RequirementTelemetry{
+		SourceContext:               classification.SourceContext,
+		SourceField:                 sourceField,
+		ExtractionClassification:    classification.Classification,
+		MandatoryCue:                classification.MandatoryCue,
+		CandidateEvidenceProvenance: requirementCandidateProvenance(candidate, requirement, status),
+		ExperienceClassification:    experienceRequirementClassification(requirement),
+		ClassificationDiagnostics:   append([]string(nil), classification.ClassificationDiagnostics...),
+	}
+	if telemetry.ExperienceClassification == ExperienceClassificationTechnology && containsAIMLNLPMarker(requirement.Requirement+" "+requirement.VacancyEvidence) {
+		telemetry.ClassificationDiagnostics = append(telemetry.ClassificationDiagnostics, "role_marker:ai_ml_nlp")
+	}
+	return telemetry
+}
+
+func containsAIMLNLPMarker(value string) bool {
+	normalized := strings.ToLower(strings.NewReplacer("/", " ", "-", " ", "_", " ").Replace(value))
+	return containsExactToken(normalized, "ai") || containsExactToken(normalized, "ml") || containsExactToken(normalized, "nlp")
+}
+
+func requirementSource(value vacancy.Vacancy, description string, requirement HardRequirementCandidate) (string, string) {
+	switch requirement.Category {
+	case HardRequirementCategoryExperienceYears:
+		if containsNormalizedText(value.WorkExperience, requirement.VacancyEvidence) {
+			return value.WorkExperience, "work_experience"
+		}
+		return description, "description"
+	case HardRequirementCategoryLocation:
+		if containsNormalizedText(value.WorkSchedule, requirement.VacancyEvidence) {
+			return value.WorkSchedule, "work_schedule"
+		}
+		return description, "description"
+	default:
+		return description, "description"
+	}
+}
+
+func requirementCandidateProvenance(candidate CandidateFacts, requirement HardRequirementCandidate, status string) string {
+	if status == HardRequirementStatusUnknown {
+		return CandidateEvidenceNone
+	}
+	if requirement.Category == HardRequirementCategoryExperienceYears {
+		if !candidate.TotalExperienceMonthsKnown {
+			return CandidateEvidenceNone
+		}
+		if candidate.Profile.TotalExperienceMonths.Source != "" {
+			return profileFactProvenance(candidate.Profile.TotalExperienceMonths.ProfileFact)
+		}
+		return CandidateEvidenceLegacyAggregate
+	}
+	if requirement.Category == HardRequirementCategoryEducation {
+		if !candidate.EducationKnown {
+			return CandidateEvidenceNone
+		}
+		if len(candidate.Profile.Education) > 0 && candidate.Profile.Education[0].Source != "" {
+			return profileFactProvenance(candidate.Profile.Education[0].ProfileFact)
+		}
+		return CandidateEvidenceUnknownSource
+	}
+	return candidateEvidenceProvenance(resolveCandidateEvidence(candidate, requirement.Requirement))
+}
+
+func experienceRequirementClassification(requirement HardRequirementCandidate) string {
+	if requirement.Category != HardRequirementCategoryExperienceYears {
+		return ExperienceClassificationNotDuration
+	}
+	_, supported, generic := descriptionExperienceMinimumMonths(requirement.Requirement, requirement.VacancyEvidence)
+	if !supported {
+		return ExperienceClassificationNotDuration
+	}
+	if generic {
+		return ExperienceClassificationGenericTotal
+	}
+	if containsRoleSpecificExperienceMarker(normalizeEvidenceText(requirement.Requirement + " " + requirement.VacancyEvidence)) {
+		return ExperienceClassificationTechnology
+	}
+	return ExperienceClassificationRoleSpecific
 }
 
 func filterUnsupportedPositiveClaims(candidate CandidateFacts, claims []string, requirements []HardRequirementCandidate) []string {

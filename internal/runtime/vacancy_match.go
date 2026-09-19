@@ -440,6 +440,7 @@ func recordAIDecisionBreakdown(summary *RunSummaryResult, trace *CareerAgentVaca
 	}
 	decision, reasonCode, _ := vacancyDecisionWithReason(evaluation, minScore)
 	trace.AIDecision, trace.AIReasonCode = string(decision), reasonCode
+	trace.LocalPolicyGate = reasonCode
 	switch decision {
 	case VacancyMatch:
 		summary.AIMatched++

@@ -65,3 +65,60 @@ func TestReset8AOldRequirementJSONRemainsReadable(t *testing.T) {
 		t.Fatalf("legacy JSON unexpectedly created telemetry: %+v", value.Telemetry)
 	}
 }
+
+func TestReset8ARequirementTelemetryUsesActualCandidateSource(t *testing.T) {
+	trusted := LegacyCandidateContext{
+		Profile: CandidateProfile{Skills: []CandidateSkill{{
+			Name:        "Redis",
+			Level:       SkillLevelWorking,
+			ProfileFact: ProfileFact{Source: CandidateSourceHHResume, Confirmed: true},
+		}}},
+	}
+	value := Vacancy{Description: "Redis / Redis Streams"}
+	requirement := HardRequirementCandidate{Requirement: "Redis", Category: hardRequirementCategorySkill, VacancyEvidence: "Redis / Redis Streams"}
+	derived := deriveHardRequirements(trusted, value, value.Description, []HardRequirementCandidate{requirement})
+	if len(derived) != 1 || derived[0].Telemetry == nil {
+		t.Fatalf("missing requirement telemetry: %+v", derived)
+	}
+	if derived[0].Telemetry.CandidateEvidenceProvenance != vacancyanalysis.CandidateEvidenceHHResume {
+		t.Fatalf("provenance=%q, want %q", derived[0].Telemetry.CandidateEvidenceProvenance, vacancyanalysis.CandidateEvidenceHHResume)
+	}
+
+	legacy := LegacyCandidateContext{Skills: "Redis"}
+	legacyDerived := deriveHardRequirements(legacy, value, value.Description, []HardRequirementCandidate{requirement})
+	if len(legacyDerived) != 1 || legacyDerived[0].Telemetry == nil {
+		t.Fatalf("missing legacy requirement telemetry: %+v", legacyDerived)
+	}
+	if legacyDerived[0].Telemetry.CandidateEvidenceProvenance != vacancyanalysis.CandidateEvidenceLegacyAggregate {
+		t.Fatalf("legacy provenance=%q, want %q", legacyDerived[0].Telemetry.CandidateEvidenceProvenance, vacancyanalysis.CandidateEvidenceLegacyAggregate)
+	}
+}
+
+func TestReset8ARequirementTelemetryClassifiesSpecificDuration(t *testing.T) {
+	candidate := LegacyCandidateContext{TotalExperienceMonthsKnown: true, TotalExperienceMonths: 11}
+	value := Vacancy{Description: "Опыт в AI/ML/NLP не менее 2 лет."}
+	derived := deriveHardRequirements(candidate, value, value.Description, []HardRequirementCandidate{{
+		Requirement: "2 года AI/ML/NLP", Category: hardRequirementCategoryExperienceYears, VacancyEvidence: value.Description,
+	}})
+	if len(derived) != 1 || derived[0].Telemetry == nil {
+		t.Fatalf("missing duration telemetry: %+v", derived)
+	}
+	if got := derived[0].Telemetry.ExperienceClassification; got != vacancyanalysis.ExperienceClassificationTechnology {
+		t.Fatalf("experience classification=%q, want %q", got, vacancyanalysis.ExperienceClassificationTechnology)
+	}
+	if len([]rune(derived[0].Telemetry.SourceContext)) > 240 {
+		t.Fatalf("source context is unbounded: %d runes", len([]rune(derived[0].Telemetry.SourceContext)))
+	}
+}
+
+func TestReset8ALocalPolicyGateIsRecordedWithFinalReason(t *testing.T) {
+	summary := RunSummaryResult{}
+	trace := CareerAgentVacancyResult{}
+	recordAIDecisionBreakdown(&summary, &trace, VacancyEvaluation{Score: 60, Apply: true, Recommendation: "APPLY"}, 65)
+	if trace.LocalPolicyGate != ReasonScoreBelowThreshold {
+		t.Fatalf("local policy gate=%q, want %q", trace.LocalPolicyGate, ReasonScoreBelowThreshold)
+	}
+	if trace.FinalReasonCode != "" {
+		t.Fatalf("recordAIDecisionBreakdown unexpectedly changed final reason field: %q", trace.FinalReasonCode)
+	}
+}
