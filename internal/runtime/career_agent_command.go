@@ -179,8 +179,15 @@ func renderCareerAgentHumanReport(report CareerAgentRunReport) string {
 	fmt.Fprintf(&builder, "# Career Agent %s report\n\n", report.Mode)
 	fmt.Fprintf(&builder, "Run: `%s`\n\n", report.RunID)
 	builder.WriteString("## Summary\n\n")
+	fmt.Fprintf(&builder, "Discovery: raw_hits=%d distinct_discovered=%d pages_fetched=%d pages_truncated=%d discovery_truncated=%t discovery_complete=%t\n", report.Summary.RawHits, report.Summary.DistinctDiscovered, report.Summary.SearchPagesFetched, report.Summary.SearchPagesTruncated, report.Summary.DiscoveryTruncated, report.Summary.DiscoveryComplete)
+	fmt.Fprintf(&builder, "Router coverage: processed_by_router=%d not_processed_due_to_run_cap=%d not_processed_by_other_pre_router_gate=%d\n\n", report.Summary.ProcessedByRouter, report.Summary.NotProcessedDueToRunCap, report.Summary.NotProcessedByOtherPreRouterGate)
 	fmt.Fprintf(&builder, "- Raw: %d\n- Duplicates: %d\n- Unique: %d\n- Processed: %d\n- Already responded: %d\n- Obvious rejects: %d\n- Preliminary clear route: %d\n- Preliminary needs detail: %d\n- Detail requested/succeeded/failed: %d/%d/%d\n- Final routed: %d\n- Final ambiguous: %d\n- AI evaluated: %d\n- AI Apply=true/false (legacy): %d/%d\n- AI recommendation APPLY/DO_NOT_APPLY/UNCERTAIN: %d/%d/%d\n- AI hard missing/unknown: %d/%d\n- AI score below threshold: %d\n- AI advisory-only concerns: %d\n- AI MATCH/REJECT/REVIEW_REQUIRED: %d/%d/%d\n- MATCH: %d\n- REJECT: %d\n- REVIEW_REQUIRED: %d\n- Review before/after detail: %d/%d\n- Would apply: %d\n- Applied: %d\n- Shadow writes: %d\n- TOTAL TERMINAL: %d\n- ACCOUNTING CHECK: %s\n\n", report.Summary.VacanciesFetchedRaw, report.Summary.DuplicatesSkipped, report.Summary.VacanciesAfterDedup, report.Summary.VacanciesProcessed, report.Summary.PreviouslyRespondedSkipped, report.Summary.PreliminaryObviousRejects, report.Summary.PreliminaryClearRoute, report.Summary.PreliminaryNeedsDetail, report.Summary.DetailRequested, report.Summary.DetailSucceeded, report.Summary.DetailFailed, report.Summary.FinalRouted, report.Summary.FinalAmbiguous, report.Summary.AIEvaluated, report.Summary.AIApplyTrue, report.Summary.AIApplyFalse, report.Summary.AIRecommendationApply, report.Summary.AIRecommendationDoNotApply, report.Summary.AIRecommendationUncertain, report.Summary.AIHardMissing, report.Summary.AIHardUnknown, report.Summary.AIScoreBelowThreshold, report.Summary.AIAdvisoryOnlyConcerns, report.Summary.AIMatched, report.Summary.AIRejected, report.Summary.AIReviewed, report.Summary.Matched, report.Summary.Rejected, report.Summary.ReviewRequired, report.Summary.ReviewBeforeDetail, report.Summary.ReviewAfterDetail, report.Summary.WouldApply, report.Summary.Applied, report.Summary.ShadowWriteCount, report.Summary.TotalTerminal, passFail(report.Summary.AccountingPass))
 	fmt.Fprintf(&builder, "- Route ambiguous: %d\n- No suitable resume: %d\n- Role out of scope: %d\n- Route low evidence: %d\n\n", report.Summary.RouteReasonCounts[careeragent.RouteReasonAmbiguous], report.Summary.RouteReasonCounts[careeragent.RouteReasonNoSuitable], report.Summary.RouteReasonCounts[careeragent.RouteReasonOutOfScope], report.Summary.RouteReasonCounts[careeragent.RouteReasonLowEvidence])
+	builder.WriteString("Router yields:\n\n")
+	for _, key := range sortedFloatMapKeys(report.Summary.RouterYields) {
+		fmt.Fprintf(&builder, "- %s: %.4f\n", key, report.Summary.RouterYields[key])
+	}
+	builder.WriteString("\n")
 	builder.WriteString("Terminal outcomes:\n\n")
 	for _, key := range sortedMapKeys(report.Summary.TerminalOutcomes) {
 		fmt.Fprintf(&builder, "- %s: %d\n", key, report.Summary.TerminalOutcomes[key])
@@ -212,6 +219,15 @@ func passFail(value bool) string {
 }
 
 func sortedMapKeys(values map[string]int) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func sortedFloatMapKeys(values map[string]float64) []string {
 	keys := make([]string, 0, len(values))
 	for key := range values {
 		keys = append(keys, key)

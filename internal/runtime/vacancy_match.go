@@ -93,63 +93,154 @@ type SearchProfileSummary struct {
 }
 
 type RunSummaryResult struct {
-	Type                       string                 `json:"type"`
-	SearchProfiles             []SearchProfileSummary `json:"search_profiles,omitempty"`
-	DiscoveryTruncated         bool                   `json:"discovery_truncated"`
-	DiscoveryComplete          bool                   `json:"discovery_complete"`
-	SearchPagesFetched         int                    `json:"search_pages_fetched"`
-	SearchPagesTruncated       int                    `json:"search_pages_truncated"`
-	VacanciesSeen              int                    `json:"vacancies_seen"`
-	VacanciesFetched           int                    `json:"vacancies_fetched"`
-	VacanciesFetchedRaw        int                    `json:"vacancies_fetched_raw"`
-	VacanciesAfterDedup        int                    `json:"vacancies_after_dedup"`
-	DuplicatesSkipped          int                    `json:"duplicates_skipped"`
-	VacanciesProcessed         int                    `json:"vacancies_processed"`
-	PreviouslyRespondedSkipped int                    `json:"previously_responded_skipped"`
-	DeterministicSkipped       int                    `json:"deterministic_skipped"`
-	AIEvaluated                int                    `json:"ai_evaluated"`
-	AIRejected                 int                    `json:"ai_rejected,omitempty"`
-	AIApplyTrue                int                    `json:"ai_apply_true,omitempty"`
-	AIApplyFalse               int                    `json:"ai_apply_false,omitempty"`
-	AIRecommendationApply      int                    `json:"ai_recommendation_apply,omitempty"`
-	AIRecommendationDoNotApply int                    `json:"ai_recommendation_do_not_apply,omitempty"`
-	AIRecommendationUncertain  int                    `json:"ai_recommendation_uncertain,omitempty"`
-	AIAdvisoryOnlyConcerns     int                    `json:"ai_advisory_only_concerns,omitempty"`
-	AIHardMissing              int                    `json:"ai_hard_missing,omitempty"`
-	AIHardUnknown              int                    `json:"ai_hard_unknown,omitempty"`
-	AIScoreBelowThreshold      int                    `json:"ai_score_below_threshold,omitempty"`
-	AIMatched                  int                    `json:"ai_matched,omitempty"`
-	AIReviewed                 int                    `json:"ai_reviewed,omitempty"`
-	AIReasonCounts             map[string]int         `json:"ai_reason_counts,omitempty"`
-	Matched                    int                    `json:"matched"`
-	Rejected                   int                    `json:"rejected"`
-	ReviewRequired             int                    `json:"review_required"`
-	ReviewBeforeDetail         int                    `json:"review_before_detail"`
-	ReviewAfterDetail          int                    `json:"review_after_detail"`
-	WouldApply                 int                    `json:"would_apply"`
-	Applied                    int                    `json:"applied"`
-	Errors                     int                    `json:"errors"`
-	VacancyLimitSkipped        int                    `json:"vacancy_limit_skipped,omitempty"`
-	ApplicationLimitSkipped    int                    `json:"application_limit_skipped,omitempty"`
-	DispatchAttempts           int                    `json:"dispatch_attempts,omitempty"`
-	BlockedAttempts            int                    `json:"blocked_attempts,omitempty"`
-	ReconciledConfirmed        int                    `json:"reconciled_confirmed,omitempty"`
-	UnresolvedAttempts         int                    `json:"unresolved_attempts,omitempty"`
-	TerminalOutcomes           map[string]int         `json:"terminal_outcomes,omitempty"`
-	TotalTerminal              int                    `json:"total_terminal,omitempty"`
-	AccountingPass             bool                   `json:"accounting_pass"`
-	ShadowWriteCount           int                    `json:"shadow_write_count"`
-	ResumeRouted               int                    `json:"resume_routed,omitempty"`
-	PreliminaryObviousRejects  int                    `json:"preliminary_obvious_rejects,omitempty"`
-	PreliminaryClearRoute      int                    `json:"preliminary_clear_route,omitempty"`
-	PreliminaryNeedsDetail     int                    `json:"preliminary_needs_detail,omitempty"`
-	DetailRequested            int                    `json:"detail_requested,omitempty"`
-	DetailSucceeded            int                    `json:"detail_succeeded,omitempty"`
-	DetailFailed               int                    `json:"detail_failed,omitempty"`
-	FinalRouted                int                    `json:"final_routed,omitempty"`
-	FinalAmbiguous             int                    `json:"final_ambiguous,omitempty"`
-	RouteReasonCounts          map[string]int         `json:"route_reason_counts,omitempty"`
-	StageStats                 map[string]StageStats  `json:"stage_stats,omitempty"`
+	Type                             string                 `json:"type"`
+	SearchProfiles                   []SearchProfileSummary `json:"search_profiles,omitempty"`
+	RawHits                          int                    `json:"raw_hits"`
+	DistinctDiscovered               int                    `json:"distinct_discovered"`
+	ProcessedByRouter                int                    `json:"processed_by_router"`
+	NotProcessedDueToRunCap          int                    `json:"not_processed_due_to_run_cap"`
+	NotProcessedByOtherPreRouterGate int                    `json:"not_processed_by_other_pre_router_gate"`
+	RouterOutcomeCounts              map[string]int         `json:"router_outcome_counts,omitempty"`
+	FinalDecisionCounts              map[string]int         `json:"final_decision_counts,omitempty"`
+	RouterYields                     map[string]float64     `json:"router_yields,omitempty"`
+	DiscoveryTruncated               bool                   `json:"discovery_truncated"`
+	DiscoveryComplete                bool                   `json:"discovery_complete"`
+	SearchPagesFetched               int                    `json:"search_pages_fetched"`
+	SearchPagesTruncated             int                    `json:"search_pages_truncated"`
+	VacanciesSeen                    int                    `json:"vacancies_seen"`
+	VacanciesFetched                 int                    `json:"vacancies_fetched"`
+	VacanciesFetchedRaw              int                    `json:"vacancies_fetched_raw"`
+	VacanciesAfterDedup              int                    `json:"vacancies_after_dedup"`
+	DuplicatesSkipped                int                    `json:"duplicates_skipped"`
+	VacanciesProcessed               int                    `json:"vacancies_processed"`
+	PreviouslyRespondedSkipped       int                    `json:"previously_responded_skipped"`
+	DeterministicSkipped             int                    `json:"deterministic_skipped"`
+	AIEvaluated                      int                    `json:"ai_evaluated"`
+	AIRejected                       int                    `json:"ai_rejected,omitempty"`
+	AIApplyTrue                      int                    `json:"ai_apply_true,omitempty"`
+	AIApplyFalse                     int                    `json:"ai_apply_false,omitempty"`
+	AIRecommendationApply            int                    `json:"ai_recommendation_apply,omitempty"`
+	AIRecommendationDoNotApply       int                    `json:"ai_recommendation_do_not_apply,omitempty"`
+	AIRecommendationUncertain        int                    `json:"ai_recommendation_uncertain,omitempty"`
+	AIAdvisoryOnlyConcerns           int                    `json:"ai_advisory_only_concerns,omitempty"`
+	AIHardMissing                    int                    `json:"ai_hard_missing,omitempty"`
+	AIHardUnknown                    int                    `json:"ai_hard_unknown,omitempty"`
+	AIScoreBelowThreshold            int                    `json:"ai_score_below_threshold,omitempty"`
+	AIMatched                        int                    `json:"ai_matched,omitempty"`
+	AIReviewed                       int                    `json:"ai_reviewed,omitempty"`
+	AIReasonCounts                   map[string]int         `json:"ai_reason_counts,omitempty"`
+	Matched                          int                    `json:"matched"`
+	Rejected                         int                    `json:"rejected"`
+	ReviewRequired                   int                    `json:"review_required"`
+	ReviewBeforeDetail               int                    `json:"review_before_detail"`
+	ReviewAfterDetail                int                    `json:"review_after_detail"`
+	WouldApply                       int                    `json:"would_apply"`
+	Applied                          int                    `json:"applied"`
+	Errors                           int                    `json:"errors"`
+	VacancyLimitSkipped              int                    `json:"vacancy_limit_skipped,omitempty"`
+	ApplicationLimitSkipped          int                    `json:"application_limit_skipped,omitempty"`
+	DispatchAttempts                 int                    `json:"dispatch_attempts,omitempty"`
+	BlockedAttempts                  int                    `json:"blocked_attempts,omitempty"`
+	ReconciledConfirmed              int                    `json:"reconciled_confirmed,omitempty"`
+	UnresolvedAttempts               int                    `json:"unresolved_attempts,omitempty"`
+	TerminalOutcomes                 map[string]int         `json:"terminal_outcomes,omitempty"`
+	TotalTerminal                    int                    `json:"total_terminal,omitempty"`
+	AccountingPass                   bool                   `json:"accounting_pass"`
+	ShadowWriteCount                 int                    `json:"shadow_write_count"`
+	ResumeRouted                     int                    `json:"resume_routed,omitempty"`
+	PreliminaryObviousRejects        int                    `json:"preliminary_obvious_rejects,omitempty"`
+	PreliminaryClearRoute            int                    `json:"preliminary_clear_route,omitempty"`
+	PreliminaryNeedsDetail           int                    `json:"preliminary_needs_detail,omitempty"`
+	DetailRequested                  int                    `json:"detail_requested,omitempty"`
+	DetailSucceeded                  int                    `json:"detail_succeeded,omitempty"`
+	DetailFailed                     int                    `json:"detail_failed,omitempty"`
+	FinalRouted                      int                    `json:"final_routed,omitempty"`
+	FinalAmbiguous                   int                    `json:"final_ambiguous,omitempty"`
+	RouteReasonCounts                map[string]int         `json:"route_reason_counts,omitempty"`
+	StageStats                       map[string]StageStats  `json:"stage_stats,omitempty"`
+	routerEnteredVacancies           map[int]struct{}       `json:"-"`
+}
+
+func recordRouterEntry(summary *RunSummaryResult, vacancy Vacancy, sources []careeragent.SearchProfileEvidence) {
+	if summary == nil {
+		return
+	}
+	if summary.routerEnteredVacancies == nil {
+		summary.routerEnteredVacancies = map[int]struct{}{}
+	}
+	if _, exists := summary.routerEnteredVacancies[vacancy.ID]; exists {
+		return
+	}
+	summary.routerEnteredVacancies[vacancy.ID] = struct{}{}
+	summary.ProcessedByRouter++
+	seenProfiles := map[string]struct{}{}
+	for _, source := range sources {
+		profileKey := source.ID
+		if profileKey == "" {
+			profileKey = source.Label
+		}
+		if profileKey == "" {
+			continue
+		}
+		if _, exists := seenProfiles[profileKey]; exists {
+			continue
+		}
+		seenProfiles[profileKey] = struct{}{}
+		for index := range summary.SearchProfiles {
+			profile := &summary.SearchProfiles[index]
+			if profile.ID == source.ID || (profile.ID == "" && profile.Name == source.Label) {
+				profile.ProcessedVacancies++
+				break
+			}
+		}
+	}
+}
+
+func recordRouterOutcome(summary *RunSummaryResult, routeCode string, finalDecision string) {
+	if summary == nil {
+		return
+	}
+	if strings.TrimSpace(routeCode) != "" {
+		if summary.RouterOutcomeCounts == nil {
+			summary.RouterOutcomeCounts = map[string]int{}
+		}
+		summary.RouterOutcomeCounts[routeCode]++
+	}
+	if strings.TrimSpace(finalDecision) != "" {
+		if summary.FinalDecisionCounts == nil {
+			summary.FinalDecisionCounts = map[string]int{}
+		}
+		summary.FinalDecisionCounts[finalDecision]++
+	}
+}
+
+func finalizeDiscoveryCoverage(summary *RunSummaryResult) {
+	if summary == nil {
+		return
+	}
+	if summary.RawHits == 0 {
+		summary.RawHits = summary.VacanciesFetchedRaw
+	}
+	if summary.DistinctDiscovered == 0 {
+		summary.DistinctDiscovered = summary.VacanciesAfterDedup
+	}
+	if summary.NotProcessedDueToRunCap == 0 {
+		summary.NotProcessedDueToRunCap = summary.VacancyLimitSkipped
+	}
+	remaining := summary.DistinctDiscovered - summary.ProcessedByRouter - summary.NotProcessedDueToRunCap
+	if remaining < 0 {
+		remaining = 0
+	}
+	summary.NotProcessedByOtherPreRouterGate = remaining
+	summary.RouterYields = map[string]float64{}
+	if summary.ProcessedByRouter > 0 {
+		for reason, count := range summary.RouterOutcomeCounts {
+			summary.RouterYields[reason] = float64(count) / float64(summary.ProcessedByRouter)
+		}
+	}
+	if !summary.DiscoveryTruncated {
+		summary.DiscoveryComplete = true
+	}
 }
 
 type StageStats struct {

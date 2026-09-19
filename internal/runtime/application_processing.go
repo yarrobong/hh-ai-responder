@@ -54,10 +54,19 @@ func (r *HHAIResponder) ApplyVacancies() error {
 		}
 		trace.ProcessedAt = time.Now().UTC()
 		accountingRecords[trace.VacancyID] = trace
+		if r.careerAgentMode != "" {
+			if _, entered := summary.routerEnteredVacancies[trace.VacancyID]; entered && trace.FinalDecision != "" {
+				recordRouterOutcome(&summary, "", trace.FinalDecision)
+			}
+		}
 		terminalOutcomes[outcome]++
 		r.writeEvent(trace)
 	}
-	defer func() { summary.VacanciesSeen = summary.VacanciesProcessed; r.writeEvent(summary) }()
+	defer func() {
+		finalizeDiscoveryCoverage(&summary)
+		summary.VacanciesSeen = summary.VacanciesProcessed
+		r.writeEvent(summary)
+	}()
 	if r.attemptStoreInitErr != nil {
 		summary.Errors++
 		return fmt.Errorf("automatic application attempt store unavailable: %w", r.attemptStoreInitErr)
@@ -194,6 +203,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 		selectedResume := *resume
 		selectedCandidate, selectedResolver := baseCandidate, resolver
 		if r.careerAgentMode != "" {
+			recordRouterEntry(&summary, value, r.careerAgentSearchSources[value.ID])
 			preliminary := r.preliminaryRouteForVacancy(value)
 			trace.PreliminaryRoute, trace.PreliminaryReasonCode = preliminary.Status, preliminary.ReasonCode
 			trace.PreliminaryCandidates = append([]careeragent.ResumeScore(nil), preliminary.TopCandidates...)
@@ -264,6 +274,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 			trace.RoleEvidence = route.RoleEvidence
 			trace.FinalRouteReasonCode = route.ReasonCode
 			recordRouteReason(&summary, route.ReasonCode)
+			recordRouterOutcome(&summary, route.ReasonCode, "")
 			if !careerAgentRouteAllowsAI(route, r.careerAgentMode) {
 				recordStage(stageStats, "resume_routing", strings.Join(route.Reasons, "; "), false, true)
 				summary.ReviewRequired++
