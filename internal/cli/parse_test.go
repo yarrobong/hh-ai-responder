@@ -1,6 +1,9 @@
 package cli
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseSupportedInvocations(t *testing.T) {
 	tests := []struct {
@@ -74,9 +77,14 @@ func TestParseRejectsHHAPIExtraPositionalArguments(t *testing.T) {
 		{"hh-api", "auth", "unexpected"},
 		{"hh-api", "doctor", "unexpected"},
 		{"hh-api", "logout", "unexpected"},
+		{"hh-api", "auth", "--code=authorization-code-sentinel"},
+		{"hh-api", "auth", "--authorization-code=authorization-code-sentinel"},
 	} {
 		if _, err := Parse(args); err == nil {
 			t.Fatalf("Parse(%#v) accepted an extra positional argument", args)
+		}
+		if _, err := Parse(args); err != nil && strings.Contains(err.Error(), "authorization-code-sentinel") {
+			t.Fatalf("Parse(%#v) exposed authorization code: %v", args, err)
 		}
 	}
 }

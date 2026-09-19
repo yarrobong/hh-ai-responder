@@ -63,5 +63,8 @@ func NewHandlers() appbootstrap.Handlers {
 		HHDoctor: withCommandHelp(appcli.CommandHHDoctor, func(request appbootstrap.Request) int {
 			return commandResult(runHHDoctor(legacyConfigFromPackage(request.Config), request.Stdout, request.Stderr), request.Stderr, 1)
 		}),
+		HHAPI: withCommandHelp(appcli.CommandHHAPI, func(request appbootstrap.Request) int {
+			return commandResult(runHHAPICommand(request.Context, request.Invocation.Args, legacyConfigFromPackage(request.Config), request.Stdin, request.Stdout, request.Stderr), request.Stderr, 1)
+		}),
 	}
 }

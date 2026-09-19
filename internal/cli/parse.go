@@ -47,7 +47,7 @@ func Parse(args []string) (Invocation, error) {
 		Subcommand:  firstSubcommand(commandArgs),
 		Args:        commandArgs,
 		LeadingArgs: leading,
-		Help:        (len(commandArgs) > 0 && IsHelpFlag(commandArgs[0])) || (command == CommandCareerAgent && hasHelpFlag(commandArgs)),
+		Help:        (len(commandArgs) > 0 && IsHelpFlag(commandArgs[0])) || ((command == CommandCareerAgent || command == CommandHHAPI) && hasHelpFlag(commandArgs)),
 	}, nil
 }
 
@@ -104,6 +104,9 @@ func validateCommandArgs(command CommandKind, args []string) error {
 		return nil
 	}
 	if strings.HasPrefix(args[0], "-") {
+		if command == CommandHHAPI && !IsHelpFlag(args[0]) {
+			return errors.New("hh-api requires a subcommand: auth, doctor, or logout")
+		}
 		return nil
 	}
 	known := func(value string, values ...string) bool {
@@ -142,6 +145,9 @@ func validateCommandArgs(command CommandKind, args []string) error {
 		for _, arg := range args[1:] {
 			if !strings.HasPrefix(arg, "-") {
 				return fmt.Errorf("hh-api %s does not accept positional arguments", args[0])
+			}
+			if !IsHelpFlag(arg) {
+				return fmt.Errorf("hh-api %s does not accept flags; authorization input is stdin-only", args[0])
 			}
 		}
 	case CommandCandidate:
