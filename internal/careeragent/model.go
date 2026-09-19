@@ -345,9 +345,10 @@ func searchFamilyQueries(resume ResumeProfile, family RoleFamily, signals Candid
 		}
 		queries = append(queries, searchQueryCandidate{query: query, reason: reason})
 	}
-	if familyMatchesResumeText(resume, family) {
-		add(resume.DesiredRole, "resume role/title")
-		add(resume.Title, "resume role/title")
+	for _, role := range []string{resume.DesiredRole, resume.Title} {
+		if searchFamilyMatchesText(family, role) {
+			add(role, "resume role/title")
+		}
 	}
 	for _, hint := range resume.SearchHints {
 		if searchFamilyMatchesText(family, hint) {
@@ -363,15 +364,6 @@ func searchFamilyQueries(resume ResumeProfile, family RoleFamily, signals Candid
 		add(alias, "bounded role-family alias")
 	}
 	return queries
-}
-
-func familyMatchesResumeText(resume ResumeProfile, family RoleFamily) bool {
-	for _, eligible := range DeriveEligibleSearchFamilies(resume) {
-		if eligible.Family == family {
-			return true
-		}
-	}
-	return false
 }
 
 func searchFamilyMatchesText(family RoleFamily, value string) bool {

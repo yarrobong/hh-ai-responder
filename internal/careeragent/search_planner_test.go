@@ -146,6 +146,18 @@ func TestPlanSearchesKeepsRussianRoleAliases(t *testing.T) {
 	}
 }
 
+func TestPlanSearchesDoesNotExpandUnrelatedResumeTitleAcrossFamilies(t *testing.T) {
+	profiles := PlanSearches([]ResumeProfile{{
+		ID: "automation", Title: "Специалист по автоматизации и интеграциям / инженер внедрения",
+		Skills: []string{"Python", "Django", "React", "TypeScript", "Webhooks"}, Enabled: true,
+	}}, CandidateSignals{}, SearchConstraints{MaxProfiles: 16, SearchPeriodDays: 7})
+	for _, profile := range profiles {
+		if profile.RoleFamily != RoleFamilyAutomationIntegrations && strings.Contains(strings.ToLower(profile.Query), "автоматизац") {
+			t.Fatalf("unrelated title leaked into another family: %+v", profile)
+		}
+	}
+}
+
 func TestBroadFallbackUsesOneTrustedPhraseWithoutUnvalidatedOR(t *testing.T) {
 	profiles := PlanSearches([]ResumeProfile{{ID: "r", Title: "Backend-разработчик", Skills: []string{"Python"}, Enabled: true}}, CandidateSignals{Roles: []string{"Backend-разработчик"}}, SearchConstraints{MaxProfiles: 16, SearchPeriodDays: 7})
 	for _, profile := range profiles {
