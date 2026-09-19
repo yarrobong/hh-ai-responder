@@ -63,6 +63,24 @@ func TestParseRejectsUnknownCommands(t *testing.T) {
 	}
 }
 
+func TestParseRejectsHHAPIWithoutSubcommand(t *testing.T) {
+	if _, err := Parse([]string{"hh-api"}); err == nil {
+		t.Fatal("bare hh-api was accepted")
+	}
+}
+
+func TestParseRejectsHHAPIExtraPositionalArguments(t *testing.T) {
+	for _, args := range [][]string{
+		{"hh-api", "auth", "unexpected"},
+		{"hh-api", "doctor", "unexpected"},
+		{"hh-api", "logout", "unexpected"},
+	} {
+		if _, err := Parse(args); err == nil {
+			t.Fatalf("Parse(%#v) accepted an extra positional argument", args)
+		}
+	}
+}
+
 func TestParseClassifiesImmediateCommandHelp(t *testing.T) {
 	for _, args := range [][]string{
 		{"profile", "--help"},

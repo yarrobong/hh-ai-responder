@@ -186,6 +186,15 @@ cp example.env .env
 | `HH_BROWSER_TRACE_VACANCY` | `--browser-trace-vacancy` | Одна явно заданная HTTPS vacancy URL для безопасного Browser/Go HTTP trace. |
 | `HH_BROWSER_TRANSPORT` | `--browser-transport` | `auto` (browser для реального hh.ru с cookies), `browser` или legacy `http`. |
 | `HH_BROWSER_HEADLESS` | `--browser-headless` | Запуск Playwright browser headless; по умолчанию `false`. |
+| `HH_TRANSPORT` | `--hh-transport` | Выбор read transport: `browser` (по умолчанию), `api` или `auto`. Не изменяет отдельную настройку `HH_BROWSER_TRANSPORT`. |
+| `HH_API_BASE_URL` | — | Базовый URL HH API; по умолчанию `https://api.hh.ru`. |
+| `HH_OAUTH_AUTHORIZE_URL` | — | URL OAuth authorize; по умолчанию `https://hh.ru/oauth/authorize`. |
+| `HH_OAUTH_TOKEN_URL` | — | URL OAuth token; по умолчанию `https://api.hh.ru/token`. |
+| `HH_OAUTH_CLIENT_ID` | — | ID OAuth-клиента оператора; по умолчанию пусто. Не добавляйте рабочее значение в Git. |
+| `HH_OAUTH_CLIENT_SECRET` | — | Секрет OAuth-клиента оператора; по умолчанию пусто. Не логируется и не коммитится. |
+| `HH_OAUTH_REDIRECT_URI` | — | Redirect URI OAuth-клиента; по умолчанию пусто. |
+| `HH_OAUTH_USER_AGENT` | — | User-Agent для OAuth/API оператора; по умолчанию пусто. |
+| `HH_API_TOKEN_FILE` | — | Локальный файл OAuth token; по умолчанию `.hh-api-token.json`, файл не коммитится. |
 | `HH_AI_BASE_URL`       | `-ai-base-url`       | Базовый URL OpenAI-compatible API.                                     |
 | `HH_AI_MODEL`          | `-ai-model`          | Модель AI.                                                             |
 | `HH_AI_API_KEY`        | `-ai-api-key`        | API key для OpenAI-compatible API.                                     |
@@ -233,6 +242,21 @@ cp example.env .env
 | `HH_CONVERSATION_DISPLAY_TTL` | `-conversation-display-ttl` | TTL HH-проверки для неблокирующего display refresh открытого диалога; по умолчанию `60s`. Это не заменяет fresh safety preflight. |
 | `HH_BACKGROUND_INBOX_REFRESH` | `-background-inbox-refresh` | Опциональный лёгкий metadata refresh Inbox с интервалом `HH_SYNC_INTERVAL`; не загружает полную историю неизменённых чатов. |
 | `HH_ALREADY_RESPONDED_STATE` | `-already-responded-state` | Локальный JSON со списком vacancy ID, подтверждённых read-only preflight как уже откликнутые. |
+
+Безопасный пример конфигурации HH API (учётные данные остаются пустыми до
+явной настройки оператором):
+
+```env
+HH_TRANSPORT=browser
+HH_API_BASE_URL=https://api.hh.ru
+HH_OAUTH_AUTHORIZE_URL=https://hh.ru/oauth/authorize
+HH_OAUTH_TOKEN_URL=https://api.hh.ru/token
+HH_OAUTH_CLIENT_ID=
+HH_OAUTH_CLIENT_SECRET=
+HH_OAUTH_REDIRECT_URI=
+HH_OAUTH_USER_AGENT=
+HH_API_TOKEN_FILE=.hh-api-token.json
+```
 
 ### Stage 26: локальный quality feedback
 

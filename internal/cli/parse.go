@@ -97,7 +97,13 @@ func firstSubcommand(args []string) string {
 }
 
 func validateCommandArgs(command CommandKind, args []string) error {
-	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+	if len(args) == 0 {
+		if command == CommandHHAPI {
+			return errors.New("hh-api requires a subcommand: auth, doctor, or logout")
+		}
+		return nil
+	}
+	if strings.HasPrefix(args[0], "-") {
 		return nil
 	}
 	known := func(value string, values ...string) bool {
@@ -132,6 +138,11 @@ func validateCommandArgs(command CommandKind, args []string) error {
 	case CommandHHAPI:
 		if !known(args[0], "auth", "doctor", "logout") {
 			return fmt.Errorf("unknown hh-api command %q", args[0])
+		}
+		for _, arg := range args[1:] {
+			if !strings.HasPrefix(arg, "-") {
+				return fmt.Errorf("hh-api %s does not accept positional arguments", args[0])
+			}
 		}
 	case CommandCandidate:
 		if !known(args[0], "migrate-postgres", "status", "semantic") {
