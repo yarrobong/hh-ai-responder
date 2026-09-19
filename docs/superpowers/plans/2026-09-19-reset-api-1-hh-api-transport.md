@@ -20,6 +20,8 @@
 - API adapter code exposes read-only methods only; it does not implement `internal/ports/hhwrite`.
 - Client IDs, client secrets, access tokens, refresh tokens, authorization codes, cookies, and authenticated raw response bodies must not be committed, logged, or placed in reports.
 - Unknown applicant duplicate/reconciliation state remains unknown and blocks automatic parity claims.
+- OAuth authorization-code flow uses ephemeral PKCE S256: cryptographically random `code_verifier`, derived `code_challenge`, and `code_challenge_method=S256`; the verifier is never persisted or logged.
+- Non-localhost/manual OAuth callback input is interactive stdin only: never accept authorization codes through command-line arguments or environment variables.
 - Do not change Search Planner semantics, RESET-6 routing, Stage29.6 precedence, AI threshold/prompts, RESET-8A semantics, cover-letter generation, application send logic, nonce/reconciliation semantics, or duplicate-application protections.
 - Preserve CLI-over-environment precedence, existing flags, cookies support, JSON event compatibility, and unrelated working-tree files.
 
@@ -178,7 +180,7 @@ git commit -m "feat: add HH API transport configuration"
 - Consumes: operator-supplied OAuth config from Task 1 and `platform.WritePrivateFileAtomic`.
 - Produces: `OAuthTokens`, `TokenStore`, `FileTokenStore`, authorization URL/state, code exchange, and refresh helpers.
 
-- [ ] **Step 1: Write failing OAuth/storage tests.** Cover URL encoding, non-empty random state, mismatch/provider-error rejection, form-encoded exchange, `expires_in`, refresh rotation, expiry skew, malformed files, `0600` mode on Unix, atomic replacement, deletion, and secret-free errors.
+- [ ] **Step 1: Write failing OAuth/storage tests.** Cover URL encoding, non-empty random state, random verifier/challenge derivation, `code_challenge_method=S256`, verifier inclusion in the exchange body, mismatch/provider-error rejection, form-encoded exchange, `expires_in`, refresh rotation, expiry skew, malformed files, `0600` mode on Unix, atomic replacement, deletion, and secret-free errors.
 
 ```go
 func TestBuildAuthorizationURLEscapesStateAndRedirect(t *testing.T) {
@@ -199,7 +201,7 @@ Run: `go test ./internal/adapters/hh/api -run 'TestBuildAuthorizationURL|Test.*T
 
 Expected: FAIL because the API package does not exist.
 
-- [ ] **Step 3: Implement secret-free OAuth primitives.** Define `OAuthTokens` with access/refresh/type/expiry fields and:
+- [ ] **Step 3: Implement secret-free OAuth primitives with PKCE S256.** Define `OAuthTokens` with access/refresh/type/expiry fields and:
 
 ```go
 type TokenStore interface {
@@ -209,7 +211,7 @@ type TokenStore interface {
 }
 ```
 
-Use `crypto/rand`, `net/url`, strict state comparison, and form-encoded exchange/refresh requests. Never include form values or token fields in errors.
+Use `crypto/rand` to generate a high-entropy ephemeral `code_verifier`, derive the base64url-without-padding SHA-256 `code_challenge`, and include `code_challenge` plus `code_challenge_method=S256` in the authorization URL. Send the matching `code_verifier` in the authorization-code exchange. Keep the verifier only in the in-memory auth invocation; never persist or log it. Use `net/url`, strict state comparison, and form-encoded exchange/refresh requests. Never include form values or token fields in errors.
 
 - [ ] **Step 4: Implement `FileTokenStore`.** Validate non-empty access/type, write with `WritePrivateFileAtomic`, produce mode `0600` where supported, preserve a refresh token only when a valid provider response omits a replacement, and delete only the configured file.
 
@@ -303,7 +305,7 @@ Expected: FAIL because the wire structs and methods do not exist.
 
 - [ ] **Step 6: Implement conservative relation behavior.** Do not synthesize `already responded=false`. If verified relation evidence exists, map it into application metadata; otherwise return an explicit probe-required/capability error for callers that require duplicate state. Keep negotiations/messages explicit not-yet-implemented until applicant semantics are proven.
 
-- [ ] **Step 7: Add the optional resume capability without widening the mandatory read port.** Add `ResumeReadSource` and provider-neutral resume records, assert that `APIHHClient` implements it, and leave `BrowserHHClient` unchanged because its existing profile parser remains authoritative for browser mode.
+- [ ] **Step 7: Add regression coverage for unsupported API capabilities.** With `HH_TRANSPORT=api`, assert that unproven applications/conversations/duplicate-state reads return typed capability errors rather than empty pages, and that the selected API client never silently falls back to the browser reader. Add the optional `ResumeReadSource` and provider-neutral resume records, assert that `APIHHClient` implements it, and leave `BrowserHHClient` unchanged because its existing profile parser remains authoritative for browser mode.
 
 - [ ] **Step 8: Run package tests and formatting.**
 
@@ -378,7 +380,7 @@ git commit -m "feat: select HH API and browser read transports"
 - Consumes: validated config, OAuth/token store, `APIHHClient`, injectable browser opener/callback receiver, and bootstrap streams.
 - Produces: operator commands with safe human output and no write-shaped HH calls.
 
-- [ ] **Step 1: Write failing command tests.** Test auth with fake callback/token endpoint, doctor with `httptest.Server`, missing-token doctor failure, logout deleting the configured file, and output redaction using sentinel values.
+- [ ] **Step 1: Write failing command tests.** Test auth with fake localhost callback/token endpoint and fake manual stdin redirect URL, assert manual auth rejects any command-line code or environment-provided code path, test doctor with `httptest.Server`, missing-token doctor failure, logout deleting the configured file, and output redaction using sentinel values.
 
 - [ ] **Step 2: Run command tests and verify the expected failure.**
 
@@ -388,7 +390,7 @@ Expected: FAIL because the handler and command wiring do not exist.
 
 - [ ] **Step 3: Add handler and dispatch.** Add `HHAPI` to `bootstrap.Handlers`, route `CommandHHAPI` in `handlerFor`, and dispatch it from `NewHandlers` to `runHHAPICommand`.
 
-- [ ] **Step 4: Implement auth with injectable seams.** Generate state, build the configured URL, open or print it without printing codes, receive a local callback for a configured localhost redirect or an explicit operator callback otherwise, validate state, exchange code, save tokens, call `/me`, and print only safe metadata.
+- [ ] **Step 4: Implement auth with injectable seams.** Generate state and an ephemeral PKCE verifier/challenge, build the configured URL, open or print it without printing codes, and receive a local callback for a configured localhost redirect. For any non-localhost/manual callback, read the full redirect URL interactively from stdin only; never add an auth-code CLI flag or read a code from environment variables. Extract `code` and `state` from that URL, validate state, exchange code with the in-memory verifier, save tokens, call `/me`, and print only safe metadata. Never echo, log, or store the code or verifier.
 
 - [ ] **Step 5: Implement doctor and logout.** Doctor performs only token-file inspection, `/me`, resumes, and one bounded vacancy read. Logout deletes only the token file and reports presence/deletion, never token contents.
 
