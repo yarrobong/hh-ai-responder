@@ -277,9 +277,9 @@ func manualCareerAgentSearchProfiles(values []vacancySearchProfile) []careeragen
 			ResumeID:         value.Params.Get("resume"),
 			ResumeTitle:      "explicit/manual search",
 			Query:            value.Params.Get("text"),
-			Reason:           "explicit HH_SEARCH_URL or HH_SEARCH_URLS profile",
+			Reason:           "MANUAL_PROFILE",
 			SearchPeriodDays: parseSearchPeriod(value.Params.Get("search_period")),
-			Params:           cloneValues(value.Params),
+			Params:           cloneValues(value.Params), ProfileType: careeragent.SearchProfileManual,
 		})
 	}
 	return result

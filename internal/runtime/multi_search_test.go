@@ -16,6 +16,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"hh-ai-responder/internal/careeragent"
 )
 
 func newMultiSearchResponder(t *testing.T, pages map[int][]Vacancy) (*HHAIResponder, *httptest.Server) {
@@ -203,6 +205,22 @@ func TestBuildVacancySearchProfilesPreservesAreaAndResume(t *testing.T) {
 		if got := params.Get(key); got != want {
 			t.Fatalf("query %s: got %q, want %q", key, got, want)
 		}
+	}
+}
+
+func TestManualProfilesGetManualMetadataWithoutChangingPrecedence(t *testing.T) {
+	profiles, _, err := buildVacancySearchProfilesWithOptions([]string{
+		"https://hh.example/search/vacancy?text=python&area=3&resume=resume-hash",
+	}, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	career := manualCareerAgentSearchProfiles(profiles)
+	if len(career) != 1 || career[0].ProfileType != careeragent.SearchProfileManual || career[0].Reason != "MANUAL_PROFILE" {
+		t.Fatalf("manual provenance was not explicit: %+v", career)
+	}
+	if career[0].Params.Get("area") != "3" || career[0].Params.Get("resume") != "resume-hash" || career[0].Params.Get("items_on_page") != "50" {
+		t.Fatalf("manual provider params changed: %+v", career[0].Params)
 	}
 }
 

@@ -71,6 +71,19 @@ headless получает challenge, оставьте `HH_BROWSER_HEADLESS=false
 2. Если такой cookie нет — используется `https://hh.ru`.
 3. Если параметры поиска отсутствуют — из доступных резюме и Candidate Profile строится bounded набор explainable search profiles; legacy `resume=<id_выбранного_резюме>` остаётся только безопасным fallback при пустом/неполном профиле.
 
+Явные `HH_SEARCH_URL`/`HH_SEARCH_URLS` имеют приоритет над auto-planner и
+сохраняют `area`, `resume`, порядок, период и размер страницы; в отчёте такие
+профили имеют `profile_type=MANUAL` и `reason=MANUAL_PROFILE`. Auto-planner
+использует bounded детерминированные RU/EN role aliases только при trusted
+evidence соответствующей role family. Discovery (`raw_hits`,
+`distinct_discovered`, page caps) и population, вошедшая в RESET-6 router
+(`processed_by_router`, route outcomes и yields), считаются раздельно.
+
+Multi-phrase fallback через literal `OR` отключён, пока controlled read-only
+проверка BrowserHHClient не докажет семантику альтернатив HH; URL encoding или
+mock parser сами по себе такой семантикой не являются. Per-profile telemetry
+включает raw hits, distinct vacancies, overlap и union contribution.
+
 ### Career Agent / Shadow Mode
 
 Для всех доступных резюме можно автоматически построить ограниченный набор
@@ -167,6 +180,8 @@ cp example.env .env
 | `HH_SEARCH_URLS`       | —                    | Несколько URL поиска через `||`; если пусто, используется `HH_SEARCH_URL`. Параметры `area` и `resume` каждого URL сохраняются; задаются также `order_by=publication_time`, `search_period=7`, `items_on_page=50`. |
 | `HH_SEARCH_PERIOD_DAYS` | `--search-period-days` | Период свежести автоматически построенного и manual HH search profile; по умолчанию `7`. |
 | `HH_MAX_SEARCH_PROFILES` | `--max-search-profiles` | Верхняя граница автоматически построенных search profiles; по умолчанию `16`. |
+| `HH_MAX_SEARCH_PAGES_PER_PROFILE` | `--max-search-pages-per-profile` | Положительная read-only граница страниц HH на один search profile; по умолчанию `3`. При остановке отчёт помечается `MAX_SEARCH_PAGES_PER_PROFILE` и `discovery_complete=false`. |
+| `HH_MAX_SEARCH_PAGES_PER_RUN` | `--max-search-pages-per-run` | Положительная глобальная read-only граница страниц HH за запуск; по умолчанию `48`. Незапущенные профили явно помечаются `MAX_SEARCH_PAGES_PER_RUN`. |
 | `HH_BROWSER_PROFILE`    | `--browser-profile` | Persistent headed Chrome/Chromium profile; по умолчанию `.hh-browser-profile`, файл не коммитится. |
 | `HH_BROWSER_TRACE_VACANCY` | `--browser-trace-vacancy` | Одна явно заданная HTTPS vacancy URL для безопасного Browser/Go HTTP trace. |
 | `HH_BROWSER_TRANSPORT` | `--browser-transport` | `auto` (browser для реального hh.ru с cookies), `browser` или legacy `http`. |

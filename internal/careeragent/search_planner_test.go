@@ -154,3 +154,12 @@ func TestBroadFallbackUsesOneTrustedPhraseWithoutUnvalidatedOR(t *testing.T) {
 		}
 	}
 }
+
+func TestBroadFallbackUsesOneProvenPhraseUntilORValidation(t *testing.T) {
+	profiles := PlanSearches([]ResumeProfile{{ID: "support", Title: "Техническая поддержка", Enabled: true}}, CandidateSignals{}, SearchConstraints{MaxProfiles: 16, SearchPeriodDays: 7})
+	for _, profile := range profiles {
+		if profile.ProfileType == SearchProfileBroadFallback && strings.Contains(profile.Query, " OR ") {
+			t.Fatalf("unvalidated provider OR semantics leaked into planner: %+v", profile)
+		}
+	}
+}
