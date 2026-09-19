@@ -123,14 +123,87 @@ type SearchConstraints struct {
 	ExcludeKeywords  []string
 }
 
+type SearchProfileType string
+
+const (
+	SearchProfileTargeted      SearchProfileType = "TARGETED"
+	SearchProfileAdjacent      SearchProfileType = "ADJACENT"
+	SearchProfileBroadFallback SearchProfileType = "BROAD_FALLBACK"
+	SearchProfileManual        SearchProfileType = "MANUAL"
+)
+
+type EligibleSearchFamily struct {
+	Family   RoleFamily `json:"family"`
+	ResumeID string     `json:"resume_id"`
+	Evidence []string   `json:"evidence,omitempty"`
+}
+
 type SearchProfile struct {
-	ID               string     `json:"id"`
-	ResumeID         string     `json:"resume_id"`
-	ResumeTitle      string     `json:"resume_title"`
-	Query            string     `json:"query"`
-	Reason           string     `json:"reason"`
-	SearchPeriodDays int        `json:"search_period_days"`
-	Params           url.Values `json:"params"`
+	ID                  string            `json:"id"`
+	ResumeID            string            `json:"resume_id"`
+	ResumeTitle         string            `json:"resume_title"`
+	Query               string            `json:"query"`
+	Reason              string            `json:"reason"`
+	SearchPeriodDays    int               `json:"search_period_days"`
+	Params              url.Values        `json:"params"`
+	ProfileType         SearchProfileType `json:"profile_type,omitempty"`
+	RoleFamily          RoleFamily        `json:"role_family,omitempty"`
+	SourceResumeIDs     []string          `json:"source_resume_ids,omitempty"`
+	EligibilityEvidence []string          `json:"eligibility_evidence,omitempty"`
+}
+
+// DeriveEligibleSearchFamilies projects trusted resume evidence onto the
+// bounded RESET-6 role-family vocabulary. It deliberately ignores vacancy
+// data, AI output and previous search results.
+func DeriveEligibleSearchFamilies(resume ResumeProfile) []EligibleSearchFamily {
+	if !resume.Enabled {
+		return nil
+	}
+	roleText := strings.Join([]string{resume.Title, resume.DesiredRole, strings.Join(resume.SearchHints, " ")}, " ")
+	allText := strings.Join([]string{roleText, strings.Join(resume.Skills, " ")}, " ")
+	roleTokens := tokens(roleText)
+	allTokens := tokens(allText)
+	result := make([]EligibleSearchFamily, 0)
+	for _, rule := range reset6RoleFamilyRules {
+		evidence := make([]string, 0)
+		for _, phrase := range rule.titleAnchors {
+			if containsCanonicalPhrase(roleText, phrase) {
+				evidence = appendUniqueStrings(evidence, "title:"+normalizeQuery(phrase))
+			}
+		}
+		roleEvidence := 0
+		for _, token := range rule.roleTokens {
+			if roleTokens[canonicalToken(token)] {
+				roleEvidence++
+				evidence = appendUniqueStrings(evidence, "role:"+canonicalToken(token))
+			}
+		}
+		specificEvidence := 0
+		for _, token := range rule.specificTokens {
+			if allTokens[canonicalToken(token)] {
+				specificEvidence++
+				evidence = appendUniqueStrings(evidence, "specific:"+canonicalToken(token))
+			}
+		}
+		eligible := len(evidence) > 0 && (roleEvidence > 0 || specificEvidence >= 2)
+		if roleEvidence > 0 && specificEvidence == 0 {
+			eligible = false
+		}
+		if eligible {
+			sort.Strings(evidence)
+			result = append(result, EligibleSearchFamily{Family: rule.family, ResumeID: resume.ID, Evidence: evidence})
+		}
+	}
+	sort.SliceStable(result, func(i, j int) bool { return result[i].Family < result[j].Family })
+	return result
+}
+
+func canonicalSearchProfileKey(profile SearchProfile) string {
+	params := url.Values{}
+	for key, values := range profile.Params {
+		params[key] = append([]string(nil), values...)
+	}
+	return string(profile.RoleFamily) + "\x00" + normalizeQuery(profile.Query) + "\x00" + params.Encode()
 }
 
 func PlanSearches(resumes []ResumeProfile, signals CandidateSignals, constraints SearchConstraints) []SearchProfile {
@@ -244,9 +317,14 @@ type VacancyInput struct {
 // SearchProfileEvidence is intentionally weak routing evidence. A vacancy
 // found by a resume-specific search is not thereby assigned to that resume.
 type SearchProfileEvidence struct {
-	ID       string `json:"id,omitempty"`
-	ResumeID string `json:"resume_id,omitempty"`
-	Label    string `json:"label,omitempty"`
+	ID              string            `json:"id,omitempty"`
+	ResumeID        string            `json:"resume_id,omitempty"`
+	Label           string            `json:"label,omitempty"`
+	ProfileType     SearchProfileType `json:"profile_type,omitempty"`
+	Reason          string            `json:"reason,omitempty"`
+	RoleFamily      RoleFamily        `json:"role_family,omitempty"`
+	Query           string            `json:"query,omitempty"`
+	SourceResumeIDs []string          `json:"source_resume_ids,omitempty"`
 }
 
 type ResumeScore struct {
