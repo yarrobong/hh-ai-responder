@@ -1,0 +1,774 @@
+[
+  {
+    "vacancy_id": 137546982,
+    "title": "Python Engineer",
+    "role_family": "PYTHON_BACKEND",
+    "description": "Коммерческий опыт разработки на Python от 3 лет.",
+    "relevant_work_mode_location_field": "",
+    "relevant_structured_experience_field": "candidate_total_experience_months=11",
+    "selected_resume_id": "hh-resume-a89be050ff10a4a4fc0039ed1f786946636470",
+    "selected_resume_title": "Backend-разработчик (Python/Django) / автоматизация и интеграции",
+    "router_score": 57,
+    "runner_up_score": 51,
+    "router_confidence": "MEDIUM",
+    "router_reason": "ROUTE_SELECTED",
+    "ai_score": 55,
+    "ai_recommendation": "UNCERTAIN",
+    "ai_recommendation_reasons": [
+      "SENIORITY_GAP",
+      "STACK_MISMATCH"
+    ],
+    "ai_reasons": [
+      "Опыт разработки на Python/Django (11 месяцев) подтверждён в проекте BizonVR",
+      "Работал с REST API, SQL, Docker, PostgreSQL и автоматизацией процессов",
+      "Удаленный формат работы соответствует локации кандидата (Екатеринбург)",
+      "Стек совпадает с требованиями вакансии (Python, Django, REST API, SQL)",
+      "Навыки объяснения технических решений и обратной связи подтверждаются описанием опыта"
+    ],
+    "hard_requirement_candidates": [
+      {
+        "requirement": "3 года коммерческого опыта разработки на Python",
+        "category": "experience_years",
+        "vacancy_evidence": "Коммерческий опыт разработки на Python от 3 лет.",
+        "source_field": "description",
+        "source_context": "Коммерческий опыт разработки на Python от 3 лет.",
+        "relevant_work_mode_location_field": "",
+        "relevant_structured_experience_field": "candidate_total_experience_months=11"
+      }
+    ],
+    "trusted_candidate_facts": {
+      "location": "Екатеринбург",
+      "skills": "Python, Django, REST API, SQL, Docker, PostgreSQL, Redis, Linux, Git, GitHub Actions, CI/CD, тесты",
+      "experience": "Backend-разработка на Python/Django, REST API, SQL, PostgreSQL, Redis, Linux, Docker, тесты",
+      "total_experience_months_known": true,
+      "total_experience_months": 11
+    },
+    "old_hard_statuses": {
+      "3 года коммерческого опыта разработки на Python": "unknown"
+    },
+    "old_local_gate": "FIT_SCORE_BELOW_THRESHOLD",
+    "old_final_decision": "REJECT",
+    "old_final_reason": "FIT_SCORE_BELOW_THRESHOLD"
+  },
+  {
+    "vacancy_id": 137531969,
+    "title": "AI/AI-agent developer (Python)",
+    "role_family": "PYTHON_BACKEND",
+    "description": "Опыт работы в роли разработчика от 4 лет в проектах по разработке ПО с использованием инструментов и технологий Python. Опыт в AI/ML/NLP не менее 2 лет.",
+    "relevant_work_mode_location_field": "",
+    "relevant_structured_experience_field": "candidate_total_experience_months=11",
+    "selected_resume_id": "hh-resume-a89be050ff10a4a4fc0039ed1f786946636470",
+    "selected_resume_title": "Backend-разработчик (Python/Django) / автоматизация и интеграции",
+    "router_score": 56,
+    "runner_up_score": 50,
+    "router_confidence": "MEDIUM",
+    "router_reason": "ROUTE_SELECTED",
+    "ai_score": 25,
+    "ai_recommendation": "DO_NOT_APPLY",
+    "ai_recommendation_reasons": [
+      "SENIORITY_GAP",
+      "HARD_REQUIREMENT",
+      "LOCATION_CONCERN"
+    ],
+    "ai_reasons": [
+      "11 месяцев опыта в проектах на Python/Django (недостаточно для 4 лет)",
+      "Отсутствие подтверждённого опыта в AI/ML/NLP",
+      "Отсутствие опыта работы с LLM через API или библиотеками LangChain/LangGraph",
+      "Опыт работы только с реляционными базами данных (PostgreSQL), отсутствует опыт с MongoDB или другими нереляционными БД",
+      "Отсутствие опыта работы с FastAPI или Flask",
+      "Работа в Екатеринбурге, отсутствие возможности работать в офисе в Москве"
+    ],
+    "hard_requirement_candidates": [
+      {
+        "requirement": "4 года опыта в роли разработчика на Python",
+        "category": "experience_years",
+        "vacancy_evidence": "Опыт работы в роли разработчика от 4 лет в проектах по разработке ПО с использованием инструментов и технологий Python.",
+        "source_field": "description",
+        "source_context": "Опыт работы в роли разработчика от 4 лет в проектах по разработке ПО с использованием инструментов и технологий Python.",
+        "relevant_work_mode_location_field": "",
+        "relevant_structured_experience_field": "candidate_total_experience_months=11"
+      },
+      {
+        "requirement": "2 года опыта в AI/ML/NLP",
+        "category": "experience_years",
+        "vacancy_evidence": "Опыт в AI/ML/NLP не менее 2 лет.",
+        "source_field": "description",
+        "source_context": "Опыт в AI/ML/NLP не менее 2 лет.",
+        "relevant_work_mode_location_field": "",
+        "relevant_structured_experience_field": "candidate_total_experience_months=11"
+      }
+    ],
+    "trusted_candidate_facts": {
+      "location": "Екатеринбург",
+      "skills": "Python, Django, REST API, SQL, Docker, PostgreSQL, Redis, Linux, Git, GitHub Actions, CI/CD, тесты",
+      "experience": "Backend-разработка на Python/Django, REST API, SQL, PostgreSQL, Redis, Linux, Docker, тесты",
+      "total_experience_months_known": true,
+      "total_experience_months": 11
+    },
+    "old_hard_statuses": {
+      "4 года опыта в роли разработчика на Python": "unknown",
+      "2 года опыта в AI/ML/NLP": "missing"
+    },
+    "old_local_gate": "HARD_REQUIREMENT_MISSING",
+    "old_final_decision": "REJECT",
+    "old_final_reason": "HARD_REQUIREMENT_MISSING"
+  },
+  {
+    "vacancy_id": 136958238,
+    "title": "Backend-разработчик (Python)",
+    "role_family": "PYTHON_BACKEND",
+    "description": "Опыт коммерческой разработки от 2-5 лет FastAPI Опыт работы с SQLAlchemy (особенно 2.0) Alembic (миграции) написание unit и integration тестов с pytest k8s",
+    "relevant_work_mode_location_field": "",
+    "relevant_structured_experience_field": "candidate_total_experience_months=11",
+    "selected_resume_id": "hh-resume-a89be050ff10a4a4fc0039ed1f786946636470",
+    "selected_resume_title": "Backend-разработчик (Python/Django) / автоматизация и интеграции",
+    "router_score": 57,
+    "runner_up_score": 52,
+    "router_confidence": "MEDIUM",
+    "router_reason": "ROUTE_SELECTED",
+    "ai_score": 30,
+    "ai_recommendation": "DO_NOT_APPLY",
+    "ai_recommendation_reasons": [
+      "SENIORITY_GAP",
+      "STACK_MISMATCH",
+      "HARD_REQUIREMENT"
+    ],
+    "ai_reasons": [
+      "Опыт работы с Python/Django и PostgreSQL в коммерческом проекте",
+      "Опыт автоматизации процессов и API-интеграций",
+      "Опыт работы с Linux, Git, Docker, CI/CD (GitHub Actions)",
+      "Опыт написания тестов (778 тестов)",
+      "Опыт работы с REST API и SQL",
+      "Опыт работы с Redis и Nginx",
+      "Опыт работы с транзакциями PostgreSQL",
+      "Опыт работы с интеграциями (SMTP, Bitrix, CDEK, Cloudflare Turnstile)"
+    ],
+    "hard_requirement_candidates": [
+      {
+        "requirement": "от 2 до 5 лет",
+        "category": "experience_years",
+        "vacancy_evidence": "Опыт коммерческой разработки от 2-5 лет",
+        "source_field": "description",
+        "source_context": "Опыт коммерческой разработки от 2-5 лет",
+        "relevant_work_mode_location_field": "",
+        "relevant_structured_experience_field": "candidate_total_experience_months=11"
+      },
+      {
+        "requirement": "FastAPI",
+        "category": "skill",
+        "vacancy_evidence": "FastAPI",
+        "source_field": "description",
+        "source_context": "FastAPI",
+        "relevant_work_mode_location_field": "",
+        "relevant_structured_experience_field": ""
+      },
+      {
+        "requirement": "SQLAlchemy (особенно 2.0)",
+        "category": "skill",
+        "vacancy_evidence": "Опыт работы с SQLAlchemy (особенно 2.0)",
+        "source_field": "description",
+        "source_context": "Опыт работы с SQLAlchemy (особенно 2.0)",
+        "relevant_work_mode_location_field": "",
+        "relevant_structured_experience_field": ""
+      },
+      {
+        "requirement": "Alembic (миграции)",
+        "category": "skill",
+        "vacancy_evidence": "Alembic (миграции)",
+        "source_field": "description",
+        "source_context": "Alembic (миграции)",
+        "relevant_work_mode_location_field": "",
+        "relevant_structured_experience_field": ""
+      },
+      {
+        "requirement": "pytest",
+        "category": "skill",
+        "vacancy_evidence": "написание unit и integration тестов с pytest",
+        "source_field": "description",
+        "source_context": "написание unit и integration тестов с pytest",
+        "relevant_work_mode_location_field": "",
+        "relevant_structured_experience_field": ""
+      },
+      {
+        "requirement": "Kubernetes",
+        "category": "skill",
+        "vacancy_evidence": "k8s",
+        "source_field": "description",
+        "source_context": "k8s",
+        "relevant_work_mode_location_field": "",
+        "relevant_structured_experience_field": ""
+      }
+    ],
+    "trusted_candidate_facts": {
+      "location": "Екатеринбург",
+      "skills": "Python, Django, REST API, SQL, Docker, PostgreSQL, Redis, Linux, Git, GitHub Actions, CI/CD, тесты",
+      "experience": "Backend-разработка на Python/Django, REST API, SQL, PostgreSQL, Redis, Linux, Docker, тесты",
+      "total_experience_months_known": true,
+      "total_experience_months": 11
+    },
+    "old_hard_statuses": {
+      "от 2 до 5 лет": "missing",
+      "FastAPI": "unknown",
+      "SQLAlchemy (особенно 2.0)": "unknown",
+      "Alembic (миграции)": "unknown",
+      "pytest": "unknown",
+      "Kubernetes": "unknown"
+    },
+    "old_local_gate": "HARD_REQUIREMENT_MISSING",
+    "old_final_decision": "REJECT",
+    "old_final_reason": "HARD_REQUIREMENT_MISSING"
+  },
+  {
+    "vacancy_id": 136597178,
+    "title": "Backend-разработчик (Python / FastAPI)",
+    "role_family": "PYTHON_BACKEND",
+    "description": "FastAPI + Uvicorn, Pydantic v2 / pydantic-settings PostgreSQL — уверенное владение, опыт проектирования схем. Redis / Redis Streams",
+    "relevant_work_mode_location_field": "",
+    "relevant_structured_experience_field": "candidate_total_experience_months=11",
+    "selected_resume_id": "hh-resume-a89be050ff10a4a4fc0039ed1f786946636470",
+    "selected_resume_title": "Backend-разработчик (Python/Django) / автоматизация и интеграции",
+    "router_score": 61,
+    "runner_up_score": 57,
+    "router_confidence": "HIGH",
+    "router_reason": "UNKNOWN_HARD_REQUIREMENT",
+    "ai_score": 65,
+    "ai_recommendation": "UNCERTAIN",
+    "ai_recommendation_reasons": [
+      "SENIORITY_GAP",
+      "STACK_MISMATCH",
+      "LOCATION_CONCERN"
+    ],
+    "ai_reasons": [
+      "Опыт работы с Python и PostgreSQL в коммерческих проектах",
+      "Опыт автоматизации бизнес-процессов и интеграций с внешними сервисами",
+      "Опыт работы с Docker, Linux, GitHub Actions и CI/CD",
+      "Опыт проектирования баз данных и бизнес-логики",
+      "Опыт написания тестов и автоматизации процессов",
+      "Совпадение ключевых навыков: Python, SQL, Backend, API, интеграции"
+    ],
+    "hard_requirement_candidates": [
+      {
+        "requirement": "FastAPI",
+        "category": "skill",
+        "vacancy_evidence": "FastAPI + Uvicorn, Pydantic v2 / pydantic-settings",
+        "source_field": "description",
+        "source_context": "FastAPI + Uvicorn, Pydantic v2 / pydantic-settings",
+        "relevant_work_mode_location_field": "",
+        "relevant_structured_experience_field": ""
+      },
+      {
+        "requirement": "PostgreSQL (уверенное владение, проектирование схем)",
+        "category": "skill",
+        "vacancy_evidence": "PostgreSQL — уверенное владение, опыт проектирования схем.",
+        "source_field": "description",
+        "source_context": "PostgreSQL — уверенное владение, опыт проектирования схем.",
+        "relevant_work_mode_location_field": "",
+        "relevant_structured_experience_field": ""
+      },
+      {
+        "requirement": "Redis",
+        "category": "skill",
+        "vacancy_evidence": "Redis / Redis Streams",
+        "source_field": "description",
+        "source_context": "Redis / Redis Streams",
+        "relevant_work_mode_location_field": "",
+        "relevant_structured_experience_field": ""
+      }
+    ],
+    "trusted_candidate_facts": {
+      "location": "Екатеринбург",
+      "skills": "Python, Django, REST API, SQL, Docker, PostgreSQL, Redis, Linux, Git, GitHub Actions, CI/CD, тесты",
+      "experience": "Backend-разработка на Python/Django, REST API, SQL, PostgreSQL, Redis, Linux, Docker, тесты",
+      "total_experience_months_known": true,
+      "total_experience_months": 11
+    },
+    "old_hard_statuses": {
+      "FastAPI": "unknown",
+      "PostgreSQL (уверенное владение, проектирование схем)": "unknown",
+      "Redis": "met"
+    },
+    "old_local_gate": "HARD_REQUIREMENT_UNKNOWN",
+    "old_final_decision": "REVIEW_REQUIRED",
+    "old_final_reason": "HARD_REQUIREMENT_UNKNOWN"
+  },
+  {
+    "vacancy_id": 137149433,
+    "title": "Python-разработчик",
+    "role_family": "PYTHON_BACKEND",
+    "description": "5+ лет коммерческой разработки на Python, из них минимум 3 года на Django + DRF 5+ лет коммерческой разработки на Python, из них минимум 3 года на Django + DRF",
+    "relevant_work_mode_location_field": "",
+    "relevant_structured_experience_field": "candidate_total_experience_months=11",
+    "selected_resume_id": "hh-resume-a89be050ff10a4a4fc0039ed1f786946636470",
+    "selected_resume_title": "Backend-разработчик (Python/Django) / автоматизация и интеграции",
+    "router_score": 59,
+    "runner_up_score": 53,
+    "router_confidence": "MEDIUM",
+    "router_reason": "ROUTE_SELECTED",
+    "ai_score": 55,
+    "ai_recommendation": "UNCERTAIN",
+    "ai_recommendation_reasons": [
+      "SENIORITY_GAP",
+      "HARD_REQUIREMENT"
+    ],
+    "ai_reasons": [
+      "Опыт работы на Python/Django (11 месяцев) подтверждён в проекте BizonVR",
+      "Опыт работы с PostgreSQL (индексы, транзакции, оптимизация запросов) подтверждён в проекте BizonVR",
+      "Опыт автоматизации процессов и интеграций с внешними сервисами подтверждён в проекте BizonVR",
+      "Опыт работы с REST API подтверждён в проекте BizonVR",
+      "Опыт работы с Git/GitHub Actions подтверждён в проекте BizonVR",
+      "Опыт работы с Linux, Docker, Redis (в проекте BizonVR указан Redis, но не подтверждён в Canonical Context)",
+      "Опыт написания тестов (778 тестов) подтверждён в проекте BizonVR"
+    ],
+    "hard_requirement_candidates": [
+      {
+        "requirement": "5+ лет коммерческой разработки на Python, из них минимум 3 года на Django + DRF",
+        "category": "experience_years",
+        "vacancy_evidence": "5+ лет коммерческой разработки на Python, из них минимум 3 года на Django + DRF",
+        "source_field": "description",
+        "source_context": "5+ лет коммерческой разработки на Python, из них минимум 3 года на Django + DRF",
+        "relevant_work_mode_location_field": "",
+        "relevant_structured_experience_field": "candidate_total_experience_months=11"
+      },
+      {
+        "requirement": "3 года на Django",
+        "category": "experience_years",
+        "vacancy_evidence": "5+ лет коммерческой разработки на Python, из них минимум 3 года на Django + DRF",
+        "source_field": "description",
+        "source_context": "5+ лет коммерческой разработки на Python, из них минимум 3 года на Django + DRF",
+        "relevant_work_mode_location_field": "",
+        "relevant_structured_experience_field": "candidate_total_experience_months=11"
+      }
+    ],
+    "trusted_candidate_facts": {
+      "location": "Екатеринбург",
+      "skills": "Python, Django, REST API, SQL, Docker, PostgreSQL, Redis, Linux, Git, GitHub Actions, CI/CD, тесты",
+      "experience": "Backend-разработка на Python/Django, REST API, SQL, PostgreSQL, Redis, Linux, Docker, тесты",
+      "total_experience_months_known": true,
+      "total_experience_months": 11
+    },
+    "old_hard_statuses": {
+      "5+ лет коммерческой разработки на Python, из них минимум 3 года на Django + DRF": "unknown",
+      "3 года на Django": "unknown"
+    },
+    "old_local_gate": "FIT_SCORE_BELOW_THRESHOLD",
+    "old_final_decision": "REJECT",
+    "old_final_reason": "FIT_SCORE_BELOW_THRESHOLD"
+  },
+  {
+    "vacancy_id": 137444629,
+    "title": "Fullstack-разработчик",
+    "role_family": "WEB_BACKEND",
+    "description": "Опыт мобильной разработки: Flutter Очереди: RabbitMQ Опыт написания unit-тестов, работа с Prometheus, ELK, Grafana Опыт работы с Docker, CI/CD",
+    "relevant_work_mode_location_field": "",
+    "relevant_structured_experience_field": "candidate_total_experience_months=11",
+    "selected_resume_id": "hh-resume-9d9a7b3aff10b8e0070039ed1f756941615344",
+    "selected_resume_title": "Backend-разработчик",
+    "router_score": 48,
+    "runner_up_score": 42,
+    "router_confidence": "MEDIUM",
+    "router_reason": "ROUTE_SELECTED",
+    "ai_score": 45,
+    "ai_recommendation": "UNCERTAIN",
+    "ai_recommendation_reasons": [
+      "SENIORITY_GAP",
+      "STACK_MISMATCH",
+      "HARD_REQUIREMENT"
+    ],
+    "ai_reasons": [
+      "Опыт backend-разработки на Python/Django с использованием PostgreSQL",
+      "Опыт автоматизации процессов и интеграций с внешними сервисами (Bitrix, CDEK, Cloudflare Turnstile)",
+      "Опыт написания тестов (778 тестов)",
+      "Опыт работы с REST API и SQL",
+      "Опыт администрирования Linux и развертывания приложений на Nginx/Gunicorn",
+      "Локация кандидата совпадает с Екатеринбургом",
+      "Опыт работы с Redis (хотя и не подтверждён в вакансии как обязательный)"
+    ],
+    "hard_requirement_candidates": [
+      {
+        "requirement": "Flutter",
+        "category": "skill",
+        "vacancy_evidence": "Опыт мобильной разработки: Flutter",
+        "source_field": "description",
+        "source_context": "Опыт мобильной разработки: Flutter",
+        "relevant_work_mode_location_field": "",
+        "relevant_structured_experience_field": ""
+      },
+      {
+        "requirement": "RabbitMQ",
+        "category": "skill",
+        "vacancy_evidence": "Очереди: RabbitMQ",
+        "source_field": "description",
+        "source_context": "Очереди: RabbitMQ",
+        "relevant_work_mode_location_field": "",
+        "relevant_structured_experience_field": ""
+      },
+      {
+        "requirement": "Prometheus/Grafana/ELK",
+        "category": "skill",
+        "vacancy_evidence": "Опыт написания unit-тестов, работа с Prometheus, ELK, Grafana",
+        "source_field": "description",
+        "source_context": "Опыт написания unit-тестов, работа с Prometheus, ELK, Grafana",
+        "relevant_work_mode_location_field": "",
+        "relevant_structured_experience_field": ""
+      },
+      {
+        "requirement": "CI/CD",
+        "category": "skill",
+        "vacancy_evidence": "Опыт работы с Docker, CI/CD",
+        "source_field": "description",
+        "source_context": "Опыт работы с Docker, CI/CD",
+        "relevant_work_mode_location_field": "",
+        "relevant_structured_experience_field": ""
+      }
+    ],
+    "trusted_candidate_facts": {
+      "location": "Екатеринбург",
+      "skills": "Python, Django, REST API, SQL, Docker, PostgreSQL, Redis, Linux, Git, GitHub Actions, CI/CD, тесты",
+      "experience": "Backend-разработка на Python/Django, REST API, SQL, PostgreSQL, Redis, Linux, Docker, тесты",
+      "total_experience_months_known": true,
+      "total_experience_months": 11
+    },
+    "old_hard_statuses": {
+      "Flutter": "unknown",
+      "RabbitMQ": "unknown",
+      "Prometheus/Grafana/ELK": "unknown",
+      "CI/CD": "unknown"
+    },
+    "old_local_gate": "FIT_SCORE_BELOW_THRESHOLD",
+    "old_final_decision": "REJECT",
+    "old_final_reason": "FIT_SCORE_BELOW_THRESHOLD"
+  },
+  {
+    "vacancy_id": 137436275,
+    "title": "Middle backend developer / Python специалист",
+    "role_family": "PYTHON_BACKEND",
+    "description": "Общий опыт коммерческой разработки от 3-х лет Обязателен опыт работы с Clickhouse Обязателен опыт работы с ETL",
+    "relevant_work_mode_location_field": "",
+    "relevant_structured_experience_field": "candidate_total_experience_months=11",
+    "selected_resume_id": "hh-resume-a89be050ff10a4a4fc0039ed1f786946636470",
+    "selected_resume_title": "Backend-разработчик (Python/Django) / автоматизация и интеграции",
+    "router_score": 59,
+    "runner_up_score": 55,
+    "router_confidence": "MEDIUM",
+    "router_reason": "ROUTE_SELECTED",
+    "ai_score": 45,
+    "ai_recommendation": "UNCERTAIN",
+    "ai_recommendation_reasons": [
+      "SENIORITY_GAP",
+      "HARD_REQUIREMENT",
+      "LOW_OVERALL_FIT"
+    ],
+    "ai_reasons": [
+      "Опыт работы с Python и PostgreSQL подтверждён (11 месяцев в BizonVR)",
+      "Опыт работы с REST API подтверждён (BizonVR)",
+      "Опыт работы с Linux подтверждён (BizonVR)",
+      "Опыт автоматизации процессов подтверждён (BizonVR)",
+      "Опыт тестирования и CI подтверждён (GitHub Actions, 778 тестов)",
+      "Опыт работы с Docker и Nginx подтверждён (BizonVR)",
+      "Опыт проектирования БД и транзакций подтверждён (PostgreSQL)",
+      "Опыт интеграций с внешними сервисами подтверждён (BizonVR)"
+    ],
+    "hard_requirement_candidates": [
+      {
+        "requirement": "3 года коммерческой разработки",
+        "category": "experience_years",
+        "vacancy_evidence": "Общий опыт коммерческой разработки от 3-х лет",
+        "source_field": "description",
+        "source_context": "Общий опыт коммерческой разработки от 3-х лет",
+        "relevant_work_mode_location_field": "",
+        "relevant_structured_experience_field": "candidate_total_experience_months=11"
+      },
+      {
+        "requirement": "Clickhouse",
+        "category": "skill",
+        "vacancy_evidence": "Обязателен опыт работы с Clickhouse",
+        "source_field": "description",
+        "source_context": "Обязателен опыт работы с Clickhouse",
+        "relevant_work_mode_location_field": "",
+        "relevant_structured_experience_field": ""
+      },
+      {
+        "requirement": "ETL",
+        "category": "skill",
+        "vacancy_evidence": "Обязателен опыт работы с ETL",
+        "source_field": "description",
+        "source_context": "Обязателен опыт работы с ETL",
+        "relevant_work_mode_location_field": "",
+        "relevant_structured_experience_field": ""
+      }
+    ],
+    "trusted_candidate_facts": {
+      "location": "Екатеринбург",
+      "skills": "Python, Django, REST API, SQL, Docker, PostgreSQL, Redis, Linux, Git, GitHub Actions, CI/CD, тесты",
+      "experience": "Backend-разработка на Python/Django, REST API, SQL, PostgreSQL, Redis, Linux, Docker, тесты",
+      "total_experience_months_known": true,
+      "total_experience_months": 11
+    },
+    "old_hard_statuses": {
+      "3 года коммерческой разработки": "missing",
+      "Clickhouse": "unknown",
+      "ETL": "unknown"
+    },
+    "old_local_gate": "HARD_REQUIREMENT_MISSING",
+    "old_final_decision": "REJECT",
+    "old_final_reason": "HARD_REQUIREMENT_MISSING"
+  },
+  {
+    "vacancy_id": 137418714,
+    "title": "Backend Developer Python (junior)",
+    "role_family": "PYTHON_BACKEND",
+    "description": "Опыт backend-разработки от 1 года Фреймворк: FastAPI Очереди сообщений: Apache Kafka",
+    "relevant_work_mode_location_field": "",
+    "relevant_structured_experience_field": "candidate_total_experience_months=11",
+    "selected_resume_id": "hh-resume-a89be050ff10a4a4fc0039ed1f786946636470",
+    "selected_resume_title": "Backend-разработчик (Python/Django) / автоматизация и интеграции",
+    "router_score": 61,
+    "runner_up_score": 56,
+    "router_confidence": "HIGH",
+    "router_reason": "UNKNOWN_HARD_REQUIREMENT",
+    "ai_score": 70,
+    "ai_recommendation": "UNCERTAIN",
+    "ai_recommendation_reasons": [
+      "HARD_REQUIREMENT",
+      "SENIORITY_GAP"
+    ],
+    "ai_reasons": [
+      "Опыт backend-разработки на Python/Django и PostgreSQL подтверждён (11 месяцев)",
+      "Знание Python и PostgreSQL на продвинутом уровне подтверждено",
+      "Опыт интеграции с внешними API (Bitrix, CDEK, Cloudflare Turnstile)",
+      "Опыт работы с Docker и Linux подтверждён",
+      "Опыт автоматизации процессов и тестирования",
+      "Знание REST API подтверждено",
+      "Опыт работы с Redis подтверждён в CANONICAL EMPLOYER-SAFE CANDIDATE CONTEXT"
+    ],
+    "hard_requirement_candidates": [
+      {
+        "requirement": "от 1 года",
+        "category": "experience_years",
+        "vacancy_evidence": "Опыт backend-разработки от 1 года",
+        "source_field": "description",
+        "source_context": "Опыт backend-разработки от 1 года",
+        "relevant_work_mode_location_field": "",
+        "relevant_structured_experience_field": "candidate_total_experience_months=11"
+      },
+      {
+        "requirement": "FastAPI",
+        "category": "skill",
+        "vacancy_evidence": "Фреймворк: FastAPI",
+        "source_field": "description",
+        "source_context": "Фреймворк: FastAPI",
+        "relevant_work_mode_location_field": "",
+        "relevant_structured_experience_field": ""
+      },
+      {
+        "requirement": "Apache Kafka",
+        "category": "skill",
+        "vacancy_evidence": "Очереди сообщений: Apache Kafka",
+        "source_field": "description",
+        "source_context": "Очереди сообщений: Apache Kafka",
+        "relevant_work_mode_location_field": "",
+        "relevant_structured_experience_field": ""
+      }
+    ],
+    "trusted_candidate_facts": {
+      "location": "Екатеринбург",
+      "skills": "Python, Django, REST API, SQL, Docker, PostgreSQL, Redis, Linux, Git, GitHub Actions, CI/CD, тесты",
+      "experience": "Backend-разработка на Python/Django, REST API, SQL, PostgreSQL, Redis, Linux, Docker, тесты",
+      "total_experience_months_known": true,
+      "total_experience_months": 11
+    },
+    "old_hard_statuses": {
+      "от 1 года": "unknown",
+      "FastAPI": "unknown",
+      "Apache Kafka": "unknown"
+    },
+    "old_local_gate": "HARD_REQUIREMENT_UNKNOWN",
+    "old_final_decision": "REVIEW_REQUIRED",
+    "old_final_reason": "HARD_REQUIREMENT_UNKNOWN"
+  },
+  {
+    "vacancy_id": 137364064,
+    "title": "Python-разработчик",
+    "role_family": "PYTHON_BACKEND",
+    "description": "Опыта работы разработчиком Python от 3х лет.",
+    "relevant_work_mode_location_field": "",
+    "relevant_structured_experience_field": "candidate_total_experience_months=11",
+    "selected_resume_id": "hh-resume-a89be050ff10a4a4fc0039ed1f786946636470",
+    "selected_resume_title": "Backend-разработчик (Python/Django) / автоматизация и интеграции",
+    "router_score": 52,
+    "runner_up_score": 44,
+    "router_confidence": "MEDIUM",
+    "router_reason": "ROUTE_SELECTED",
+    "ai_score": 45,
+    "ai_recommendation": "UNCERTAIN",
+    "ai_recommendation_reasons": [
+      "SENIORITY_GAP",
+      "STACK_MISMATCH"
+    ],
+    "ai_reasons": [
+      "Опыт работы с Python/Django и PostgreSQL в коммерческом проекте (BizonVR)",
+      "Опыт автоматизации бизнес-процессов и интеграций с внешними сервисами (Bitrix, CDEK, Cloudflare Turnstile)",
+      "Опыт работы с GitHub Actions и CI-проверками",
+      "Опыт развертывания и сопровождения приложений на Linux с использованием Nginx, Gunicorn и systemd",
+      "Опыт тестирования ПО (778 тестов)",
+      "Знание REST API и работы с Redis",
+      "Удаленный формат работы соответствует локации кандидата (Екатеринбург)"
+    ],
+    "hard_requirement_candidates": [
+      {
+        "requirement": "3 года опыта работы разработчиком Python",
+        "category": "experience_years",
+        "vacancy_evidence": "Опыта работы разработчиком Python от 3х лет.",
+        "source_field": "description",
+        "source_context": "Опыта работы разработчиком Python от 3х лет.",
+        "relevant_work_mode_location_field": "",
+        "relevant_structured_experience_field": "candidate_total_experience_months=11"
+      }
+    ],
+    "trusted_candidate_facts": {
+      "location": "Екатеринбург",
+      "skills": "Python, Django, REST API, SQL, Docker, PostgreSQL, Redis, Linux, Git, GitHub Actions, CI/CD, тесты",
+      "experience": "Backend-разработка на Python/Django, REST API, SQL, PostgreSQL, Redis, Linux, Docker, тесты",
+      "total_experience_months_known": true,
+      "total_experience_months": 11
+    },
+    "old_hard_statuses": {
+      "3 года опыта работы разработчиком Python": "unknown"
+    },
+    "old_local_gate": "FIT_SCORE_BELOW_THRESHOLD",
+    "old_final_decision": "REJECT",
+    "old_final_reason": "FIT_SCORE_BELOW_THRESHOLD"
+  },
+  {
+    "vacancy_id": 137516002,
+    "title": "Senior Backend Developer (Python / Django)",
+    "role_family": "PYTHON_BACKEND",
+    "description": "",
+    "relevant_work_mode_location_field": "",
+    "relevant_structured_experience_field": "candidate_total_experience_months=11",
+    "selected_resume_id": "hh-resume-a89be050ff10a4a4fc0039ed1f786946636470",
+    "selected_resume_title": "Backend-разработчик (Python/Django) / автоматизация и интеграции",
+    "router_score": 66,
+    "runner_up_score": 60,
+    "router_confidence": "HIGH",
+    "router_reason": "ROUTE_SELECTED",
+    "ai_score": 45,
+    "ai_recommendation": "UNCERTAIN",
+    "ai_recommendation_reasons": [
+      "SENIORITY_GAP",
+      "HARD_REQUIREMENT"
+    ],
+    "ai_reasons": [
+      "Опыт работы с Python, Django, PostgreSQL и REST API подтверждён проектом BizonVR",
+      "Опыт автоматизации бизнес-процессов и интеграций с внешними API",
+      "Опыт работы с Docker и Linux в производственной среде",
+      "Опыт написания тестов и CI/CD (GitHub Actions)",
+      "Опыт работы с транзакциями и защитой данных в PostgreSQL",
+      "Удаленный формат работы соответствует локации кандидата (Екатеринбург)"
+    ],
+    "hard_requirement_candidates": [],
+    "trusted_candidate_facts": {
+      "location": "Екатеринбург",
+      "skills": "Python, Django, REST API, SQL, Docker, PostgreSQL, Redis, Linux, Git, GitHub Actions, CI/CD, тесты",
+      "experience": "Backend-разработка на Python/Django, REST API, SQL, PostgreSQL, Redis, Linux, Docker, тесты",
+      "total_experience_months_known": true,
+      "total_experience_months": 11
+    },
+    "old_hard_statuses": {},
+    "old_local_gate": "FIT_SCORE_BELOW_THRESHOLD",
+    "old_final_decision": "REJECT",
+    "old_final_reason": "FIT_SCORE_BELOW_THRESHOLD"
+  },
+  {
+    "vacancy_id": 136577315,
+    "title": "Backend разработчик (Python DRF)",
+    "role_family": "PYTHON_BACKEND",
+    "description": "если не любишь удаленку - есть офис в Москве",
+    "relevant_work_mode_location_field": "если не любишь удаленку - есть офис в Москве",
+    "relevant_structured_experience_field": "candidate_total_experience_months=11",
+    "selected_resume_id": "hh-resume-a89be050ff10a4a4fc0039ed1f786946636470",
+    "selected_resume_title": "Backend-разработчик (Python/Django) / автоматизация и интеграции",
+    "router_score": 63,
+    "runner_up_score": 60,
+    "router_confidence": "HIGH",
+    "router_reason": "UNKNOWN_HARD_REQUIREMENT",
+    "ai_score": 65,
+    "ai_recommendation": "UNCERTAIN",
+    "ai_recommendation_reasons": [
+      "LOCATION_CONCERN",
+      "HARD_REQUIREMENT"
+    ],
+    "ai_reasons": [
+      "Опыт работы с Python, Django и PostgreSQL в коммерческом проекте (BizonVR)",
+      "Опыт автоматизации процессов и интеграций через API/webhooks",
+      "Опыт работы с Docker и Linux в продакшене",
+      "Опыт написания тестов (778 тестов)",
+      "Опыт работы с GitHub Actions для CI",
+      "Опыт работы с REST API и SQL",
+      "Опыт работы с Redis (хотя и не в продакшене)",
+      "Опыт работы в команде и поддержки клиентов"
+    ],
+    "hard_requirement_candidates": [
+      {
+        "requirement": "Москва (офис)",
+        "category": "location",
+        "vacancy_evidence": "если не любишь удаленку - есть офис в Москве",
+        "source_field": "work_schedule",
+        "source_context": "если не любишь удаленку - есть офис в Москве",
+        "relevant_work_mode_location_field": "если не любишь удаленку - есть офис в Москве",
+        "relevant_structured_experience_field": ""
+      }
+    ],
+    "trusted_candidate_facts": {
+      "location": "Екатеринбург",
+      "skills": "Python, Django, REST API, SQL, Docker, PostgreSQL, Redis, Linux, Git, GitHub Actions, CI/CD, тесты",
+      "experience": "Backend-разработка на Python/Django, REST API, SQL, PostgreSQL, Redis, Linux, Docker, тесты",
+      "total_experience_months_known": true,
+      "total_experience_months": 11
+    },
+    "old_hard_statuses": {
+      "Москва (офис)": "unknown"
+    },
+    "old_local_gate": "HARD_REQUIREMENT_UNKNOWN",
+    "old_final_decision": "REVIEW_REQUIRED",
+    "old_final_reason": "HARD_REQUIREMENT_UNKNOWN"
+  },
+  {
+    "vacancy_id": 137500466,
+    "title": "Python Backend Developer",
+    "role_family": "PYTHON_BACKEND",
+    "description": "",
+    "relevant_work_mode_location_field": "",
+    "relevant_structured_experience_field": "candidate_total_experience_months=11",
+    "selected_resume_id": "hh-resume-a89be050ff10a4a4fc0039ed1f786946636470",
+    "selected_resume_title": "Backend-разработчик (Python/Django) / автоматизация и интеграции",
+    "router_score": 60,
+    "runner_up_score": 56,
+    "router_confidence": "HIGH",
+    "router_reason": "ROUTE_SELECTED",
+    "ai_score": 30,
+    "ai_recommendation": "DO_NOT_APPLY",
+    "ai_recommendation_reasons": [
+      "SENIORITY_GAP",
+      "LOCATION_CONCERN"
+    ],
+    "ai_reasons": [
+      "Опыт работы с Python, Django, PostgreSQL и REST API подтверждён (11 месяцев в BizonVR)",
+      "Знание Git и Docker подтверждено",
+      "Опыт автоматизации процессов и интеграций подтверждён",
+      "Работа удалённо возможна (кандидат в Екатеринбурге, вакансия позволяет удалёнку)"
+    ],
+    "hard_requirement_candidates": [],
+    "trusted_candidate_facts": {
+      "location": "Екатеринбург",
+      "skills": "Python, Django, REST API, SQL, Docker, PostgreSQL, Redis, Linux, Git, GitHub Actions, CI/CD, тесты",
+      "experience": "Backend-разработка на Python/Django, REST API, SQL, PostgreSQL, Redis, Linux, Docker, тесты",
+      "total_experience_months_known": true,
+      "total_experience_months": 11
+    },
+    "old_hard_statuses": {},
+    "old_local_gate": "FIT_SCORE_BELOW_THRESHOLD",
+    "old_final_decision": "REJECT",
+    "old_final_reason": "FIT_SCORE_BELOW_THRESHOLD"
+  }
+]
