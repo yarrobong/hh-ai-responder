@@ -152,8 +152,21 @@ router reason codes and report counters for:
 - `ROLE_OUT_OF_SCOPE`;
 - `ROUTE_LOW_EVIDENCE`.
 
-`ROUTE_AMBIGUOUS` must no longer be the catch-all for every review. Existing
-route telemetry continues to expose every enabled resume candidate with
+`ROUTE_AMBIGUOUS` must no longer be the catch-all for every review. The router
+outcomes below are mutually exclusive and are evaluated in this order after
+available evidence has been collected:
+
+- `ROUTE_LOW_EVIDENCE`: the role cannot be determined with sufficient
+  confidence from the available vacancy data.
+- `ROLE_OUT_OF_SCOPE`: the role is determined with sufficient confidence, but
+  no enabled resume family supports that role.
+- `NO_SUITABLE_RESUME`: the role family is supported by enabled resumes, but
+  no candidate clears the evidence floor or controlled mismatch signals make
+  every candidate unsuitable.
+- `ROUTE_AMBIGUOUS`: two or more relevant resumes or role families have
+  competing strong evidence and a safe deterministic choice is not possible.
+
+Existing route telemetry continues to expose every enabled resume candidate with
 `RoleScore`, `SkillScore`, `DomainScore`, `ExperienceScore`,
 `ProvenanceScore`, `GenericEvidenceScore`, `RawFit`, `NormalizedScore`,
 specific matches, hard blockers, top-1/top-2 values, absolute margin, relative
@@ -161,12 +174,16 @@ margin, and evidence/reason fields.
 
 ### 5. Orchestration boundary
 
-The runtime continues to call the pure router before AI assessment. Only a
-final `SELECTED` route satisfying the existing safety gates may proceed to
-detail/preparation/AI. `NO_SUITABLE_RESUME`, `ROLE_OUT_OF_SCOPE`,
-`ROUTE_LOW_EVIDENCE`, and true ambiguity remain non-AI review outcomes unless
-the existing flow already permits an explicitly safe detail read. No write
-behavior changes.
+Existing safe detail enrichment order is preserved. A read-only detail read may
+occur before final routing when the search card does not contain enough title,
+role, required-skill, or responsibility evidence for the role-family
+classifier. The new classifier must not reorder or weaken existing detail
+preflight safety gates.
+
+Only a final `SELECTED` route satisfying the existing safety gates may proceed
+to AI assessment and application preparation. `ROUTE_AMBIGUOUS`,
+`ROUTE_LOW_EVIDENCE`, `ROLE_OUT_OF_SCOPE`, and `NO_SUITABLE_RESUME` never
+proceed to application or other write paths. No write behavior changes.
 
 ## Testing strategy
 
