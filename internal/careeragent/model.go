@@ -42,11 +42,18 @@ type ResumeProfile struct {
 // knowledge: every value is derived from fields already present in the
 // profile.
 type ResumeIdentity struct {
-	PrimaryRoles     []string `json:"primary_roles,omitempty"`
-	StrongSkills     []string `json:"strong_skills,omitempty"`
-	SupportingSkills []string `json:"supporting_skills,omitempty"`
-	DomainSignals    []string `json:"domain_signals,omitempty"`
-	NegativeSignals  []string `json:"negative_signals,omitempty"`
+	PrimaryRoles            []string     `json:"primary_roles,omitempty"`
+	StrongSkills            []string     `json:"strong_skills,omitempty"`
+	SupportingSkills        []string     `json:"supporting_skills,omitempty"`
+	DomainSignals           []string     `json:"domain_signals,omitempty"`
+	NegativeSignals         []string     `json:"negative_signals,omitempty"`
+	PrimaryRoleFamilies     []RoleFamily `json:"primary_role_families,omitempty"`
+	SecondaryRoleFamilies   []RoleFamily `json:"secondary_role_families,omitempty"`
+	StrongPositiveAnchors   []string     `json:"strong_positive_anchors,omitempty"`
+	GenericAnchors          []string     `json:"generic_anchors,omitempty"`
+	NegativeMismatchAnchors []string     `json:"negative_mismatch_anchors,omitempty"`
+	CoreSkills              []string     `json:"core_skills,omitempty"`
+	AdjacentSkills          []string     `json:"adjacent_skills,omitempty"`
 }
 
 // StableResumeID is independent of list order and therefore safe to use in
@@ -684,6 +691,14 @@ func canonicalToken(value string) string {
 		"технический": "technical", "техническая": "technical", "техническое": "technical", "технической": "technical", "technical": "technical",
 		"специалист": "specialist", "специалиста": "specialist", "специалисты": "specialist", "specialist": "specialist",
 		"инженер": "engineer", "инженера": "engineer", "инженеры": "engineer", "engineer": "engineer",
+		"администратор": "administrator", "администратора": "administrator", "администрирование": "administrator", "administrator": "administrator",
+		"системный": "system", "системного": "system", "system": "system",
+		"аналитик": "analyst", "аналитика": "analyst", "analyst": "analyst",
+		"фронтенд": "frontend", "фронтенда": "frontend", "frontend": "frontend",
+		"флаттер": "flutter", "flutter": "flutter", "dart": "dart",
+		"линукс": "linux", "linux": "linux", "сетевая": "network", "сетевой": "network", "сети": "network", "network": "network",
+		"днс": "dns", "dns": "dns", "девопс": "devops", "devops": "devops",
+		"1с": "1c", "1c": "1c", "onec": "onec",
 		"разработчикa": "developer",
 		"rest":         "rest_api", "restful": "rest_api", "api": "api", "apis": "api",
 		"postgres": "postgresql", "postgresql": "postgresql",
@@ -765,6 +780,28 @@ func DeriveResumeIdentity(resume ResumeProfile) ResumeIdentity {
 	for _, value := range resume.ExcludeKeywords {
 		if normalized := normalizeQuery(value); normalized != "" {
 			identity.NegativeSignals = appendUnique(identity.NegativeSignals, normalized)
+			identity.NegativeMismatchAnchors = appendUnique(identity.NegativeMismatchAnchors, normalized)
+		}
+	}
+	identity.PrimaryRoleFamilies, identity.SecondaryRoleFamilies = resumeRoleFamilies(resume)
+	identity.CoreSkills = append([]string(nil), identity.StrongSkills...)
+	identity.AdjacentSkills = append([]string(nil), identity.SupportingSkills...)
+	for _, skill := range resume.Skills {
+		name := strings.TrimSpace(skill)
+		if name == "" {
+			continue
+		}
+		matchedSpecific := false
+		for token := range tokens(name) {
+			if reset6ResumeStrongAnchorTokens[token] {
+				matchedSpecific = true
+				break
+			}
+		}
+		if matchedSpecific {
+			identity.StrongPositiveAnchors = appendUniqueCanonical(identity.StrongPositiveAnchors, name)
+		} else {
+			identity.GenericAnchors = appendUniqueCanonical(identity.GenericAnchors, name)
 		}
 	}
 	return identity
