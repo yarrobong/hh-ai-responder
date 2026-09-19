@@ -5,9 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -124,6 +126,53 @@ func TestExchangeAuthorizationCodeUsesFormAndParsesExpiry(t *testing.T) {
 	}
 }
 
+func TestTokenExchangeRejectsExpiresInBeforeDurationOverflow(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"access_token":"access-fixture","token_type":"Bearer","expires_in":`+strconv.FormatInt(math.MaxInt64/int64(time.Second)+1, 10)+`}`)
+	}))
+	defer server.Close()
+
+	_, err := ExchangeAuthorizationCode(context.Background(), OAuthConfig{
+		TokenURL: server.URL, ClientID: "operator-client", ClientSecret: "operator-secret",
+		RedirectURI: "http://127.0.0.1/callback", HTTPClient: server.Client(),
+	}, "code-fixture", "verifier-fixture")
+	if err == nil || !strings.Contains(err.Error(), "response") {
+		t.Fatalf("overflow expires_in error=%v", err)
+	}
+}
+
+func TestTokenExchangeRequiresSecretAndRedirectBeforeRequest(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
+	defer server.Close()
+
+	tests := []struct {
+		name   string
+		config OAuthConfig
+	}{
+		{
+			name:   "missing client secret",
+			config: OAuthConfig{TokenURL: server.URL, ClientID: "operator-client", RedirectURI: "http://127.0.0.1/callback", HTTPClient: server.Client()},
+		},
+		{
+			name:   "missing redirect URI",
+			config: OAuthConfig{TokenURL: server.URL, ClientID: "operator-client", ClientSecret: "operator-secret", HTTPClient: server.Client()},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ExchangeAuthorizationCode(context.Background(), tt.config, "code-fixture", "verifier-fixture")
+			if err == nil || !strings.Contains(err.Error(), "invalid") {
+				t.Fatalf("validation error=%v", err)
+			}
+		})
+	}
+	if requests != 0 {
+		t.Fatalf("token endpoint received %d requests", requests)
+	}
+}
+
 func TestAuthorizationSessionRejectsStateMismatchAndProviderErrorBeforeExchange(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
@@ -162,7 +211,8 @@ func TestRefreshTokensUsesFormAndRotatesRefreshToken(t *testing.T) {
 	now := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
 	got, err := RefreshTokens(context.Background(), OAuthConfig{
 		TokenURL: server.URL, ClientID: "operator-client", ClientSecret: "operator-secret", HTTPClient: server.Client(),
-		Now: func() time.Time { return now },
+		RedirectURI: "http://127.0.0.1/callback",
+		Now:         func() time.Time { return now },
 	}, OAuthTokens{RefreshToken: "old-refresh"})
 	if err != nil {
 		t.Fatal(err)
@@ -181,12 +231,28 @@ func TestRefreshTokensPreservesRefreshTokenWhenProviderOmitsReplacement(t *testi
 		_, _ = io.WriteString(w, `{"access_token":"new-access","token_type":"Bearer","expires_in":120}`)
 	}))
 	defer server.Close()
-	got, err := RefreshTokens(context.Background(), OAuthConfig{TokenURL: server.URL, ClientID: "operator-client", HTTPClient: server.Client()}, OAuthTokens{RefreshToken: "old-refresh"})
+	got, err := RefreshTokens(context.Background(), OAuthConfig{TokenURL: server.URL, ClientID: "operator-client", ClientSecret: "operator-secret", RedirectURI: "http://127.0.0.1/callback", HTTPClient: server.Client()}, OAuthTokens{RefreshToken: "old-refresh"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.RefreshToken != "old-refresh" {
 		t.Fatalf("RefreshToken=%q, want preserved prior value", got.RefreshToken)
+	}
+}
+
+func TestRefreshTokensRejectsExplicitEmptyRefreshToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"access_token":"new-access","refresh_token":"","token_type":"Bearer","expires_in":120}`)
+	}))
+	defer server.Close()
+
+	_, err := RefreshTokens(context.Background(), OAuthConfig{
+		TokenURL: server.URL, ClientID: "operator-client", ClientSecret: "operator-secret",
+		RedirectURI: "http://127.0.0.1/callback", HTTPClient: server.Client(),
+	}, OAuthTokens{RefreshToken: "old-refresh"})
+	if err == nil || !strings.Contains(err.Error(), "response") {
+		t.Fatalf("explicit empty refresh token error=%v", err)
 	}
 }
 

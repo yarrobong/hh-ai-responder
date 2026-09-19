@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	pkceRandomBytes = 32
-	maxOAuthBody    = 1 << 20
+	pkceRandomBytes         = 32
+	maxOAuthBody            = 1 << 20
+	maxTokenLifetimeSeconds = (1<<63 - 1) / int64(time.Second)
 )
 
 var (
@@ -247,16 +248,19 @@ func postTokenForm(ctx context.Context, config OAuthConfig, form url.Values, pre
 	if err := json.Unmarshal(body, &wire); err != nil {
 		return OAuthTokens{}, errOAuthTokenResponse
 	}
-	if wire.AccessToken == "" || wire.TokenType == "" || wire.ExpiresIn == nil || *wire.ExpiresIn < 0 {
+	if wire.AccessToken == "" || wire.TokenType == "" || wire.ExpiresIn == nil || *wire.ExpiresIn < 0 || *wire.ExpiresIn > maxTokenLifetimeSeconds {
 		return OAuthTokens{}, errOAuthTokenResponse
 	}
 	now := time.Now
 	if config.Now != nil {
 		now = config.Now
 	}
-	refresh := wire.RefreshToken
-	if refresh == "" {
-		refresh = previous.RefreshToken
+	refresh := previous.RefreshToken
+	if wire.RefreshToken != nil {
+		if *wire.RefreshToken == "" {
+			return OAuthTokens{}, errOAuthTokenResponse
+		}
+		refresh = *wire.RefreshToken
 	}
 	return OAuthTokens{
 		AccessToken: wire.AccessToken, RefreshToken: refresh, TokenType: wire.TokenType,
@@ -265,10 +269,10 @@ func postTokenForm(ctx context.Context, config OAuthConfig, form url.Values, pre
 }
 
 type tokenResponse struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	TokenType    string `json:"token_type"`
-	ExpiresIn    *int64 `json:"expires_in"`
+	AccessToken  string  `json:"access_token"`
+	RefreshToken *string `json:"refresh_token"`
+	TokenType    string  `json:"token_type"`
+	ExpiresIn    *int64  `json:"expires_in"`
 }
 
 func validateAuthorizationConfig(config OAuthConfig) error {
@@ -279,7 +283,7 @@ func validateAuthorizationConfig(config OAuthConfig) error {
 }
 
 func validateTokenConfig(config OAuthConfig) error {
-	if !validEndpoint(config.TokenURL) || config.ClientID == "" {
+	if !validEndpoint(config.TokenURL) || config.ClientID == "" || config.ClientSecret == "" || config.RedirectURI == "" {
 		return errInvalidOAuthConfig
 	}
 	return nil
