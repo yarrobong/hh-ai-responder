@@ -94,6 +94,84 @@ func TestRunPageCapMarksUnstartedProfiles(t *testing.T) {
 	}
 }
 
+type profilePage struct {
+	ProfileID string
+	Items     []Vacancy
+}
+
+func newProfileFixtureResponder(t *testing.T, pages []profilePage) (*HHAIResponder, *httptest.Server) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodGet || req.URL.Path != "/search/vacancy" {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		profileID := req.URL.Query().Get("profile")
+		page, err := strconv.Atoi(req.URL.Query().Get("page"))
+		if err != nil {
+			page = 0
+		}
+		var items []Vacancy
+		if page == 0 {
+			for _, fixture := range pages {
+				if fixture.ProfileID == profileID {
+					items = fixture.Items
+					break
+				}
+			}
+		}
+		records := make([]string, 0, len(items))
+		for _, item := range items {
+			records = append(records, fmt.Sprintf(`{"vacancyId":%d,"name":"vacancy-%d","links":{"desktop":"/vacancy/%d"}}`, item.ID, item.ID, item.ID))
+		}
+		_, _ = fmt.Fprintf(w, `prefix,"vacancies":[%s]}`, strings.Join(records, ","))
+	}))
+	base := mustURL(t, server.URL)
+	profiles := make([]vacancySearchProfile, 0, len(pages))
+	for _, fixture := range pages {
+		profiles = append(profiles, vacancySearchProfile{ID: fixture.ProfileID, Name: fixture.ProfileID, BaseURL: base, Params: url.Values{"profile": {fixture.ProfileID}, "items_on_page": {"50"}}})
+	}
+	ctx := context.Background()
+	responder := &HHAIResponder{ctx: ctx, baseURL: base, requester: NewHHRequester(ctx, server.Client(), 0), searchProfiles: profiles, maxSearchPagesPerProfile: 48, maxSearchPagesPerRun: 48}
+	return responder, server
+}
+
+func searchProfileSummaryByID(summary RunSummaryResult, profileID string) *SearchProfileSummary {
+	for index := range summary.SearchProfiles {
+		if summary.SearchProfiles[index].ID == profileID {
+			return &summary.SearchProfiles[index]
+		}
+	}
+	return nil
+}
+
+func TestProfileTelemetrySeparatesOverlapAndUnionContribution(t *testing.T) {
+	responder, server := newProfileFixtureResponder(t, []profilePage{
+		{ProfileID: "a", Items: []Vacancy{{ID: 1}, {ID: 2}, {ID: 2}, {ID: 3}}},
+		{ProfileID: "b", Items: []Vacancy{{ID: 2}, {ID: 3}, {ID: 4}}},
+	})
+	defer server.Close()
+	summary := RunSummaryResult{}
+	_, err := responder.fetchVacanciesFromSearchProfilesWithLimit(&summary, responder.searchProfiles, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := searchProfileSummaryByID(summary, "a")
+	b := searchProfileSummaryByID(summary, "b")
+	if a == nil || b == nil {
+		t.Fatalf("profile summaries missing: %+v", summary.SearchProfiles)
+	}
+	if a.RawHits != 4 || a.DistinctProfileVacancies != 3 || a.ExclusiveVacancies != 1 || a.OverlapVacancies != 2 || a.UnionNewContribution != 3 {
+		t.Fatalf("profile a accounting is wrong: %+v", a)
+	}
+	if b.RawHits != 3 || b.DistinctProfileVacancies != 3 || b.ExclusiveVacancies != 1 || b.OverlapVacancies != 2 || b.UnionNewContribution != 1 {
+		t.Fatalf("profile b accounting is wrong: %+v", b)
+	}
+	if a.RawHits-a.DistinctProfileVacancies == a.OverlapVacancies {
+		t.Fatalf("within-profile repeated hit was incorrectly used as overlap: %+v", a)
+	}
+}
+
 func TestConfiguredSearchURLsFallsBackToLegacyURL(t *testing.T) {
 	got, err := configuredSearchURLs("", "https://hh.example/search/vacancy?text=python")
 	if err != nil {

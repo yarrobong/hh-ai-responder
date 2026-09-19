@@ -1199,12 +1199,18 @@ type HHAIResponder struct {
 }
 
 type vacancySearchProfile struct {
-	Name     string
-	ID       string
-	ResumeID string
-	URL      string
-	BaseURL  *url.URL
-	Params   url.Values
+	Name                string
+	ID                  string
+	ResumeID            string
+	URL                 string
+	BaseURL             *url.URL
+	Params              url.Values
+	ProfileType         careeragent.SearchProfileType
+	RoleFamily          careeragent.RoleFamily
+	Query               string
+	Reason              string
+	SourceResumeIDs     []string
+	EligibilityEvidence []string
 }
 
 type HHRequester struct {
@@ -2791,6 +2797,13 @@ func (r *HHAIResponder) fetchVacanciesFromSearchProfilesWithLimit(summary *RunSu
 		r.careerAgentSearchSources = map[int][]careeragent.SearchProfileEvidence{}
 	}
 	pagesFetched := 0
+	profileSets := make([]map[int]struct{}, len(profiles))
+	for index := range profileSets {
+		profileSets[index] = map[int]struct{}{}
+	}
+	sourceProfiles := map[int]map[int]struct{}{}
+	unionSeen := map[int]struct{}{}
+	profileSummaryIndexes := map[int]int{}
 	markTruncated := func(profileSummary *SearchProfileSummary, reason string) {
 		if profileSummary.Truncated {
 			return
@@ -2804,14 +2817,21 @@ func (r *HHAIResponder) fetchVacanciesFromSearchProfilesWithLimit(summary *RunSu
 		if maxUnique > 0 && len(seenIDs) >= maxUnique {
 			break
 		}
-		profileSummary := SearchProfileSummary{Name: profile.Name, URL: profile.URL}
+		profileSummary := SearchProfileSummary{
+			ID: profile.ID, Name: profile.Name, URL: profile.URL, Query: profile.Query,
+			ProfileType: profile.ProfileType, RoleFamily: profile.RoleFamily,
+			SourceResumeIDs: append([]string(nil), profile.SourceResumeIDs...),
+		}
 		if r.maxSearchPagesPerRun > 0 && pagesFetched >= r.maxSearchPagesPerRun {
 			markTruncated(&profileSummary, "MAX_SEARCH_PAGES_PER_RUN")
 			summary.SearchProfiles = append(summary.SearchProfiles, profileSummary)
-			for _, unstarted := range profiles[profileIndex+1:] {
-				unstartedSummary := SearchProfileSummary{Name: unstarted.Name, URL: unstarted.URL}
+			profileSummaryIndexes[profileIndex] = len(summary.SearchProfiles) - 1
+			for unstartedIndex := profileIndex + 1; unstartedIndex < len(profiles); unstartedIndex++ {
+				unstarted := profiles[unstartedIndex]
+				unstartedSummary := SearchProfileSummary{ID: unstarted.ID, Name: unstarted.Name, URL: unstarted.URL, Query: unstarted.Query, ProfileType: unstarted.ProfileType, RoleFamily: unstarted.RoleFamily, SourceResumeIDs: append([]string(nil), unstarted.SourceResumeIDs...)}
 				markTruncated(&unstartedSummary, "MAX_SEARCH_PAGES_PER_RUN")
 				summary.SearchProfiles = append(summary.SearchProfiles, unstartedSummary)
+				profileSummaryIndexes[unstartedIndex] = len(summary.SearchProfiles) - 1
 			}
 			break
 		}
@@ -2854,6 +2874,7 @@ func (r *HHAIResponder) fetchVacanciesFromSearchProfilesWithLimit(summary *RunSu
 			profileSummary.PagesFetched++
 			summary.SearchPagesFetched++
 			profileSummary.VacanciesFetched += len(vacancies)
+			profileSummary.RawHits += len(vacancies)
 			summary.VacanciesFetchedRaw += len(vacancies)
 			summary.VacanciesFetched += len(vacancies)
 			if len(vacancies) == 0 {
@@ -2861,12 +2882,28 @@ func (r *HHAIResponder) fetchVacanciesFromSearchProfilesWithLimit(summary *RunSu
 			}
 
 			for _, vacancy := range vacancies {
+				profileSets[profileIndex][vacancy.ID] = struct{}{}
+				if sourceProfiles[vacancy.ID] == nil {
+					sourceProfiles[vacancy.ID] = map[int]struct{}{}
+				}
+				sourceProfiles[vacancy.ID][profileIndex] = struct{}{}
+				if _, seen := unionSeen[vacancy.ID]; !seen {
+					unionSeen[vacancy.ID] = struct{}{}
+					profileSummary.UnionNewContribution++
+				}
 				r.vacancySearchSources[vacancy.ID] = appendUniqueString(r.vacancySearchSources[vacancy.ID], profile.Name)
 				resumeID := profile.ResumeID
 				if resumeID == "" {
 					resumeID = r.resumeProfileID(profile.Params.Get("resume"))
 				}
-				r.careerAgentSearchSources[vacancy.ID] = appendCareerAgentSearchSource(r.careerAgentSearchSources[vacancy.ID], careeragent.SearchProfileEvidence{ID: profile.ID, ResumeID: resumeID, Label: profile.Name})
+				sourceResumeIDs := append([]string(nil), profile.SourceResumeIDs...)
+				if len(sourceResumeIDs) == 0 && resumeID != "" {
+					sourceResumeIDs = []string{resumeID}
+				}
+				r.careerAgentSearchSources[vacancy.ID] = appendCareerAgentSearchSource(r.careerAgentSearchSources[vacancy.ID], careeragent.SearchProfileEvidence{
+					ID: profile.ID, ResumeID: resumeID, Label: profile.Name, ProfileType: profile.ProfileType,
+					Reason: profile.Reason, RoleFamily: profile.RoleFamily, Query: profile.Query, SourceResumeIDs: sourceResumeIDs,
+				})
 				if _, exists := seenIDs[vacancy.ID]; exists {
 					summary.DuplicatesSkipped++
 					continue
@@ -2882,6 +2919,22 @@ func (r *HHAIResponder) fetchVacanciesFromSearchProfilesWithLimit(summary *RunSu
 			}
 		}
 		summary.SearchProfiles = append(summary.SearchProfiles, profileSummary)
+		profileSummaryIndexes[profileIndex] = len(summary.SearchProfiles) - 1
+	}
+	for profileIndex := range profiles {
+		summaryIndex, ok := profileSummaryIndexes[profileIndex]
+		if !ok || summaryIndex < 0 || summaryIndex >= len(summary.SearchProfiles) {
+			continue
+		}
+		profileSummary := &summary.SearchProfiles[summaryIndex]
+		profileSummary.DistinctProfileVacancies = len(profileSets[profileIndex])
+		for vacancyID := range profileSets[profileIndex] {
+			if len(sourceProfiles[vacancyID]) > 1 {
+				profileSummary.OverlapVacancies++
+			} else {
+				profileSummary.ExclusiveVacancies++
+			}
+		}
 	}
 	summary.VacanciesAfterDedup = len(seenIDs)
 	summary.DiscoveryComplete = !summary.DiscoveryTruncated

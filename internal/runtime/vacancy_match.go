@@ -73,12 +73,23 @@ type VacancyMatchResult struct {
 }
 
 type SearchProfileSummary struct {
-	Name             string `json:"name"`
-	URL              string `json:"url,omitempty"`
-	VacanciesFetched int    `json:"vacancies_fetched"`
-	PagesFetched     int    `json:"pages_fetched"`
-	Truncated        bool   `json:"truncated,omitempty"`
-	TruncationReason string `json:"truncation_reason,omitempty"`
+	ID                       string                        `json:"id,omitempty"`
+	Name                     string                        `json:"name"`
+	URL                      string                        `json:"url,omitempty"`
+	Query                    string                        `json:"query,omitempty"`
+	ProfileType              careeragent.SearchProfileType `json:"profile_type,omitempty"`
+	RoleFamily               careeragent.RoleFamily        `json:"role_family,omitempty"`
+	SourceResumeIDs          []string                      `json:"source_resume_ids,omitempty"`
+	VacanciesFetched         int                           `json:"vacancies_fetched"`
+	RawHits                  int                           `json:"raw_hits"`
+	DistinctProfileVacancies int                           `json:"distinct_profile_vacancies"`
+	ExclusiveVacancies       int                           `json:"exclusive_vacancies"`
+	OverlapVacancies         int                           `json:"overlap_vacancies"`
+	UnionNewContribution     int                           `json:"union_new_contribution"`
+	ProcessedVacancies       int                           `json:"processed_vacancies,omitempty"`
+	PagesFetched             int                           `json:"pages_fetched"`
+	Truncated                bool                          `json:"truncated,omitempty"`
+	TruncationReason         string                        `json:"truncation_reason,omitempty"`
 }
 
 type RunSummaryResult struct {

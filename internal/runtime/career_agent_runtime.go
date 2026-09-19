@@ -60,7 +60,15 @@ func (r *HHAIResponder) rebuildCareerAgentSearchProfiles(profiles []careeragent.
 		if base == nil {
 			continue
 		}
-		r.searchProfiles = append(r.searchProfiles, vacancySearchProfile{ID: plannedProfile.ID, ResumeID: plannedProfile.ResumeID, Name: plannedProfile.Query + " / " + plannedProfile.ResumeTitle, BaseURL: base, Params: params, URL: searchProfileURL(base, params)})
+		r.searchProfiles = append(r.searchProfiles, vacancySearchProfile{
+			ID: plannedProfile.ID, ResumeID: plannedProfile.ResumeID,
+			Name:    plannedProfile.Query + " / " + plannedProfile.ResumeTitle,
+			BaseURL: base, Params: params, URL: searchProfileURL(base, params),
+			ProfileType: plannedProfile.ProfileType, RoleFamily: plannedProfile.RoleFamily,
+			Query: plannedProfile.Query, Reason: plannedProfile.Reason,
+			SourceResumeIDs:     append([]string(nil), plannedProfile.SourceResumeIDs...),
+			EligibilityEvidence: append([]string(nil), plannedProfile.EligibilityEvidence...),
+		})
 	}
 	if len(r.searchProfiles) > 0 {
 		r.searchParams = cloneValues(r.searchProfiles[0].Params)
