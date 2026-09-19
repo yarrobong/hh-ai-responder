@@ -445,6 +445,7 @@ func apiVacancyPreflightWithSource(ctx context.Context, source apiApplicationPre
 			}
 		}
 	}
+	finalizeAPIApplicationAvailability(&preflight)
 	return preflight, nil
 }
 
@@ -685,6 +686,7 @@ func apiVacancyPreflight(record hhread.VacancyRecord, vacancyID int) VacancyPref
 		preflight.CanApply, preflight.CanApplyKnown = false, true
 		setActiveEvidence(&preflight, VacancyActiveStateInactive, ActiveEvidenceProviderClosedForApplicants)
 	} else if record.ArchivedKnown && record.Archived {
+		preflight.CanApply, preflight.CanApplyKnown = false, true
 		setActiveEvidence(&preflight, VacancyActiveStateInactive, ActiveEvidenceProviderArchivedTrue)
 	} else if record.QuickResponsesAllowedKnown && record.QuickResponsesAllowed {
 		preflight.CanApply, preflight.CanApplyKnown = true, true
@@ -692,8 +694,34 @@ func apiVacancyPreflight(record hhread.VacancyRecord, vacancyID int) VacancyPref
 	} else if record.ArchivedKnown && !record.Archived {
 		setActiveEvidence(&preflight, VacancyActiveStateActive, ActiveEvidenceProviderArchivedFalse)
 	}
-	preflight.Available = preflight.activeState() == VacancyActiveStateActive
 	return preflight
+}
+
+// finalizeAPIApplicationAvailability keeps application availability separate
+// from duplicate state, resume suitability, and vacancy activity. A positive
+// API availability proof requires all of those independent read-only facts;
+// explicit provider negatives remain UNAVAILABLE, while every incomplete or
+// ambiguous combination remains UNKNOWN.
+func finalizeAPIApplicationAvailability(preflight *VacancyPreflight) {
+	if preflight == nil {
+		return
+	}
+	preflight.Available = false
+	if preflight.CanApplyKnown && !preflight.CanApply {
+		return
+	}
+	if preflight.SelectedResumeSuitableKnown && !preflight.SelectedResumeSuitable {
+		preflight.CanApply, preflight.CanApplyKnown = false, true
+		return
+	}
+	if preflight.alreadyRespondedEvidence().Value != AlreadyRespondedNo ||
+		!preflight.SelectedResumeSuitableKnown ||
+		!preflight.NegotiationScanComplete ||
+		!preflight.CanApplyKnown || !preflight.CanApply {
+		preflight.CanApply, preflight.CanApplyKnown = false, false
+		return
+	}
+	preflight.Available = true
 }
 
 func (r *HHAIResponder) rememberVacancyPreflight(preflight VacancyPreflight) {

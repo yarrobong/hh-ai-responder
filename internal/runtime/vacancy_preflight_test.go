@@ -296,6 +296,81 @@ func TestAPIApplicationPreflightSuitableResumeTriState(t *testing.T) {
 	}
 }
 
+func TestAPIApplicationAvailabilityRequiresCompletePositiveProviderEvidence(t *testing.T) {
+	baseDetail := hhread.VacancyRecord{
+		ID: 42, ArchivedKnown: true, ClosedForApplicantsKnown: true,
+		NegotiationsURL:       "https://api.example/negotiations?vacancy_id=42",
+		SuitableResumesURL:    "https://api.example/suitable",
+		QuickResponsesAllowed: true, QuickResponsesAllowedKnown: true,
+		ResponseLetterRequiredKnown: true, UserTestPresentKnown: true,
+	}
+	newSource := func(detail hhread.VacancyRecord) *apiApplicationPreflightFake {
+		return &apiApplicationPreflightFake{
+			detail:      detail,
+			suitableIDs: []string{"resume-1"},
+			collections: hhread.NegotiationCollectionIndex{DirectPage: &hhread.NegotiationPage{Page: 0, Pages: 1, PagesKnown: true, Complete: true}},
+		}
+	}
+
+	tests := []struct {
+		name       string
+		mutate     func(*apiApplicationPreflightFake)
+		wantKnown  bool
+		wantApply  bool
+		wantResult VacancyDecision
+	}{
+		{name: "complete positive evidence", wantKnown: true, wantApply: true, wantResult: VacancyMatch},
+		{name: "duplicate yes blocks regardless of availability", mutate: func(source *apiApplicationPreflightFake) {
+			responded := true
+			source.detail.AlreadyResponded = &responded
+		}, wantKnown: false, wantApply: false, wantResult: VacancyReject},
+		{name: "duplicate unknown fails closed", mutate: func(source *apiApplicationPreflightFake) {
+			source.collections.DirectPage = nil
+			source.collectionsErr = errors.New("negotiation scan unavailable")
+		}, wantKnown: false, wantApply: false, wantResult: VacancyReviewRequired},
+		{name: "selected resume unsuitable is unavailable", mutate: func(source *apiApplicationPreflightFake) {
+			source.suitableIDs = []string{"other-resume"}
+		}, wantKnown: true, wantApply: false, wantResult: VacancyReject},
+		{name: "selected resume suitability unknown", mutate: func(source *apiApplicationPreflightFake) {
+			source.suitableErr = errors.New("suitable resumes unavailable")
+		}, wantKnown: false, wantApply: false, wantResult: VacancyReviewRequired},
+		{name: "archived is explicitly unavailable", mutate: func(source *apiApplicationPreflightFake) {
+			archived := true
+			source.detail.Archived = archived
+		}, wantKnown: true, wantApply: false, wantResult: VacancyReject},
+		{name: "closed for applicants is explicitly unavailable", mutate: func(source *apiApplicationPreflightFake) {
+			closed := true
+			source.detail.ClosedForApplicants = closed
+		}, wantKnown: true, wantApply: false, wantResult: VacancyReject},
+		{name: "missing provider respondability is unknown", mutate: func(source *apiApplicationPreflightFake) {
+			source.detail.QuickResponsesAllowedKnown = false
+		}, wantKnown: false, wantApply: false, wantResult: VacancyReviewRequired},
+		{name: "incomplete scan is unknown", mutate: func(source *apiApplicationPreflightFake) {
+			source.collections.DirectPage = &hhread.NegotiationPage{Page: 0, Pages: 2, PagesKnown: true, Complete: false, NextURL: "https://api.example/negotiations?vacancy_id=42&page=1"}
+			source.pageErr = errors.New("second page failed")
+		}, wantKnown: false, wantApply: false, wantResult: VacancyReviewRequired},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			source := newSource(baseDetail)
+			if test.mutate != nil {
+				test.mutate(source)
+			}
+			preflight, err := newAPIApplicationPreflightResponder(source).GetVacancyPreflight(Vacancy{ID: 42})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if preflight.CanApplyKnown != test.wantKnown || preflight.CanApply != test.wantApply || preflight.Available != test.wantApply {
+				t.Fatalf("availability: known=%t apply=%t available=%t, want known=%t apply=%t", preflight.CanApplyKnown, preflight.CanApply, preflight.Available, test.wantKnown, test.wantApply)
+			}
+			if got, _ := vacancyPreflightDecision(preflight); got != test.wantResult {
+				t.Fatalf("decision=%s, want %s; preflight=%+v", got, test.wantResult, preflight)
+			}
+		})
+	}
+}
+
 func TestAPIApplicationPreflightCompleteEmptyCollectionsProduceAuthoritativeNo(t *testing.T) {
 	source := &apiApplicationPreflightFake{
 		detail:          hhread.VacancyRecord{ID: 42, NegotiationsURL: "https://api.example/negotiations?vacancy_id=42"},
