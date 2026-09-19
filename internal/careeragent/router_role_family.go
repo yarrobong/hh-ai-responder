@@ -200,7 +200,9 @@ func ClassifyVacancyRole(v VacancyInput, resumes []ResumeProfile) VacancyRoleEvi
 }
 
 func resumeRoleFamilies(resume ResumeProfile) (primary, secondary []RoleFamily) {
-	text := strings.Join([]string{resume.Title, resume.DesiredRole, strings.Join(resume.Skills, " ")}, " ")
+	roleText := strings.Join([]string{resume.Title, resume.DesiredRole}, " ")
+	roleTokens := tokens(roleText)
+	text := strings.Join([]string{roleText, strings.Join(resume.Skills, " ")}, " ")
 	tokensValue := tokens(text)
 	add := func(values *[]RoleFamily, family RoleFamily) {
 		for _, existing := range *values {
@@ -222,19 +224,23 @@ func resumeRoleFamilies(resume ResumeProfile) (primary, secondary []RoleFamily) 
 	if tokensValue["support"] || tokensValue["troubleshooting"] || tokensValue["diagnostics"] {
 		add(&primary, RoleFamilyTechSupport)
 	}
-	if tokensValue["administrator"] || tokensValue["sysadmin"] || tokensValue["devops"] {
+	// Infrastructure administration is a bounded role family. A skill such as
+	// "Администрирование сайтов" or "Linux" is adjacent evidence, not a
+	// system-administrator resume identity. Require the role anchor in the
+	// resume title/desired role so backend/support profiles cannot route here.
+	if roleTokens["administrator"] || roleTokens["sysadmin"] || roleTokens["devops"] {
 		add(&primary, RoleFamilySystemAdmin)
 	}
-	if tokensValue["frontend"] || tokensValue["vuejs"] || tokensValue["react"] {
+	if roleTokens["frontend"] || roleTokens["vuejs"] || roleTokens["react"] {
 		add(&primary, RoleFamilyFrontend)
 	}
 	if tokensValue["flutter"] || tokensValue["dart"] {
 		add(&primary, RoleFamilyFlutter)
 	}
-	if tokensValue["onec"] || tokensValue["1c"] {
+	if roleTokens["onec"] || roleTokens["1c"] {
 		add(&primary, RoleFamilyOneC)
 	}
-	if tokensValue["analyst"] && tokensValue["system"] {
+	if roleTokens["analyst"] && roleTokens["system"] {
 		add(&primary, RoleFamilySystemAnalyst)
 	}
 	if len(primary) > 1 {

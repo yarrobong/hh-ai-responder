@@ -210,6 +210,21 @@ func TestRouteResumeDistinguishesOutOfScopeFromLowEvidence(t *testing.T) {
 	}
 }
 
+func TestRouteResumeDoesNotTreatSiteAdministrationAsSystemAdminResumeFamily(t *testing.T) {
+	decision := RouteResume(VacancyInput{
+		ID:          612,
+		Title:       "Системный администратор Linux-серверов",
+		Description: "Администрирование Linux-серверов, DNS и сетевой инфраструктуры",
+	}, []ResumeProfile{
+		{ID: "backend", Title: "Backend-разработчик", Skills: []string{"Python", "Django", "Администрирование сайтов", "Linux", "PostgreSQL"}, Enabled: true},
+		{ID: "support", Title: "Технический специалист", Skills: []string{"Техническая поддержка", "Диагностика неисправностей", "Администрирование сайтов"}, Enabled: true},
+	})
+
+	if decision.Status != RouteReviewRequired || decision.ReasonCode != RouteReasonOutOfScope || decision.SelectedResumeID != "" {
+		t.Fatalf("site administration was over-interpreted as a system-admin family: %+v", decision)
+	}
+}
+
 func TestRouteResumeKeepsStrongMixedRoleAmbiguous(t *testing.T) {
 	resumes := []ResumeProfile{
 		{ID: "python", Title: "Python backend developer", Skills: []string{"Python", "Django", "REST API"}, Enabled: true},
