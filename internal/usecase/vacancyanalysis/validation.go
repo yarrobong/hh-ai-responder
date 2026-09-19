@@ -463,8 +463,23 @@ func descriptionExperienceMinimumMonths(requirement, evidence string) (int, bool
 }
 
 func containsRoleSpecificExperienceMarker(text string) bool {
+	normalized := strings.ToLower(strings.NewReplacer("/", " ", "-", " ", "_", " ").Replace(text))
+	for _, marker := range []string{"ai", "ml", "nlp"} {
+		if containsExactToken(normalized, marker) {
+			return true
+		}
+	}
 	for _, marker := range roleSpecificExperienceMarkers {
 		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsExactToken(text, want string) bool {
+	for _, token := range strings.Fields(text) {
+		if token == want {
 			return true
 		}
 	}

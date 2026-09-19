@@ -71,6 +71,8 @@ func TestDescriptionExperienceUsesExplicitTotalDurationPolicy(t *testing.T) {
 		{name: "devops duration is role specific", months: 11, description: "1 год DevOps", wantStatus: hardRequirementStatusUnknown},
 		{name: "sre duration is role specific", months: 11, description: "2 года SRE", wantStatus: hardRequirementStatusUnknown},
 		{name: "java duration is role specific", months: 11, description: "3 года Java", wantStatus: hardRequirementStatusUnknown},
+		{name: "AI ML NLP duration is role specific", months: 11, description: "Опыт в AI/ML/NLP не менее 2 лет.", wantStatus: hardRequirementStatusUnknown},
+		{name: "compound AI agent duration is role specific", months: 11, description: "2 года AI-agent разработки", wantStatus: hardRequirementStatusUnknown},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
