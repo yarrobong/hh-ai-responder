@@ -93,7 +93,7 @@ func TestAPIClientSendsBearerAndHHUserAgent(t *testing.T) {
 		t.Fatalf("method=%q, want GET", gotMethod)
 	}
 	if got := gotHeader.Get("Authorization"); got != "Bearer access-token-fixture" {
-		t.Fatalf("Authorization=%q", got)
+		t.Fatal("Authorization header mismatch")
 	}
 	if got := gotHeader.Get("User-Agent"); got != "hh-ai-responder/test" {
 		t.Fatalf("User-Agent=%q", got)
@@ -207,14 +207,14 @@ func TestAPIClientRefreshesOnceOnExpiredResponseAndRetriesGET(t *testing.T) {
 		methods = append(methods, r.Method)
 		if apiCalls == 1 {
 			if got := r.Header.Get("Authorization"); got != "Bearer old-access" {
-				t.Errorf("first Authorization=%q", got)
+				t.Error("first Authorization header mismatch")
 			}
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = io.WriteString(w, `{"oauth_error":"token_expired"}`)
 			return
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer new-access" {
-			t.Errorf("retry Authorization=%q", got)
+			t.Error("retry Authorization header mismatch")
 		}
 		_, _ = io.WriteString(w, `{"ok":true}`)
 	}))
@@ -248,8 +248,115 @@ func TestAPIClientRefreshesOnceOnExpiredResponseAndRetriesGET(t *testing.T) {
 		t.Fatalf("apiCalls=%d refreshCalls=%d methods=%v", apiCalls, refreshCalls, methods)
 	}
 	if len(store.saved) != 1 || store.saved[0].AccessToken != "new-access" || store.saved[0].RefreshToken != "new-refresh" {
-		t.Fatalf("saved tokens=%+v", store.saved)
+		t.Fatalf("refresh token persistence mismatch: saved_count=%d", len(store.saved))
 	}
+}
+
+func TestAPIClientRefreshFailuresRemainRemoteErrors(t *testing.T) {
+	tests := []struct {
+		name          string
+		response      string
+		status        int
+		invalidConfig bool
+		closeServer   bool
+	}{
+		{name: "malformed response", response: "{not-json", status: http.StatusOK},
+		{name: "transient provider failure", response: `{"error":"temporary"}`, status: http.StatusServiceUnavailable},
+		{name: "invalid configuration", invalidConfig: true},
+		{name: "network failure", closeServer: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = io.WriteString(w, `{"oauth_error":"token_expired"}`)
+			}))
+			defer apiServer.Close()
+
+			refreshURL := ""
+			var refreshClient *http.Client
+			var refreshServer *httptest.Server
+			if !tt.invalidConfig {
+				refreshServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(tt.status)
+					_, _ = io.WriteString(w, tt.response)
+				}))
+				refreshURL = refreshServer.URL
+				refreshClient = refreshServer.Client()
+				if tt.closeServer {
+					refreshServer.Close()
+				}
+				if !tt.closeServer {
+					defer refreshServer.Close()
+				}
+			}
+
+			config := OAuthConfig{
+				TokenURL: refreshURL, ClientID: "client-fixture", ClientSecret: "secret-fixture",
+				RedirectURI: "http://127.0.0.1/callback", HTTPClient: refreshClient,
+			}
+			if tt.invalidConfig {
+				config.ClientID = ""
+			}
+			client, err := NewAPIHHClient(APIClientOptions{
+				BaseURL: mustURL(t, apiServer.URL), TokenStore: &memoryTokenStore{loaded: OAuthTokens{
+					AccessToken: "old-access", RefreshToken: "old-refresh", TokenType: "Bearer",
+					ExpiresAt: time.Now().Add(time.Hour),
+				}},
+				UserAgent: "hh-ai-responder/test", OAuthConfig: config,
+			})
+			if err != nil {
+				t.Fatal("client construction failed")
+			}
+			_, err = client.Get(context.Background(), "/me")
+			var apiErr *APIError
+			if !errors.As(err, &apiErr) || apiErr.Code != APIErrorRemote {
+				t.Fatalf("case classified as %v, want REMOTE_ERROR", apiErrCode(err))
+			}
+		})
+	}
+}
+
+func TestAPIClientRefreshCancellationPreservesContextError(t *testing.T) {
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, `{"oauth_error":"token_expired"}`)
+	}))
+	defer apiServer.Close()
+	refreshServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(100 * time.Millisecond):
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer refreshServer.Close()
+
+	client, err := NewAPIHHClient(APIClientOptions{
+		BaseURL: mustURL(t, apiServer.URL), TokenStore: &memoryTokenStore{loaded: OAuthTokens{
+			AccessToken: "old-access", RefreshToken: "old-refresh", TokenType: "Bearer",
+			ExpiresAt: time.Now().Add(time.Hour),
+		}}, UserAgent: "hh-ai-responder/test",
+		OAuthConfig: OAuthConfig{TokenURL: refreshServer.URL, ClientID: "client-fixture", ClientSecret: "secret-fixture", RedirectURI: "http://127.0.0.1/callback", HTTPClient: refreshServer.Client()},
+	})
+	if err != nil {
+		t.Fatal("client construction failed")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err = client.Get(ctx, "/me")
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != APIErrorRemote || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("refresh cancellation classification=%v context_preserved=%v", apiErrCode(err), errors.Is(err, context.DeadlineExceeded))
+	}
+}
+
+func apiErrCode(err error) APIErrorCode {
+	var apiErr *APIError
+	if errors.As(err, &apiErr) && apiErr != nil {
+		return apiErr.Code
+	}
+	return "<non-api-error>"
 }
 
 func TestAPIClientErrorsNeverExposeSecretsOrResponseBodies(t *testing.T) {
@@ -273,7 +380,7 @@ func TestAPIClientErrorsNeverExposeSecretsOrResponseBodies(t *testing.T) {
 	message := err.Error()
 	for _, secret := range []string{accessToken, clientSecret, responseSecret, "synthetic-refresh-token", "Set-Cookie", "Authorization"} {
 		if strings.Contains(message, secret) {
-			t.Fatalf("error exposed %q: %s", secret, message)
+			t.Fatal("error redaction check failed")
 		}
 	}
 }

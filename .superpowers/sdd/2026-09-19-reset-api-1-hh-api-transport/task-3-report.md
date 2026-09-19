@@ -24,6 +24,28 @@ browser changes, API write methods, or HH write requests were added. API
 resource requests construct GET only; OAuth refresh uses the existing Task 2
 refresh helper as its separate token lifecycle operation.
 
+## Reviewer fix
+
+The focused fix keeps refresh-helper failures classified as `REMOTE_ERROR`.
+Only explicit revocation evidence in an API authentication response maps to
+`TOKEN_REVOKED`; generic refresh-helper errors do not expose enough provider
+evidence to claim revocation. Regression coverage includes malformed refresh
+responses, transient provider failures, invalid refresh configuration, network
+failure, and refresh cancellation with context preservation.
+
+Test diagnostics were also redacted so failed assertions do not print bearer
+values, refreshed token structs, or the secret values used by redaction tests.
+
+The reviewer regression command first reproduced the bug with a malformed
+refresh response classified as `TOKEN_REVOKED`. After the fix, the focused
+regressions passed:
+
+```text
+go test -count=1 -timeout=30s ./internal/adapters/hh/api -run 'TestAPIClientRefreshFailuresRemainRemoteErrors|TestAPIClientRefreshCancellationPreservesContextError'  # PASS
+go test -count=1 ./internal/adapters/hh/api                                                                                                  # PASS
+go test -race -count=1 ./internal/adapters/hh/api                                                                                             # PASS
+```
+
 ## RED evidence
 
 After writing `client_test.go` before production code, the required focused

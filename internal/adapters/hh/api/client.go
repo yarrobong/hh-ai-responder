@@ -178,7 +178,7 @@ func (c *APIHHClient) refreshAndSave(ctx context.Context, path string, previous 
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return OAuthTokens{}, contextAPIError(path, ctxErr)
 		}
-		return OAuthTokens{}, newAPIError(APIErrorTokenRevoked, 0, path, "", 0, errAPITokenRefresh)
+		return OAuthTokens{}, newAPIError(APIErrorRemote, 0, path, "", 0, errAPITokenRefresh)
 	}
 	if err := c.tokenStore.Save(ctx, refreshed); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
