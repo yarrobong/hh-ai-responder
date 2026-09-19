@@ -23,6 +23,14 @@ type VacancyDetailSource interface {
 	ReadVacancyDetail(context.Context, int) (hhread.VacancyRecord, error)
 }
 
+// ResumeReadSource is an optional read-only capability. It is deliberately
+// separate from HHReadSource because the browser reader's existing profile
+// parser remains authoritative for browser mode.
+type ResumeReadSource interface {
+	ReadResumes(context.Context) ([]hhread.ResumeRecord, error)
+	ReadResume(context.Context, string) (hhread.ResumeRecord, error)
+}
+
 // BoundedConversationReadSource is the optional read capability used by an
 // operator-bounded Career run. Implementations must apply the limit before
 // expanding conversation details; zero means the regular unbounded read.

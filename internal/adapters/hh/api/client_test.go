@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	hhreadport "hh-ai-responder/internal/ports/hhread"
 )
 
 type memoryTokenStore struct {
@@ -384,3 +386,149 @@ func TestAPIClientErrorsNeverExposeSecretsOrResponseBodies(t *testing.T) {
 		}
 	}
 }
+
+func TestAPIHHClientCurrentUserReadsMe(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/me" {
+			t.Fatalf("request=%s %s, want GET /me", r.Method, r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"id":"user-17","auth_type":"applicant"}`)
+	}))
+	defer server.Close()
+
+	got, err := newAPIClient(t, server.URL, &memoryTokenStore{loaded: validTokens()}).CurrentUser(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "user-17" || got.AuthType != "applicant" {
+		t.Fatalf("user=%+v", got)
+	}
+}
+
+func TestAPIHHClientReadsResumeListAndDetail(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/resumes/mine":
+			_, _ = io.WriteString(w, `{"items":[{"id":"resume-1","title":"Python backend","area":{"name":"Yekaterinburg"},"key_skills":[{"name":"Python"},{"name":"Django"}],"salary":{"from":90000,"currency":"RUR"}}]}`)
+		case "/resumes/resume-1":
+			_, _ = io.WriteString(w, `{"id":"resume-1","title":"Python backend","description":"API integrations","experience":{"name":"1-3 years"},"updated_at":"2026-09-18T10:00:00Z"}`)
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := newAPIClient(t, server.URL, &memoryTokenStore{loaded: validTokens()})
+	resumes, err := client.ReadResumes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resumes) != 1 || resumes[0].ID != "resume-1" || resumes[0].Title != "Python backend" || len(resumes[0].Skills) != 2 || resumes[0].Area != "Yekaterinburg" || resumes[0].Salary != "90000" || resumes[0].Currency != "RUR" {
+		t.Fatalf("resumes=%+v", resumes)
+	}
+	detail, err := client.ReadResume(context.Background(), "resume-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.ID != "resume-1" || detail.Description != "API integrations" || detail.Experience != "1-3 years" || detail.UpdatedAt.IsZero() {
+		t.Fatalf("detail=%+v", detail)
+	}
+}
+
+func TestAPIHHClientReadsVacanciesWithAPIQueryAndPagination(t *testing.T) {
+	var gotQuery url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/vacancies" {
+			t.Fatalf("path=%q", r.URL.Path)
+		}
+		gotQuery = r.URL.Query()
+		_, _ = io.WriteString(w, `{"items":[{"id":"42","name":"Integration specialist","employer":{"name":"Fixture employer"},"area":{"name":"Yekaterinburg"},"alternate_url":"https://hh.example/vacancy/42","published_at":"2026-09-17T08:00:00Z"}],"page":1,"pages":3}`)
+	}))
+	defer server.Close()
+
+	client, err := NewAPIHHClient(APIClientOptions{
+		BaseURL: mustURL(t, server.URL), HTTPClient: server.Client(), TokenStore: &memoryTokenStore{loaded: validTokens()},
+		UserAgent: "hh-ai-responder/test", SearchParams: url.Values{
+			"text": {"Python backend"}, "area": {"3"}, "search_period": {"7"}, "items_on_page": {"50"},
+			"career_agent_include": {"Django"}, "resume": {"browser-only"},
+		},
+		Now: func() time.Time { return time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := client.ReadVacancies(context.Background(), "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotQuery.Get("page") != "1" || gotQuery.Get("text") != "Python backend" || gotQuery.Get("area") != "3" || gotQuery.Get("period") != "7" || gotQuery.Get("per_page") != "50" || gotQuery.Get("career_agent_include") != "" || gotQuery.Get("resume") != "" {
+		t.Fatalf("query=%v", gotQuery)
+	}
+	if page.NextCursor != "2" || len(page.Items) != 1 || page.Items[0].ID != 42 || page.Items[0].Company != "Fixture employer" || page.Items[0].URL != "https://hh.example/vacancy/42" {
+		t.Fatalf("page=%+v", page)
+	}
+}
+
+func TestAPIHHClientReadsVacancyDetailAndPreservesUnknownRelation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/vacancies/42" {
+			t.Fatalf("path=%q", r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"id":42,"name":"Integration specialist","description":"REST API automation","employer":{"name":"Fixture employer"},"area":{"name":"Yekaterinburg"},"address":{"raw":"Lenina street"},"salary":{"from":90000,"to":120000,"currency":"RUR"},"key_skills":[{"name":"Python"},{"name":"REST API"}],"professional_roles":[{"name":"Developer"}],"experience":{"id":"between1And3","name":"1-3 years"},"employment":{"name":"Full time"},"schedule":{"name":"Flexible"},"work_format":[{"name":"Remote"}],"published_at":"2026-09-17T08:00:00Z","archived":null,"response_letter_required":true,"has_test":false,"relations":{}}`)
+	}))
+	defer server.Close()
+
+	got, err := newAPIClient(t, server.URL, &memoryTokenStore{loaded: validTokens()}).ReadVacancyDetail(context.Background(), 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != 42 || got.Title != "Integration specialist" || got.Description != "REST API automation" || got.Company != "Fixture employer" || got.Address != "Lenina street" || got.Salary != "90000–120000" || got.Currency != "RUR" || len(got.KeySkills) != 2 || got.Experience != "between1And3" || got.EmploymentType != "Full time" || got.Schedule != "Flexible" || got.WorkFormat != "remote" || !got.ResponseLetterRequired || !got.ResponseLetterRequiredKnown || got.ArchivedKnown || got.UserTestPresentKnown != true || got.UserTestPresent != false {
+		t.Fatalf("vacancy=%+v", got)
+	}
+	if _, ok := got.Metadata["already_responded"]; ok {
+		t.Fatalf("unknown relation was normalized as already_responded: %+v", got.Metadata)
+	}
+	if got.AlreadyResponded != nil || got.AlreadyRespondedEvidence != "" {
+		t.Fatalf("incomplete relation was normalized as known: value=%v evidence=%q", got.AlreadyResponded, got.AlreadyRespondedEvidence)
+	}
+}
+
+func TestAPIHHClientUnsupportedApplicationAndConversationReadsReturnCapabilityErrors(t *testing.T) {
+	serverCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serverCalls++
+		t.Fatalf("unsupported capability reached endpoint %q", r.URL.Path)
+	}))
+	defer server.Close()
+	client := newAPIClient(t, server.URL, &memoryTokenStore{loaded: validTokens()})
+
+	for name, read := range map[string]func() error{
+		"applications": func() error {
+			page, err := client.ReadApplications(context.Background(), "")
+			if len(page.Items) != 0 || page.NextCursor != "" {
+				t.Fatalf("applications page=%+v", page)
+			}
+			return err
+		},
+		"conversations": func() error {
+			page, err := client.ReadConversations(context.Background(), "")
+			if len(page.Items) != 0 || page.NextCursor != "" {
+				t.Fatalf("conversations page=%+v", page)
+			}
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := read()
+			var capabilityErr *CapabilityError
+			if !errors.As(err, &capabilityErr) || capabilityErr.Capability != name {
+				t.Fatalf("error=%T %v, want typed capability error for %s", err, err, name)
+			}
+		})
+	}
+	if serverCalls != 0 {
+		t.Fatalf("unsupported reads made %d HTTP calls", serverCalls)
+	}
+}
+
+var _ hhreadport.ResumeReadSource = (*APIHHClient)(nil)

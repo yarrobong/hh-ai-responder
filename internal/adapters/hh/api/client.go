@@ -10,6 +10,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"hh-ai-responder/internal/hhread"
+	hhreadport "hh-ai-responder/internal/ports/hhread"
 )
 
 const (
@@ -28,6 +31,7 @@ type APIClientOptions struct {
 	TokenStore      TokenStore
 	OAuthConfig     OAuthConfig
 	UserAgent       string
+	SearchParams    url.Values
 	Now             func() time.Time
 	Timeout         time.Duration
 	MaxRetryAfter   time.Duration
@@ -37,14 +41,15 @@ type APIClientOptions struct {
 // Options is retained as a concise constructor spelling for this adapter.
 type Options = APIClientOptions
 
-// APIHHClient performs authenticated, read-only HH API requests. Endpoint
-// wire models and normalization are intentionally added by later tasks.
+// APIHHClient performs authenticated, read-only HH API requests and normalizes
+// the supported user, resume, and vacancy endpoints.
 type APIHHClient struct {
 	baseURL         *url.URL
 	httpClient      *http.Client
 	tokenStore      TokenStore
 	oauthConfig     OAuthConfig
 	userAgent       string
+	searchParams    url.Values
 	now             func() time.Time
 	timeout         time.Duration
 	maxRetryAfter   time.Duration
@@ -92,7 +97,7 @@ func NewAPIHHClient(options APIClientOptions) (*APIHHClient, error) {
 	baseURL := *options.BaseURL
 	return &APIHHClient{
 		baseURL: &baseURL, httpClient: httpClient, tokenStore: options.TokenStore,
-		oauthConfig: options.OAuthConfig, userAgent: userAgent, now: now,
+		oauthConfig: options.OAuthConfig, userAgent: userAgent, searchParams: cloneAPIValues(options.SearchParams), now: now,
 		timeout: timeout, maxRetryAfter: maxRetryAfter, tokenExpirySkew: skew,
 	}, nil
 }
@@ -108,6 +113,137 @@ func NewClient(options APIClientOptions) (*APIHHClient, error) {
 // until later tasks add typed wire models.
 func (c *APIHHClient) Get(ctx context.Context, path string) ([]byte, error) {
 	return c.get(ctx, path, nil)
+}
+
+var _ hhreadport.HHReadSource = (*APIHHClient)(nil)
+var _ hhreadport.VacancyDetailSource = (*APIHHClient)(nil)
+var _ hhreadport.ResumeReadSource = (*APIHHClient)(nil)
+
+// CurrentUser reads only the safe identity metadata needed by API transport
+// selection and diagnostics.
+func (c *APIHHClient) CurrentUser(ctx context.Context) (UserMetadata, error) {
+	body, err := c.get(ctx, "/me", nil)
+	if err != nil {
+		return UserMetadata{}, err
+	}
+	var value wireMe
+	if err := decodeWire(body, &value); err != nil {
+		return UserMetadata{}, err
+	}
+	return mapUser(value), nil
+}
+
+// ReadResumes reads the operator's own resume summaries. It is a read-only
+// optional capability and does not imply suitability or application parity.
+func (c *APIHHClient) ReadResumes(ctx context.Context) ([]hhread.ResumeRecord, error) {
+	body, err := c.get(ctx, "/resumes/mine", nil)
+	if err != nil {
+		return nil, err
+	}
+	values, err := decodeResumeCollection(body)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]hhread.ResumeRecord, 0, len(values))
+	for _, value := range values {
+		mapped, mapErr := mapResumeWire(value)
+		if mapErr != nil {
+			return nil, mapErr
+		}
+		result = append(result, mapped)
+	}
+	return result, nil
+}
+
+func (c *APIHHClient) ReadResume(ctx context.Context, id string) (hhread.ResumeRecord, error) {
+	id = strings.TrimSpace(id)
+	if id == "" || strings.ContainsAny(id, "/\\?#\r\n") {
+		return hhread.ResumeRecord{}, errors.New("HH API resume id is invalid")
+	}
+	body, err := c.get(ctx, "/resumes/"+url.PathEscape(id), nil)
+	if err != nil {
+		return hhread.ResumeRecord{}, err
+	}
+	var value wireResume
+	if err := decodeWire(body, &value); err != nil {
+		return hhread.ResumeRecord{}, err
+	}
+	return mapResumeWire(value)
+}
+
+func (c *APIHHClient) ReadVacancies(ctx context.Context, cursor string) (hhread.VacancyPage, error) {
+	page, err := parseAPICursor(cursor)
+	if err != nil {
+		return hhread.VacancyPage{}, err
+	}
+	body, err := c.get(ctx, "/vacancies", apiVacancyQuery(c.searchParams, page))
+	if err != nil {
+		return hhread.VacancyPage{}, err
+	}
+	var value wirePage
+	if err := decodeWire(body, &value); err != nil {
+		return hhread.VacancyPage{}, err
+	}
+	items := make([]hhread.VacancyRecord, 0, len(value.Items))
+	for _, item := range value.Items {
+		mapped, mapErr := mapVacancyWire(item)
+		if mapErr != nil {
+			return hhread.VacancyPage{}, mapErr
+		}
+		items = append(items, mapped)
+	}
+	return hhread.VacancyPage{Items: items, NextCursor: nextAPICursor(page, value.Pages, len(items))}, nil
+}
+
+func (c *APIHHClient) ReadVacancyDetail(ctx context.Context, id int) (hhread.VacancyRecord, error) {
+	if id <= 0 {
+		return hhread.VacancyRecord{}, errors.New("HH API vacancy id is invalid")
+	}
+	body, err := c.get(ctx, "/vacancies/"+strconv.Itoa(id), nil)
+	if err != nil {
+		return hhread.VacancyRecord{}, err
+	}
+	var value wireVacancy
+	if err := decodeWire(body, &value); err != nil {
+		return hhread.VacancyRecord{}, err
+	}
+	return mapVacancyWire(value)
+}
+
+// Applicant negotiation semantics are not proven for the API transport. A
+// capability error is safer than an empty page, an inferred negative, or a
+// browser fallback.
+func (c *APIHHClient) ReadApplications(context.Context, string) (hhread.ApplicationPage, error) {
+	return hhread.ApplicationPage{}, unsupportedCapability("applications", "applicant negotiation semantics are unproven")
+}
+
+func (c *APIHHClient) ReadConversations(context.Context, string) (hhread.ConversationPage, error) {
+	return hhread.ConversationPage{}, unsupportedCapability("conversations", "applicant conversation semantics are unproven")
+}
+
+func parseAPICursor(value string) (int, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 0 {
+		return 0, errors.New("invalid HH API pagination cursor")
+	}
+	return parsed, nil
+}
+
+func nextAPICursor(page, pages, itemCount int) string {
+	if pages > 0 {
+		if page+1 >= pages {
+			return ""
+		}
+		return strconv.Itoa(page + 1)
+	}
+	if itemCount > 0 {
+		return strconv.Itoa(page + 1)
+	}
+	return ""
 }
 
 // get is the internal query-capable seam for later read-only endpoint methods.

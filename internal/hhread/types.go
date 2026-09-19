@@ -13,33 +13,38 @@ import (
 // known bit is intentionally separate from the integer value: HH can omit or
 // return null for the field, and those cases are not explicit zeroes.
 type VacancyRecord struct {
-	ExternalID               string
-	ID                       int
-	Title                    string
-	Company                  string
-	Description              string
-	Requirements             []string
-	KeySkills                []string
-	Salary                   string
-	Currency                 string
-	Location                 string
-	AreaName                 string
-	Address                  string
-	WorkFormat               string
-	Experience               string
-	EmploymentType           string
-	Schedule                 string
-	URL                      string
-	PublishedAt              time.Time
-	UpdatedAt                time.Time
-	TotalResponsesCount      int
-	TotalResponsesCountKnown bool
-	Archived                 bool
-	ResponseLetterRequired   bool
-	UserTestPresent          bool
-	ResponseURL              string
-	ProfessionalRoles        []string
-	Metadata                 map[string]string
+	ExternalID                  string
+	ID                          int
+	Title                       string
+	Company                     string
+	Description                 string
+	Requirements                []string
+	KeySkills                   []string
+	Salary                      string
+	Currency                    string
+	Location                    string
+	AreaName                    string
+	Address                     string
+	WorkFormat                  string
+	Experience                  string
+	EmploymentType              string
+	Schedule                    string
+	URL                         string
+	PublishedAt                 time.Time
+	UpdatedAt                   time.Time
+	TotalResponsesCount         int
+	TotalResponsesCountKnown    bool
+	Archived                    bool
+	ArchivedKnown               bool
+	ResponseLetterRequired      bool
+	ResponseLetterRequiredKnown bool
+	UserTestPresent             bool
+	UserTestPresentKnown        bool
+	ResponseURL                 string
+	AlreadyResponded            *bool
+	AlreadyRespondedEvidence    string
+	ProfessionalRoles           []string
+	Metadata                    map[string]string
 }
 
 type VacancyPage struct {
@@ -65,6 +70,27 @@ type ApplicationRecord struct {
 type ApplicationPage struct {
 	Items      []ApplicationRecord
 	NextCursor string
+}
+
+// ResumeRecord is a provider-neutral, read-only projection of an own resume.
+// Optional fields remain empty when the provider omits or nulls them; an empty
+// value is not evidence that the candidate lacks the corresponding fact.
+type ResumeRecord struct {
+	ID             string
+	Hash           string
+	Title          string
+	Description    string
+	Skills         []string
+	Area           string
+	Salary         string
+	Currency       string
+	Experience     string
+	EmploymentType string
+	Schedule       string
+	WorkFormat     string
+	URL            string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 type Action struct {
