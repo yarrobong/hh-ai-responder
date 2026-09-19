@@ -151,13 +151,19 @@ func TestAlreadyRespondedEvidenceIsFailClosed(t *testing.T) {
 }
 
 type apiApplicationPreflightFake struct {
-	detail          hhread.VacancyRecord
-	suitableIDs     []string
-	suitableErr     error
-	negotiations    hhread.ApplicationPage
-	negotiationsErr error
-	negotiationURL  string
-	suitableURL     string
+	detail           hhread.VacancyRecord
+	suitableIDs      []string
+	suitableErr      error
+	negotiations     hhread.ApplicationPage
+	negotiationsErr  error
+	collections      hhread.NegotiationCollectionIndex
+	collectionsErr   error
+	negotiationPage  hhread.NegotiationPage
+	negotiationPages []hhread.NegotiationPage
+	pageCalls        int
+	pageErr          error
+	negotiationURL   string
+	suitableURL      string
 }
 
 func (f *apiApplicationPreflightFake) ReadVacancies(context.Context, string) (hhread.VacancyPage, error) {
@@ -184,6 +190,40 @@ func (f *apiApplicationPreflightFake) ReadNegotiations(context.Context, string) 
 	return f.negotiations, f.negotiationsErr
 }
 
+func (f *apiApplicationPreflightFake) ReadNegotiationCollections(context.Context, string) (hhread.NegotiationCollectionIndex, error) {
+	if f.collectionsErr != nil {
+		return hhread.NegotiationCollectionIndex{}, f.collectionsErr
+	}
+	if len(f.collections.Collections) > 0 || len(f.collections.GeneratedCollections) > 0 || f.collections.DirectPage != nil {
+		return f.collections, nil
+	}
+	if len(f.negotiations.Items) > 0 {
+		return hhread.NegotiationCollectionIndex{Collections: []hhread.NegotiationCollection{{ID: "response", URL: "https://api.example/negotiations/response?vacancy_id=42", Total: len(f.negotiations.Items), TotalKnown: true}}}, nil
+	}
+	return hhread.NegotiationCollectionIndex{}, f.negotiationsErr
+}
+
+func (f *apiApplicationPreflightFake) ReadNegotiationCollection(context.Context, string) (hhread.NegotiationPage, error) {
+	if f.pageErr != nil {
+		return hhread.NegotiationPage{}, f.pageErr
+	}
+	if f.negotiationsErr != nil {
+		return hhread.NegotiationPage{}, f.negotiationsErr
+	}
+	if len(f.negotiationPages) > 0 {
+		if f.pageCalls >= len(f.negotiationPages) {
+			return hhread.NegotiationPage{}, errors.New("unexpected extra negotiation page")
+		}
+		page := f.negotiationPages[f.pageCalls]
+		f.pageCalls++
+		return page, nil
+	}
+	if len(f.negotiationPage.Items) > 0 || f.negotiationPage.Complete {
+		return f.negotiationPage, nil
+	}
+	return hhread.NegotiationPage{Items: f.negotiations.Items, Page: 0, Pages: 1, PagesKnown: true, Complete: true}, nil
+}
+
 func newAPIApplicationPreflightResponder(source *apiApplicationPreflightFake) *HHAIResponder {
 	r := &HHAIResponder{ctx: context.Background(), transport: transportAPI, readSource: source, resumeIdentifier: "resume-1"}
 	r.readClient = NewHHAIResponderReadClient(r)
@@ -205,7 +245,7 @@ func TestAPIApplicationPreflightUsesGotResponseBeforeOptionalProbes(t *testing.T
 
 func TestAPIApplicationPreflightKeepsNonResponseRelationsUnknown(t *testing.T) {
 	for _, relations := range [][]string{nil, {}, {"favorited"}} {
-		source := &apiApplicationPreflightFake{detail: hhread.VacancyRecord{ID: 42, Relations: relations, NegotiationsURL: "https://api.example/negotiations?vacancy_id=42"}}
+		source := &apiApplicationPreflightFake{detail: hhread.VacancyRecord{ID: 42, Relations: relations, NegotiationsURL: "https://api.example/negotiations?vacancy_id=42"}, collectionsErr: errors.New("negotiation collection index unavailable")}
 		preflight, err := newAPIApplicationPreflightResponder(source).GetVacancyPreflight(Vacancy{ID: 42})
 		if err != nil {
 			t.Fatal(err)
@@ -253,6 +293,131 @@ func TestAPIApplicationPreflightSuitableResumeTriState(t *testing.T) {
 				t.Fatalf("suitable=%+v", preflight)
 			}
 		})
+	}
+}
+
+func TestAPIApplicationPreflightCompleteEmptyCollectionsProduceAuthoritativeNo(t *testing.T) {
+	source := &apiApplicationPreflightFake{
+		detail:          hhread.VacancyRecord{ID: 42, NegotiationsURL: "https://api.example/negotiations?vacancy_id=42"},
+		collections:     hhread.NegotiationCollectionIndex{Collections: []hhread.NegotiationCollection{{ID: "response", URL: "https://api.example/negotiations/response?vacancy_id=42", TotalKnown: true}}},
+		negotiationPage: hhread.NegotiationPage{Page: 0, Pages: 1, PagesKnown: true, Complete: true},
+	}
+	preflight, err := newAPIApplicationPreflightResponder(source).GetVacancyPreflight(Vacancy{ID: 42})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := preflight.alreadyRespondedEvidence(); got.Value != AlreadyRespondedNo {
+		t.Fatalf("evidence=%+v, want authoritative NO", got)
+	}
+	if !preflight.NegotiationScanComplete || preflight.NegotiationCollectionsDiscovered != 1 || preflight.NegotiationCollectionsChecked != 1 || preflight.NegotiationPagesChecked != 1 || preflight.MatchingNegotiation {
+		t.Fatalf("scan diagnostics=%+v", preflight)
+	}
+}
+
+func TestAPIApplicationPreflightMatchingNegotiationProducesYes(t *testing.T) {
+	source := &apiApplicationPreflightFake{
+		detail:          hhread.VacancyRecord{ID: 42, NegotiationsURL: "https://api.example/negotiations?vacancy_id=42"},
+		collections:     hhread.NegotiationCollectionIndex{Collections: []hhread.NegotiationCollection{{ID: "response", URL: "https://api.example/negotiations/response?vacancy_id=42", Total: 1, TotalKnown: true}}},
+		negotiationPage: hhread.NegotiationPage{Items: []hhread.ApplicationRecord{{ExternalID: "neg-7", VacancyID: 42, ResumeID: "resume-1"}}, Page: 0, Pages: 1, PagesKnown: true, Complete: true},
+	}
+	preflight, err := newAPIApplicationPreflightResponder(source).GetVacancyPreflight(Vacancy{ID: 42})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := preflight.alreadyRespondedEvidence(); got.Value != AlreadyRespondedYes || preflight.NegotiationID != "neg-7" || preflight.NegotiationResumeID != "resume-1" || !preflight.MatchingNegotiation {
+		t.Fatalf("preflight=%+v evidence=%+v", preflight, got)
+	}
+}
+
+func TestAPIApplicationPreflightIncompleteNegotiationScanRemainsUnknown(t *testing.T) {
+	source := &apiApplicationPreflightFake{
+		detail:          hhread.VacancyRecord{ID: 42, NegotiationsURL: "https://api.example/negotiations?vacancy_id=42"},
+		collections:     hhread.NegotiationCollectionIndex{Collections: []hhread.NegotiationCollection{{ID: "response", URL: "https://api.example/negotiations/response?vacancy_id=42", Total: 2, TotalKnown: true}}},
+		negotiationPage: hhread.NegotiationPage{Page: 0, Pages: 2, PagesKnown: true, Complete: false, Items: []hhread.ApplicationRecord{{ExternalID: "other", VacancyID: 42, ResumeID: "other-resume"}}},
+	}
+	preflight, err := newAPIApplicationPreflightResponder(source).GetVacancyPreflight(Vacancy{ID: 42})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := preflight.alreadyRespondedEvidence(); got.Value != AlreadyRespondedUnknown || preflight.NegotiationScanComplete {
+		t.Fatalf("incomplete scan=%+v evidence=%+v", preflight, got)
+	}
+}
+
+func TestAPIApplicationPreflightExhaustsNegotiationPaginationBeforeNo(t *testing.T) {
+	source := &apiApplicationPreflightFake{
+		detail:      hhread.VacancyRecord{ID: 42, NegotiationsURL: "https://api.example/negotiations?vacancy_id=42"},
+		collections: hhread.NegotiationCollectionIndex{Collections: []hhread.NegotiationCollection{{ID: "response", URL: "https://api.example/negotiations/response?vacancy_id=42", Total: 2, TotalKnown: true}}},
+		negotiationPages: []hhread.NegotiationPage{
+			{Items: []hhread.ApplicationRecord{{ExternalID: "other-1", VacancyID: 42, ResumeID: "other-resume-1"}}, Page: 0, Pages: 2, PagesKnown: true, Complete: false, NextURL: "https://api.example/negotiations/response?vacancy_id=42&page=1"},
+			{Items: []hhread.ApplicationRecord{{ExternalID: "other-2", VacancyID: 42, ResumeID: "other-resume-2"}}, Page: 1, Pages: 2, PagesKnown: true, Complete: true},
+		},
+	}
+	preflight, err := newAPIApplicationPreflightResponder(source).GetVacancyPreflight(Vacancy{ID: 42})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := preflight.alreadyRespondedEvidence(); got.Value != AlreadyRespondedNo || !preflight.NegotiationScanComplete || preflight.NegotiationPagesChecked != 2 || source.pageCalls != 2 {
+		t.Fatalf("pagination scan=%+v evidence=%+v page_calls=%d", preflight, got, source.pageCalls)
+	}
+}
+
+func TestAPIApplicationPreflightDirectApplicantPageProducesNoWhenComplete(t *testing.T) {
+	source := &apiApplicationPreflightFake{
+		detail:      hhread.VacancyRecord{ID: 42, NegotiationsURL: "https://api.example/negotiations?vacancy_id=42"},
+		collections: hhread.NegotiationCollectionIndex{DirectPage: &hhread.NegotiationPage{Page: 0, Pages: 1, PagesKnown: true, Complete: true}},
+	}
+	preflight, err := newAPIApplicationPreflightResponder(source).GetVacancyPreflight(Vacancy{ID: 42})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := preflight.alreadyRespondedEvidence(); got.Value != AlreadyRespondedNo || !preflight.NegotiationScanComplete || preflight.NegotiationPagesChecked != 1 || preflight.NegotiationCollectionsDiscovered != 0 {
+		t.Fatalf("direct page preflight=%+v evidence=%+v", preflight, got)
+	}
+}
+
+func TestAPIApplicationPreflightAmbiguousNegotiationResumeRemainsUnknown(t *testing.T) {
+	source := &apiApplicationPreflightFake{
+		detail:          hhread.VacancyRecord{ID: 42, NegotiationsURL: "https://api.example/negotiations?vacancy_id=42"},
+		collections:     hhread.NegotiationCollectionIndex{Collections: []hhread.NegotiationCollection{{ID: "response", URL: "https://api.example/negotiations/response?vacancy_id=42", Total: 1, TotalKnown: true}}},
+		negotiationPage: hhread.NegotiationPage{Items: []hhread.ApplicationRecord{{ExternalID: "neg-ambiguous", VacancyID: 42}}, Page: 0, Pages: 1, PagesKnown: true, Complete: true},
+	}
+	preflight, err := newAPIApplicationPreflightResponder(source).GetVacancyPreflight(Vacancy{ID: 42})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := preflight.alreadyRespondedEvidence(); got.Value != AlreadyRespondedUnknown || preflight.NegotiationScanComplete {
+		t.Fatalf("ambiguous resume=%+v evidence=%+v", preflight, got)
+	}
+}
+
+func TestAPIApplicationPreflightDifferentResumeDoesNotBecomeMatchingDuplicate(t *testing.T) {
+	source := &apiApplicationPreflightFake{
+		detail:          hhread.VacancyRecord{ID: 42, NegotiationsURL: "https://api.example/negotiations?vacancy_id=42"},
+		collections:     hhread.NegotiationCollectionIndex{Collections: []hhread.NegotiationCollection{{ID: "response", URL: "https://api.example/negotiations/response?vacancy_id=42", Total: 1, TotalKnown: true}}},
+		negotiationPage: hhread.NegotiationPage{Items: []hhread.ApplicationRecord{{ExternalID: "neg-other", VacancyID: 42, ResumeID: "resume-2"}}, Page: 0, Pages: 1, PagesKnown: true, Complete: true},
+	}
+	preflight, err := newAPIApplicationPreflightResponder(source).GetVacancyPreflight(Vacancy{ID: 42})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := preflight.alreadyRespondedEvidence(); got.Value != AlreadyRespondedNo || !preflight.ExistingNegotiation || preflight.MatchingNegotiation || preflight.NegotiationID != "neg-other" {
+		t.Fatalf("different-resume negotiation was mishandled: preflight=%+v evidence=%+v", preflight, got)
+	}
+}
+
+func TestAPIApplicationPreflightFailedCollectionReadRemainsUnknown(t *testing.T) {
+	source := &apiApplicationPreflightFake{
+		detail:      hhread.VacancyRecord{ID: 42, NegotiationsURL: "https://api.example/negotiations?vacancy_id=42"},
+		collections: hhread.NegotiationCollectionIndex{Collections: []hhread.NegotiationCollection{{ID: "response", URL: "https://api.example/negotiations/response?vacancy_id=42"}}},
+		pageErr:     errors.New("collection GET failed"),
+	}
+	preflight, err := newAPIApplicationPreflightResponder(source).GetVacancyPreflight(Vacancy{ID: 42})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := preflight.alreadyRespondedEvidence(); got.Value != AlreadyRespondedUnknown || preflight.NegotiationScanComplete || preflight.NegotiationCollectionsChecked != 0 {
+		t.Fatalf("failed collection scan=%+v evidence=%+v", preflight, got)
 	}
 }
 

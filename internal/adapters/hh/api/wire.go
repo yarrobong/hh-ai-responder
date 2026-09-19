@@ -107,7 +107,37 @@ type wireSuitableResume struct {
 }
 
 type wireNegotiationPage struct {
-	Items []wireNegotiation `json:"items"`
+	Items   []wireNegotiation `json:"items"`
+	Page    int               `json:"page"`
+	Pages   int               `json:"pages"`
+	Found   *int              `json:"found"`
+	HasNext *bool             `json:"has_next"`
+	Paging  *wirePaging       `json:"paging"`
+}
+
+type wireNegotiationCollections struct {
+	Collections          *[]wireNegotiationCollection `json:"collections"`
+	GeneratedCollections []wireNegotiationCollection  `json:"generated_collections"`
+	Items                *[]wireNegotiation           `json:"items"`
+}
+
+type wireNegotiationCollection struct {
+	ID             string                      `json:"id"`
+	URL            string                      `json:"url"`
+	Counters       wireNegotiationCounters     `json:"counters"`
+	SubCollections []wireNegotiationCollection `json:"sub_collections"`
+}
+
+type wireNegotiationCounters struct {
+	Total *int `json:"total"`
+}
+
+type wirePaging struct {
+	Next *wirePagingLink `json:"next"`
+}
+
+type wirePagingLink struct {
+	URL string `json:"url"`
 }
 
 type wireNegotiation struct {

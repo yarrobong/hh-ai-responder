@@ -125,6 +125,11 @@ func runHHAPIPreflight(ctx context.Context, args []string, cfg Config, stdout, s
 	_, _ = fmt.Fprintf(stdout, "selected resume suitable: %s\n", hhAPITriState(preflight.SelectedResumeSuitableKnown, preflight.SelectedResumeSuitable))
 	_, _ = fmt.Fprintf(stdout, "existing negotiation: %s\n", hhAPITriState(preflight.ExistingNegotiationKnown, preflight.ExistingNegotiation))
 	_, _ = fmt.Fprintf(stdout, "negotiation ID: %s\n", hhAPIPresentAbsent(strings.TrimSpace(preflight.NegotiationID) != ""))
+	_, _ = fmt.Fprintf(stdout, "negotiation collections discovered: %d\n", preflight.NegotiationCollectionsDiscovered)
+	_, _ = fmt.Fprintf(stdout, "negotiation collections checked: %d\n", preflight.NegotiationCollectionsChecked)
+	_, _ = fmt.Fprintf(stdout, "negotiation pages checked: %d\n", preflight.NegotiationPagesChecked)
+	_, _ = fmt.Fprintf(stdout, "matching negotiation: %s\n", hhAPIYesNo(preflight.MatchingNegotiation))
+	_, _ = fmt.Fprintf(stdout, "negotiation scan complete: %s\n", hhAPIYesNo(preflight.NegotiationScanComplete))
 	_, _ = fmt.Fprintf(stdout, "final duplicate state: %s\n", string(evidence.Value))
 	return nil
 }

@@ -594,6 +594,92 @@ func TestAPIHHClientReadsProviderSuppliedNegotiations(t *testing.T) {
 	}
 }
 
+func TestAPIHHClientReadsNegotiationCollectionsAndPages(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("method=%s, want GET", r.Method)
+		}
+		switch r.URL.Path {
+		case "/negotiations":
+			if r.URL.Query().Get("vacancy_id") != "42" {
+				t.Fatalf("index query=%q, want vacancy_id=42", r.URL.RawQuery)
+			}
+			_, _ = io.WriteString(w, `{"collections":[{"id":"response","url":"`+server.URL+`/negotiations/response?vacancy_id=42","counters":{"total":2},"sub_collections":[{"id":"response_other","url":"`+server.URL+`/negotiations/response_other?vacancy_id=42","counters":{"total":1}}]}],"generated_collections":[{"id":"generated","url":"`+server.URL+`/negotiations/generated?vacancy_id=42","counters":{"total":0}}]}`)
+		case "/negotiations/response":
+			if r.URL.Query().Get("page") == "1" {
+				_, _ = io.WriteString(w, `{"items":[{"id":"neg-2","vacancy":{"id":"42"},"resume":{"id":"resume-2"}}],"page":1,"pages":2}`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"items":[{"id":"neg-1","vacancy":{"id":"42"},"resume":{"id":"resume-1"}}],"page":0,"pages":2}`)
+		case "/negotiations/response_other", "/negotiations/generated":
+			_, _ = io.WriteString(w, `{"items":[],"page":0,"pages":1}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+
+	client := newAPIClient(t, server.URL, &memoryTokenStore{loaded: validTokens()})
+	collections, err := client.ReadNegotiationCollections(context.Background(), server.URL+"/negotiations?vacancy_id=42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(collections.Collections) != 1 || len(collections.Collections[0].SubCollections) != 1 || len(collections.GeneratedCollections) != 1 {
+		t.Fatalf("collections=%+v", collections)
+	}
+	if collections.Collections[0].Total != 2 || !collections.Collections[0].TotalKnown {
+		t.Fatalf("root counters=%+v", collections.Collections[0])
+	}
+	page, err := client.ReadNegotiationCollection(context.Background(), collections.Collections[0].URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Page != 0 || page.Pages != 2 || page.NextURL == "" || page.Complete {
+		t.Fatalf("first page=%+v", page)
+	}
+	next, err := client.ReadNegotiationCollection(context.Background(), page.NextURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(next.Items) != 1 || next.Page != 1 || !next.Complete || next.NextURL != "" {
+		t.Fatalf("last page=%+v", next)
+	}
+}
+
+func TestAPIHHClientReadsDirectApplicantNegotiationPage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/negotiations" || r.URL.Query().Get("vacancy_id") != "42" {
+			t.Fatalf("request=%s %s", r.Method, r.URL.RequestURI())
+		}
+		_, _ = io.WriteString(w, `{"items":[{"id":"neg-7","vacancy":{"id":"42"},"resume":{"id":"resume-1"}}],"page":0,"pages":1,"found":1,"per_page":20}`)
+	}))
+	defer server.Close()
+
+	index, err := newAPIClient(t, server.URL, &memoryTokenStore{loaded: validTokens()}).ReadNegotiationCollections(context.Background(), server.URL+"/negotiations?vacancy_id=42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if index.DirectPage == nil || len(index.DirectPage.Items) != 1 || !index.DirectPage.Complete || index.DirectPage.Items[0].ExternalID != "neg-7" {
+		t.Fatalf("direct applicant page=%+v", index)
+	}
+}
+
+func TestAPIHHClientRejectsArbitraryNegotiationProviderURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected request to provider URL: %s", r.URL)
+	}))
+	defer server.Close()
+	client := newAPIClient(t, server.URL, &memoryTokenStore{loaded: validTokens()})
+	for _, endpoint := range []string{
+		"https://evil.example/negotiations/response?vacancy_id=42",
+		"//evil.example/negotiations/response?vacancy_id=42",
+	} {
+		if _, err := client.ReadNegotiationCollections(context.Background(), endpoint); err == nil {
+			t.Fatalf("arbitrary provider URL unexpectedly accepted: %s", endpoint)
+		}
+	}
+}
+
 func TestAPIHHClientRejectsMalformedSuitableResumes(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, `{"items":[{"title":"missing provider id"}]}`)

@@ -83,6 +83,42 @@ type ApplicationPage struct {
 	NextCursor string
 }
 
+// NegotiationCollection is a provider-declared applicant negotiation bucket.
+// SubCollections are retained because HH does not guarantee a fixed set of
+// collections over time.
+type NegotiationCollection struct {
+	ID             string
+	URL            string
+	Total          int
+	TotalKnown     bool
+	SubCollections []NegotiationCollection
+}
+
+// NegotiationCollectionIndex is the read-only response to the vacancy-scoped
+// negotiations endpoint. GeneratedCollections are included when HH returns
+// them for the request.
+type NegotiationCollectionIndex struct {
+	Collections          []NegotiationCollection
+	GeneratedCollections []NegotiationCollection
+	DirectPage           *NegotiationPage
+}
+
+// NegotiationPage is one page from a provider negotiation collection.
+// Complete is true only when the adapter has established that this is the
+// final page according to provider pagination metadata.
+type NegotiationPage struct {
+	Items        []ApplicationRecord
+	Page         int
+	Pages        int
+	PagesKnown   bool
+	Found        int
+	FoundKnown   bool
+	HasNext      bool
+	HasNextKnown bool
+	NextURL      string
+	Complete     bool
+}
+
 // ResumeRecord is a provider-neutral, read-only projection of an own resume.
 // Optional fields remain empty when the provider omits or nulls them; an empty
 // value is not evidence that the candidate lacks the corresponding fact.

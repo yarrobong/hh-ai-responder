@@ -222,19 +222,59 @@ func (c *APIHHClient) ReadSuitableResumeIDs(ctx context.Context, endpoint string
 	return mapSuitableResumePage(value)
 }
 
-// ReadNegotiations follows the provider-supplied negotiations URL. The
-// normalized records retain only IDs and safe provider URLs needed for
-// duplicate-state evidence; this method cannot issue a mutation.
-func (c *APIHHClient) ReadNegotiations(ctx context.Context, endpoint string) (hhread.ApplicationPage, error) {
+// ReadNegotiationCollections follows the vacancy-scoped provider URL and
+// decodes the collection index. It never treats the index as a negotiation
+// item list.
+func (c *APIHHClient) ReadNegotiationCollections(ctx context.Context, endpoint string) (hhread.NegotiationCollectionIndex, error) {
 	body, endpointVacancyID, err := c.getProviderEndpoint(ctx, endpoint)
 	if err != nil {
-		return hhread.ApplicationPage{}, err
+		return hhread.NegotiationCollectionIndex{}, err
+	}
+	if endpointVacancyID <= 0 {
+		return hhread.NegotiationCollectionIndex{}, errors.New("HH API negotiations vacancy id is invalid")
+	}
+	var value wireNegotiationCollections
+	if err := decodeWire(body, &value); err != nil {
+		return hhread.NegotiationCollectionIndex{}, err
+	}
+	if value.Collections == nil && value.Items != nil {
+		var page wireNegotiationPage
+		if err := decodeWire(body, &page); err != nil {
+			return hhread.NegotiationCollectionIndex{}, err
+		}
+		mapped, mapErr := mapNegotiationPage(page, endpointVacancyID, endpoint)
+		if mapErr != nil {
+			return hhread.NegotiationCollectionIndex{}, mapErr
+		}
+		return hhread.NegotiationCollectionIndex{DirectPage: &mapped}, nil
+	}
+	return mapNegotiationCollections(value)
+}
+
+// ReadNegotiationCollection follows one provider-declared collection URL.
+// Pagination metadata is retained so callers can exhaust the collection
+// before deriving a negative duplicate result.
+func (c *APIHHClient) ReadNegotiationCollection(ctx context.Context, endpoint string) (hhread.NegotiationPage, error) {
+	body, endpointVacancyID, err := c.getProviderEndpoint(ctx, endpoint)
+	if err != nil {
+		return hhread.NegotiationPage{}, err
 	}
 	var value wireNegotiationPage
 	if err := decodeWire(body, &value); err != nil {
+		return hhread.NegotiationPage{}, err
+	}
+	return mapNegotiationPage(value, endpointVacancyID, endpoint)
+}
+
+// ReadNegotiations preserves the older one-page normalized read API for
+// callers outside application preflight. New duplicate-state code uses the
+// collection-aware methods above.
+func (c *APIHHClient) ReadNegotiations(ctx context.Context, endpoint string) (hhread.ApplicationPage, error) {
+	page, err := c.ReadNegotiationCollection(ctx, endpoint)
+	if err != nil {
 		return hhread.ApplicationPage{}, err
 	}
-	return mapNegotiationPage(value, endpointVacancyID)
+	return hhread.ApplicationPage{Items: page.Items, NextCursor: page.NextURL}, nil
 }
 
 // ReadVacancyDetailRequiringRelation is the explicit duplicate-state probe.
@@ -358,6 +398,9 @@ func (c *APIHHClient) getProviderEndpoint(ctx context.Context, endpoint string) 
 	endpoint = strings.TrimSpace(endpoint)
 	parsed, err := url.Parse(endpoint)
 	if err != nil || parsed == nil || parsed.Fragment != "" || parsed.Path == "" {
+		return nil, 0, newAPIError(APIErrorRemote, 0, "/", "", 0, errAPINetworkRequest)
+	}
+	if parsed.User != nil || parsed.Host != "" && !parsed.IsAbs() {
 		return nil, 0, newAPIError(APIErrorRemote, 0, "/", "", 0, errAPINetworkRequest)
 	}
 	if parsed.IsAbs() && (parsed.Scheme != c.baseURL.Scheme || parsed.Host != c.baseURL.Host) {

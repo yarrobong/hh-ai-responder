@@ -145,12 +145,23 @@ func mapSuitableResumePage(value wireSuitableResumePage) ([]string, error) {
 	return result, nil
 }
 
-func mapNegotiationPage(value wireNegotiationPage, endpointVacancyID int) (hhread.ApplicationPage, error) {
-	result := hhread.ApplicationPage{Items: make([]hhread.ApplicationRecord, 0, len(value.Items))}
+func mapNegotiationPage(value wireNegotiationPage, endpointVacancyID int, endpoint string) (hhread.NegotiationPage, error) {
+	result := hhread.NegotiationPage{
+		Items:      make([]hhread.ApplicationRecord, 0, len(value.Items)),
+		Page:       value.Page,
+		Pages:      value.Pages,
+		PagesKnown: value.Pages > 0,
+	}
+	if value.Found != nil {
+		result.Found, result.FoundKnown = *value.Found, true
+	}
+	if result.Page < 0 || (result.PagesKnown && (result.Pages < 1 || result.Page >= result.Pages)) {
+		return hhread.NegotiationPage{}, errors.New("HH API negotiation pagination is invalid")
+	}
 	for _, item := range value.Items {
 		externalID := strings.TrimSpace(scalarString(item.ID))
 		if externalID == "" {
-			return hhread.ApplicationPage{}, errors.New("HH API negotiation has no id")
+			return hhread.NegotiationPage{}, errors.New("HH API negotiation has no id")
 		}
 		vacancyID := int(parseProviderID(firstNonEmpty(scalarString(item.Vacancy.ID), scalarString(item.VacancyID))))
 		if vacancyID <= 0 {
@@ -159,7 +170,59 @@ func mapNegotiationPage(value wireNegotiationPage, endpointVacancyID int) (hhrea
 		resumeID := firstNonEmpty(scalarString(item.Resume.ID), scalarString(item.ResumeID))
 		result.Items = append(result.Items, hhread.ApplicationRecord{ExternalID: externalID, VacancyID: vacancyID, ResumeID: resumeID, URL: strings.TrimSpace(item.URL), Metadata: map[string]string{"hh_read_source": "api"}})
 	}
+	if result.PagesKnown {
+		result.Complete = result.Page+1 >= result.Pages
+		if !result.Complete {
+			result.NextURL = nextProviderPageURL(endpoint, result.Page+1)
+		}
+	} else if value.HasNext != nil {
+		result.HasNext, result.HasNextKnown = *value.HasNext, true
+		result.Complete = !*value.HasNext
+		if *value.HasNext {
+			result.NextURL = nextProviderPageURL(endpoint, result.Page+1)
+		}
+	} else if value.Paging != nil && value.Paging.Next != nil && strings.TrimSpace(value.Paging.Next.URL) != "" {
+		result.NextURL = strings.TrimSpace(value.Paging.Next.URL)
+	} else {
+		return hhread.NegotiationPage{}, errors.New("HH API negotiation pagination is unknown")
+	}
 	return result, nil
+}
+
+func mapNegotiationCollections(value wireNegotiationCollections) (hhread.NegotiationCollectionIndex, error) {
+	if value.Collections == nil {
+		return hhread.NegotiationCollectionIndex{}, errors.New("HH API negotiation collections are missing")
+	}
+	result := hhread.NegotiationCollectionIndex{Collections: make([]hhread.NegotiationCollection, 0, len(*value.Collections)), GeneratedCollections: make([]hhread.NegotiationCollection, 0, len(value.GeneratedCollections))}
+	for _, collection := range *value.Collections {
+		result.Collections = append(result.Collections, mapNegotiationCollection(collection))
+	}
+	for _, collection := range value.GeneratedCollections {
+		result.GeneratedCollections = append(result.GeneratedCollections, mapNegotiationCollection(collection))
+	}
+	return result, nil
+}
+
+func mapNegotiationCollection(value wireNegotiationCollection) hhread.NegotiationCollection {
+	result := hhread.NegotiationCollection{ID: strings.TrimSpace(value.ID), URL: strings.TrimSpace(value.URL), SubCollections: make([]hhread.NegotiationCollection, 0, len(value.SubCollections))}
+	if value.Counters.Total != nil && *value.Counters.Total >= 0 {
+		result.Total, result.TotalKnown = *value.Counters.Total, true
+	}
+	for _, sub := range value.SubCollections {
+		result.SubCollections = append(result.SubCollections, mapNegotiationCollection(sub))
+	}
+	return result
+}
+
+func nextProviderPageURL(endpoint string, page int) string {
+	parsed, err := url.Parse(strings.TrimSpace(endpoint))
+	if err != nil || parsed == nil || page < 0 {
+		return ""
+	}
+	query := parsed.Query()
+	query.Set("page", strconv.Itoa(page))
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
 }
 
 func parseProviderID(value string) int64 {

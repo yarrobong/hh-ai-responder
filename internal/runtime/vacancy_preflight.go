@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -20,41 +21,46 @@ import (
 // before an application. Known flags are deliberately separate from bool
 // values: false and "not observed" have different safety implications.
 type VacancyPreflight struct {
-	VacancyID                    int
-	Available                    bool
-	Archived                     bool
-	ArchivedKnown                bool
-	AlreadyResponded             bool
-	AlreadyRespondedKnown        bool
-	AlreadyRespondedEvidence     AlreadyRespondedEvidence
-	TestPresent                  bool
-	TestPresentKnown             bool
-	LetterRequired               bool
-	LetterRequiredKnown          bool
-	LetterAllowed                bool
-	LetterAllowedKnown           bool
-	Area                         string
-	AreaKnown                    bool
-	WorkSchedule                 string
-	WorkScheduleKnown            bool
-	WorkExperience               string
-	WorkExperienceKnown          bool
-	CanApply                     bool
-	CanApplyKnown                bool
-	ResponseURL                  string
-	ResponseIdentifierPresent    bool
-	NegotiationIdentifierPresent bool
-	NegotiationID                string `json:"-"`
-	NegotiationResumeID          string `json:"-"`
-	GotResponseRelation          bool
-	ExistingNegotiation          bool
-	ExistingNegotiationKnown     bool
-	SelectedResumeSuitable       bool
-	SelectedResumeSuitableKnown  bool
-	NegotiationsURLPresent       bool
-	SuitableResumesURLPresent    bool
-	ActiveState                  VacancyActiveState
-	ActiveEvidence               []VacancyActiveEvidenceCode
+	VacancyID                        int
+	Available                        bool
+	Archived                         bool
+	ArchivedKnown                    bool
+	AlreadyResponded                 bool
+	AlreadyRespondedKnown            bool
+	AlreadyRespondedEvidence         AlreadyRespondedEvidence
+	TestPresent                      bool
+	TestPresentKnown                 bool
+	LetterRequired                   bool
+	LetterRequiredKnown              bool
+	LetterAllowed                    bool
+	LetterAllowedKnown               bool
+	Area                             string
+	AreaKnown                        bool
+	WorkSchedule                     string
+	WorkScheduleKnown                bool
+	WorkExperience                   string
+	WorkExperienceKnown              bool
+	CanApply                         bool
+	CanApplyKnown                    bool
+	ResponseURL                      string
+	ResponseIdentifierPresent        bool
+	NegotiationIdentifierPresent     bool
+	NegotiationID                    string `json:"-"`
+	NegotiationResumeID              string `json:"-"`
+	GotResponseRelation              bool
+	ExistingNegotiation              bool
+	ExistingNegotiationKnown         bool
+	SelectedResumeSuitable           bool
+	SelectedResumeSuitableKnown      bool
+	NegotiationsURLPresent           bool
+	SuitableResumesURLPresent        bool
+	NegotiationCollectionsDiscovered int
+	NegotiationCollectionsChecked    int
+	NegotiationPagesChecked          int
+	MatchingNegotiation              bool
+	NegotiationScanComplete          bool
+	ActiveState                      VacancyActiveState
+	ActiveEvidence                   []VacancyActiveEvidenceCode
 }
 
 type VacancyActiveState string
@@ -113,38 +119,43 @@ type AlreadyRespondedEvidence struct {
 }
 
 type VacancyPreflightResult struct {
-	Type                         string                   `json:"type"`
-	VacancyID                    int                      `json:"vacancy_id"`
-	ResponseURL                  string                   `json:"response_url,omitempty"`
-	Archived                     *bool                    `json:"archived"`
-	ArchivedKnown                bool                     `json:"archived_known"`
-	AlreadyResponded             *bool                    `json:"already_responded"`
-	AlreadyRespondedKnown        bool                     `json:"already_responded_known"`
-	AlreadyRespondedValue        string                   `json:"already_responded_value"`
-	AlreadyRespondedEvidenceCode string                   `json:"already_responded_evidence_code"`
-	AlreadyRespondedEvidence     AlreadyRespondedEvidence `json:"already_responded_evidence"`
-	TestPresent                  *bool                    `json:"test_present"`
-	TestPresentKnown             bool                     `json:"test_present_known"`
-	LetterRequired               *bool                    `json:"letter_required"`
-	LetterRequiredKnown          bool                     `json:"letter_required_known"`
-	LetterAllowed                *bool                    `json:"letter_allowed"`
-	LetterAllowedKnown           bool                     `json:"letter_allowed_known"`
-	CanApply                     *bool                    `json:"can_apply"`
-	CanApplyKnown                bool                     `json:"can_apply_known"`
-	Area                         string                   `json:"area,omitempty"`
-	WorkSchedule                 string                   `json:"work_schedule,omitempty"`
-	WorkExperience               string                   `json:"work_experience,omitempty"`
-	Active                       string                   `json:"active"`
-	ActiveEvidence               []string                 `json:"active_evidence,omitempty"`
-	ExistingNegotiation          *bool                    `json:"existing_negotiation"`
-	ExistingNegotiationKnown     bool                     `json:"existing_negotiation_known"`
-	SelectedResumeSuitable       *bool                    `json:"selected_resume_suitable"`
-	SelectedResumeSuitableKnown  bool                     `json:"selected_resume_suitable_known"`
-	NegotiationIDPresent         bool                     `json:"negotiation_id_present"`
-	NegotiationResumeIDPresent   bool                     `json:"negotiation_resume_id_present"`
-	GotResponseRelation          bool                     `json:"got_response_relation"`
-	NegotiationsURLPresent       bool                     `json:"negotiations_url_present"`
-	SuitableResumesURLPresent    bool                     `json:"suitable_resumes_url_present"`
+	Type                             string                   `json:"type"`
+	VacancyID                        int                      `json:"vacancy_id"`
+	ResponseURL                      string                   `json:"response_url,omitempty"`
+	Archived                         *bool                    `json:"archived"`
+	ArchivedKnown                    bool                     `json:"archived_known"`
+	AlreadyResponded                 *bool                    `json:"already_responded"`
+	AlreadyRespondedKnown            bool                     `json:"already_responded_known"`
+	AlreadyRespondedValue            string                   `json:"already_responded_value"`
+	AlreadyRespondedEvidenceCode     string                   `json:"already_responded_evidence_code"`
+	AlreadyRespondedEvidence         AlreadyRespondedEvidence `json:"already_responded_evidence"`
+	TestPresent                      *bool                    `json:"test_present"`
+	TestPresentKnown                 bool                     `json:"test_present_known"`
+	LetterRequired                   *bool                    `json:"letter_required"`
+	LetterRequiredKnown              bool                     `json:"letter_required_known"`
+	LetterAllowed                    *bool                    `json:"letter_allowed"`
+	LetterAllowedKnown               bool                     `json:"letter_allowed_known"`
+	CanApply                         *bool                    `json:"can_apply"`
+	CanApplyKnown                    bool                     `json:"can_apply_known"`
+	Area                             string                   `json:"area,omitempty"`
+	WorkSchedule                     string                   `json:"work_schedule,omitempty"`
+	WorkExperience                   string                   `json:"work_experience,omitempty"`
+	Active                           string                   `json:"active"`
+	ActiveEvidence                   []string                 `json:"active_evidence,omitempty"`
+	ExistingNegotiation              *bool                    `json:"existing_negotiation"`
+	ExistingNegotiationKnown         bool                     `json:"existing_negotiation_known"`
+	SelectedResumeSuitable           *bool                    `json:"selected_resume_suitable"`
+	SelectedResumeSuitableKnown      bool                     `json:"selected_resume_suitable_known"`
+	NegotiationIDPresent             bool                     `json:"negotiation_id_present"`
+	NegotiationResumeIDPresent       bool                     `json:"negotiation_resume_id_present"`
+	GotResponseRelation              bool                     `json:"got_response_relation"`
+	NegotiationsURLPresent           bool                     `json:"negotiations_url_present"`
+	SuitableResumesURLPresent        bool                     `json:"suitable_resumes_url_present"`
+	NegotiationCollectionsDiscovered int                      `json:"negotiation_collections_discovered"`
+	NegotiationCollectionsChecked    int                      `json:"negotiation_collections_checked"`
+	NegotiationPagesChecked          int                      `json:"negotiation_pages_checked"`
+	MatchingNegotiation              bool                     `json:"matching_negotiation"`
+	NegotiationScanComplete          bool                     `json:"negotiation_scan_complete"`
 }
 
 func (p VacancyPreflight) event() VacancyPreflightResult {
@@ -154,38 +165,43 @@ func (p VacancyPreflight) event() VacancyPreflightResult {
 		activeEvidence = append(activeEvidence, string(code))
 	}
 	return VacancyPreflightResult{
-		Type:                         "vacancy_preflight",
-		VacancyID:                    p.VacancyID,
-		ResponseURL:                  p.ResponseURL,
-		Archived:                     knownBoolPointer(p.Archived, p.ArchivedKnown),
-		ArchivedKnown:                p.ArchivedKnown,
-		AlreadyResponded:             knownBoolPointer(evidence.Value == AlreadyRespondedYes, evidence.Value != AlreadyRespondedUnknown),
-		AlreadyRespondedKnown:        evidence.Value != AlreadyRespondedUnknown,
-		AlreadyRespondedValue:        string(evidence.Value),
-		AlreadyRespondedEvidenceCode: string(evidence.EvidenceCode),
-		AlreadyRespondedEvidence:     evidence,
-		TestPresent:                  knownBoolPointer(p.TestPresent, p.TestPresentKnown),
-		TestPresentKnown:             p.TestPresentKnown,
-		LetterRequired:               knownBoolPointer(p.LetterRequired, p.LetterRequiredKnown),
-		LetterRequiredKnown:          p.LetterRequiredKnown,
-		LetterAllowed:                knownBoolPointer(p.LetterAllowed, p.LetterAllowedKnown),
-		LetterAllowedKnown:           p.LetterAllowedKnown,
-		CanApply:                     knownBoolPointer(p.CanApply, p.CanApplyKnown),
-		CanApplyKnown:                p.CanApplyKnown,
-		Area:                         p.Area,
-		WorkSchedule:                 p.WorkSchedule,
-		WorkExperience:               p.WorkExperience,
-		Active:                       string(p.activeState()),
-		ActiveEvidence:               activeEvidence,
-		ExistingNegotiation:          knownBoolPointer(p.ExistingNegotiation, p.ExistingNegotiationKnown),
-		ExistingNegotiationKnown:     p.ExistingNegotiationKnown,
-		SelectedResumeSuitable:       knownBoolPointer(p.SelectedResumeSuitable, p.SelectedResumeSuitableKnown),
-		SelectedResumeSuitableKnown:  p.SelectedResumeSuitableKnown,
-		NegotiationIDPresent:         strings.TrimSpace(p.NegotiationID) != "",
-		NegotiationResumeIDPresent:   strings.TrimSpace(p.NegotiationResumeID) != "",
-		GotResponseRelation:          p.GotResponseRelation,
-		NegotiationsURLPresent:       p.NegotiationsURLPresent,
-		SuitableResumesURLPresent:    p.SuitableResumesURLPresent,
+		Type:                             "vacancy_preflight",
+		VacancyID:                        p.VacancyID,
+		ResponseURL:                      p.ResponseURL,
+		Archived:                         knownBoolPointer(p.Archived, p.ArchivedKnown),
+		ArchivedKnown:                    p.ArchivedKnown,
+		AlreadyResponded:                 knownBoolPointer(evidence.Value == AlreadyRespondedYes, evidence.Value != AlreadyRespondedUnknown),
+		AlreadyRespondedKnown:            evidence.Value != AlreadyRespondedUnknown,
+		AlreadyRespondedValue:            string(evidence.Value),
+		AlreadyRespondedEvidenceCode:     string(evidence.EvidenceCode),
+		AlreadyRespondedEvidence:         evidence,
+		TestPresent:                      knownBoolPointer(p.TestPresent, p.TestPresentKnown),
+		TestPresentKnown:                 p.TestPresentKnown,
+		LetterRequired:                   knownBoolPointer(p.LetterRequired, p.LetterRequiredKnown),
+		LetterRequiredKnown:              p.LetterRequiredKnown,
+		LetterAllowed:                    knownBoolPointer(p.LetterAllowed, p.LetterAllowedKnown),
+		LetterAllowedKnown:               p.LetterAllowedKnown,
+		CanApply:                         knownBoolPointer(p.CanApply, p.CanApplyKnown),
+		CanApplyKnown:                    p.CanApplyKnown,
+		Area:                             p.Area,
+		WorkSchedule:                     p.WorkSchedule,
+		WorkExperience:                   p.WorkExperience,
+		Active:                           string(p.activeState()),
+		ActiveEvidence:                   activeEvidence,
+		ExistingNegotiation:              knownBoolPointer(p.ExistingNegotiation, p.ExistingNegotiationKnown),
+		ExistingNegotiationKnown:         p.ExistingNegotiationKnown,
+		SelectedResumeSuitable:           knownBoolPointer(p.SelectedResumeSuitable, p.SelectedResumeSuitableKnown),
+		SelectedResumeSuitableKnown:      p.SelectedResumeSuitableKnown,
+		NegotiationIDPresent:             strings.TrimSpace(p.NegotiationID) != "",
+		NegotiationResumeIDPresent:       strings.TrimSpace(p.NegotiationResumeID) != "",
+		GotResponseRelation:              p.GotResponseRelation,
+		NegotiationsURLPresent:           p.NegotiationsURLPresent,
+		SuitableResumesURLPresent:        p.SuitableResumesURLPresent,
+		NegotiationCollectionsDiscovered: p.NegotiationCollectionsDiscovered,
+		NegotiationCollectionsChecked:    p.NegotiationCollectionsChecked,
+		NegotiationPagesChecked:          p.NegotiationPagesChecked,
+		MatchingNegotiation:              p.MatchingNegotiation,
+		NegotiationScanComplete:          p.NegotiationScanComplete,
 	}
 }
 
@@ -374,7 +390,8 @@ func (r *HHAIResponder) getVacancyPreflightContext(ctx context.Context, vacancy 
 type apiApplicationPreflightSource interface {
 	hhreadport.VacancyDetailSource
 	ReadSuitableResumeIDs(context.Context, string) ([]string, error)
-	ReadNegotiations(context.Context, string) (hhread.ApplicationPage, error)
+	ReadNegotiationCollections(context.Context, string) (hhread.NegotiationCollectionIndex, error)
+	ReadNegotiationCollection(context.Context, string) (hhread.NegotiationPage, error)
 }
 
 func (r *HHAIResponder) getAPIVacancyPreflightContext(ctx context.Context, vacancy Vacancy) (VacancyPreflight, error) {
@@ -407,28 +424,12 @@ func apiVacancyPreflightWithSource(ctx context.Context, source apiApplicationPre
 	if err != nil {
 		return VacancyPreflight{}, err
 	}
+	selectedResumeID = strings.TrimSpace(selectedResumeID)
 	preflight := apiVacancyPreflight(record, vacancyID)
 	if strings.TrimSpace(record.NegotiationsURL) != "" {
 		preflight.NegotiationsURLPresent = true
-		negotiations, negotiationErr := source.ReadNegotiations(ctx, record.NegotiationsURL)
-		if negotiationErr == nil {
-			for _, item := range negotiations.Items {
-				if item.VacancyID != vacancyID || strings.TrimSpace(item.ExternalID) == "" {
-					continue
-				}
-				preflight.ExistingNegotiation = true
-				preflight.ExistingNegotiationKnown = true
-				preflight.NegotiationID = strings.TrimSpace(item.ExternalID)
-				preflight.NegotiationResumeID = strings.TrimSpace(item.ResumeID)
-				preflight.NegotiationIdentifierPresent = true
-				if preflight.alreadyRespondedEvidence().Value != AlreadyRespondedYes {
-					setAlreadyRespondedEvidence(&preflight, AlreadyRespondedYes, EvidenceNegotiationIDFound)
-				}
-				break
-			}
-		}
+		applyAPINegotiationScan(&preflight, scanAPINegotiations(ctx, source, record.NegotiationsURL, vacancyID, selectedResumeID))
 	}
-	selectedResumeID = strings.TrimSpace(selectedResumeID)
 	if strings.TrimSpace(record.SuitableResumesURL) != "" {
 		preflight.SuitableResumesURLPresent = true
 		if selectedResumeID != "" {
@@ -447,6 +448,205 @@ func apiVacancyPreflightWithSource(ctx context.Context, source apiApplicationPre
 	return preflight, nil
 }
 
+type apiNegotiationScan struct {
+	collectionsDiscovered int
+	collectionsChecked    int
+	pagesChecked          int
+	sameVacancy           *hhread.ApplicationRecord
+	candidate             *hhread.ApplicationRecord
+	matching              *hhread.ApplicationRecord
+	complete              bool
+}
+
+func scanAPINegotiations(ctx context.Context, source apiApplicationPreflightSource, endpoint string, vacancyID int, selectedResumeID string) apiNegotiationScan {
+	result := apiNegotiationScan{}
+	index, err := source.ReadNegotiationCollections(ctx, endpoint)
+	if err != nil {
+		return result
+	}
+	if index.DirectPage != nil {
+		page := *index.DirectPage
+		expectedPage := 0
+		itemsSeen := 0
+		found := 0
+		foundKnown := false
+		for {
+			if page.Page != expectedPage || page.Page < 0 || (page.PagesKnown && (page.Pages < 1 || page.Page >= page.Pages)) {
+				return result
+			}
+			result.pagesChecked++
+			if page.FoundKnown {
+				if foundKnown && page.Found != found {
+					return result
+				}
+				found, foundKnown = page.Found, true
+			}
+			itemsSeen += len(page.Items)
+			if !inspectAPINegotiationItems(&result, page.Items, vacancyID, selectedResumeID) {
+				return result
+			}
+			if page.NextURL != "" {
+				page, err = source.ReadNegotiationCollection(ctx, page.NextURL)
+				if err != nil {
+					return result
+				}
+				expectedPage++
+				continue
+			}
+			if !page.Complete {
+				return result
+			}
+			break
+		}
+		if foundKnown && itemsSeen != found {
+			return result
+		}
+		result.complete = strings.TrimSpace(selectedResumeID) != "" && result.candidate == nil
+		return result
+	}
+	collections := flattenNegotiationCollections(index)
+	result.collectionsDiscovered = len(collections)
+	if len(collections) == 0 {
+		result.complete = strings.TrimSpace(selectedResumeID) != ""
+		return result
+	}
+	for _, collection := range collections {
+		if !negotiationCollectionURLForVacancy(collection.URL, vacancyID) {
+			return result
+		}
+		collectionItems := 0
+		collectionFound := 0
+		collectionFoundKnown := false
+		pageEndpoint := collection.URL
+		expectedPage := 0
+		for {
+			page, pageErr := source.ReadNegotiationCollection(ctx, pageEndpoint)
+			if pageErr != nil || page.Page != expectedPage || page.Page < 0 || (page.PagesKnown && (page.Pages < 1 || page.Page >= page.Pages)) {
+				return result
+			}
+			result.pagesChecked++
+			if page.FoundKnown {
+				if collectionFoundKnown && page.Found != collectionFound {
+					return result
+				}
+				collectionFound, collectionFoundKnown = page.Found, true
+			}
+			collectionItems += len(page.Items)
+			if !inspectAPINegotiationItems(&result, page.Items, vacancyID, selectedResumeID) {
+				return result
+			}
+			if page.NextURL != "" {
+				pageEndpoint = page.NextURL
+				expectedPage++
+				continue
+			}
+			if !page.Complete {
+				return result
+			}
+			break
+		}
+		if (collection.TotalKnown && collectionItems != collection.Total) || (collectionFoundKnown && collectionItems != collectionFound) {
+			return result
+		}
+		result.collectionsChecked++
+	}
+	result.complete = strings.TrimSpace(selectedResumeID) != "" && result.candidate == nil
+	return result
+}
+
+func inspectAPINegotiationItems(result *apiNegotiationScan, items []hhread.ApplicationRecord, vacancyID int, selectedResumeID string) bool {
+	if result == nil {
+		return false
+	}
+	for index := range items {
+		item := items[index]
+		if item.VacancyID != 0 && item.VacancyID != vacancyID {
+			continue
+		}
+		if strings.TrimSpace(item.ExternalID) == "" {
+			return false
+		}
+		if result.sameVacancy == nil {
+			sameVacancy := item
+			result.sameVacancy = &sameVacancy
+		}
+		if strings.TrimSpace(selectedResumeID) == "" || strings.TrimSpace(item.ResumeID) == "" {
+			if result.candidate == nil {
+				candidate := item
+				result.candidate = &candidate
+			}
+			continue
+		}
+		if strings.TrimSpace(item.ResumeID) == strings.TrimSpace(selectedResumeID) {
+			matched := item
+			result.matching = &matched
+		}
+	}
+	return true
+}
+
+func negotiationCollectionURLForVacancy(endpoint string, vacancyID int) bool {
+	parsed, err := url.Parse(strings.TrimSpace(endpoint))
+	if err != nil || parsed == nil || strings.TrimSpace(parsed.Query().Get("vacancy_id")) == "" {
+		return false
+	}
+	return strings.TrimSpace(parsed.Query().Get("vacancy_id")) == strconv.Itoa(vacancyID)
+}
+
+func flattenNegotiationCollections(index hhread.NegotiationCollectionIndex) []hhread.NegotiationCollection {
+	result := make([]hhread.NegotiationCollection, 0, len(index.Collections)+len(index.GeneratedCollections))
+	seenURLs := make(map[string]struct{})
+	var visit func([]hhread.NegotiationCollection)
+	visit = func(values []hhread.NegotiationCollection) {
+		for _, value := range values {
+			url := strings.TrimSpace(value.URL)
+			if url == "" {
+				result = append(result, value)
+			} else if _, seen := seenURLs[url]; !seen {
+				seenURLs[url] = struct{}{}
+				result = append(result, value)
+			}
+			visit(value.SubCollections)
+		}
+	}
+	visit(index.Collections)
+	visit(index.GeneratedCollections)
+	return result
+}
+
+func applyAPINegotiationScan(preflight *VacancyPreflight, scan apiNegotiationScan) {
+	if preflight == nil {
+		return
+	}
+	preflight.NegotiationCollectionsDiscovered = scan.collectionsDiscovered
+	preflight.NegotiationCollectionsChecked = scan.collectionsChecked
+	preflight.NegotiationPagesChecked = scan.pagesChecked
+	preflight.NegotiationScanComplete = scan.complete
+	if scan.sameVacancy != nil {
+		preflight.ExistingNegotiation, preflight.ExistingNegotiationKnown = true, true
+		preflight.NegotiationID = strings.TrimSpace(scan.sameVacancy.ExternalID)
+		preflight.NegotiationResumeID = strings.TrimSpace(scan.sameVacancy.ResumeID)
+		preflight.NegotiationIdentifierPresent = preflight.NegotiationID != ""
+	}
+	if scan.matching == nil {
+		if scan.complete && preflight.alreadyRespondedEvidence().Value != AlreadyRespondedYes {
+			setAlreadyRespondedEvidence(preflight, AlreadyRespondedNo, EvidenceExplicitNotResponded)
+			if scan.sameVacancy == nil {
+				preflight.ExistingNegotiation, preflight.ExistingNegotiationKnown = false, true
+			}
+		}
+		return
+	}
+	preflight.MatchingNegotiation = true
+	preflight.ExistingNegotiation, preflight.ExistingNegotiationKnown = true, true
+	preflight.NegotiationID = strings.TrimSpace(scan.matching.ExternalID)
+	preflight.NegotiationResumeID = strings.TrimSpace(scan.matching.ResumeID)
+	preflight.NegotiationIdentifierPresent = preflight.NegotiationID != ""
+	if preflight.alreadyRespondedEvidence().Value != AlreadyRespondedYes {
+		setAlreadyRespondedEvidence(preflight, AlreadyRespondedYes, EvidenceNegotiationIDFound)
+	}
+}
+
 func apiVacancyPreflight(record hhread.VacancyRecord, vacancyID int) VacancyPreflight {
 	preflight := VacancyPreflight{
 		VacancyID: vacancyID, Archived: record.Archived, ArchivedKnown: record.ArchivedKnown,
@@ -462,7 +662,10 @@ func apiVacancyPreflight(record hhread.VacancyRecord, vacancyID int) VacancyPref
 		if *record.AlreadyResponded {
 			setAlreadyRespondedEvidence(&preflight, AlreadyRespondedYes, EvidenceExplicitRespondedMarker)
 		} else {
-			setAlreadyRespondedEvidence(&preflight, AlreadyRespondedNo, EvidenceExplicitNotResponded)
+			// Applicant duplicate NO is established only by an exhaustive
+			// vacancy-scoped negotiation scan below. A false relation alone is
+			// not enough to prove absence of a selected-resume negotiation.
+			setAlreadyRespondedEvidence(&preflight, AlreadyRespondedUnknown, EvidenceAmbiguousPage)
 		}
 	} else {
 		setAlreadyRespondedEvidence(&preflight, AlreadyRespondedUnknown, EvidenceAmbiguousPage)

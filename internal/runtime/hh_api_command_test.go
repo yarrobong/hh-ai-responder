@@ -300,7 +300,7 @@ func TestHHAPIPreflightIsGETOnlyAndSanitized(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := out.String()
-	for _, want := range []string{"Vacancy ID: 42", "got_response relation: NO", "negotiations URL present: YES", "suitable resumes URL present: YES", "selected resume suitable: YES", "existing negotiation: UNKNOWN", "negotiation ID: absent", "final duplicate state: UNKNOWN"} {
+	for _, want := range []string{"Vacancy ID: 42", "got_response relation: NO", "negotiations URL present: YES", "suitable resumes URL present: YES", "selected resume suitable: YES", "existing negotiation: UNKNOWN", "negotiation ID: absent", "negotiation collections discovered: 0", "negotiation collections checked: 0", "negotiation pages checked: 0", "matching negotiation: NO", "negotiation scan complete: NO", "final duplicate state: UNKNOWN"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("output=%q, missing %q", output, want)
 		}
