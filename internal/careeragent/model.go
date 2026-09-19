@@ -207,7 +207,7 @@ func canonicalSearchProfileKey(profile SearchProfile) string {
 	for key, values := range profile.Params {
 		params[key] = append([]string(nil), values...)
 	}
-	return string(profile.RoleFamily) + "\x00" + normalizeQuery(profile.Query) + "\x00" + params.Encode()
+	return string(profile.RoleFamily) + "\x00" + normalizeText(normalizeQuery(profile.Query)) + "\x00" + params.Encode()
 }
 
 func PlanSearches(resumes []ResumeProfile, signals CandidateSignals, constraints SearchConstraints) []SearchProfile {

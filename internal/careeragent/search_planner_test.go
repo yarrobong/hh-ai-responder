@@ -107,6 +107,14 @@ func TestCanonicalSearchProfileKeyIgnoresSourceResumeIDs(t *testing.T) {
 	}
 }
 
+func TestCanonicalSearchProfileKeyNormalizesQueryCase(t *testing.T) {
+	base := SearchProfile{RoleFamily: RoleFamilyPythonBackend, Query: "Python backend"}
+	other := SearchProfile{RoleFamily: RoleFamilyPythonBackend, Query: "python   backend"}
+	if canonicalSearchProfileKey(base) != canonicalSearchProfileKey(other) {
+		t.Fatalf("query case or spacing changed canonical identity: %q != %q", canonicalSearchProfileKey(base), canonicalSearchProfileKey(other))
+	}
+}
+
 func TestPlanSearchesUsesTrustedRoleVariantOnlyInsideEligibleFamily(t *testing.T) {
 	profiles := PlanSearches([]ResumeProfile{{ID: "support", Title: "Техническая поддержка", Enabled: true}}, CandidateSignals{Roles: []string{"специалист технической поддержки"}}, SearchConstraints{MaxProfiles: 16, SearchPeriodDays: 7})
 	foundVariant := false
