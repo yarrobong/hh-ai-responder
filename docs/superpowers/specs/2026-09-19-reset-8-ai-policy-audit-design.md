@@ -50,15 +50,17 @@ HTML. The run reported `shadow_write_count=0`, `would_apply=0`,
 The current flow is:
 
 1. Search Planner discovers and deduplicates vacancies.
-2. RESET-6 routing chooses a resume or routes the vacancy to an early
-   terminal outcome.
-3. Only `ROUTE_SELECTED` vacancies receive detail/AI evaluation.
-4. The AI returns score, advisory recommendation, reasons, and candidate-free
+2. Safe vacancy detail enrichment may occur before final RESET-6 routing. This
+   existing detail sequencing is preserved.
+3. RESET-6 performs final routing and chooses a resume or routes the vacancy to
+   a terminal outcome.
+4. Only final `ROUTE_SELECTED` vacancies proceed to AI/local-policy evaluation.
+5. The AI returns score, advisory recommendation, reasons, and candidate-free
    hard-requirement candidates containing `requirement`, `category`, and exact
    `vacancy_evidence`.
-5. Local code derives `met`, `missing`, or `unknown` from trusted candidate
+6. Local code derives `met`, `missing`, or `unknown` from trusted candidate
    facts. AI `status` and `candidate_evidence` are not accepted as authority.
-6. `vacancyDecisionWithReason` applies the local policy.
+7. `vacancyDecisionWithReason` applies the local policy.
 
 The implementation at the baseline preserves the historical Stage 29.6
 precedence exactly:
@@ -270,6 +272,24 @@ Observed sources:
    because the report stores a short evidence fragment rather than the source
    sentence/section and mandatory cue.
 
+### Expected corrective transitions
+
+These transitions are required for a later RESET-8A implementation replay. They
+correct classification and first-reason accuracy; they are not expected to
+create `MATCH` outcomes and must not be used to justify lowering the score
+threshold or weakening the safety policy.
+
+| Vacancy | Current hard/local result | Expected corrected result | Final decision after correction |
+|---:|---|---|---|
+| 137531969 | `2 года AI/ML/NLP = MISSING`; `HARD_REQUIREMENT_MISSING` | `2 года AI/ML/NLP = UNKNOWN`; the next Stage 29.6 gate is score `25 < 65` | `REJECT / FIT_SCORE_BELOW_THRESHOLD` |
+| 136577315 | `Москва (офис) = UNKNOWN`; `HARD_REQUIREMENT_UNKNOWN` | Office availability is `NOT_A_REQUIREMENT`/`OFFICE_AVAILABLE`; no hard blocker remains, but recommendation is `UNCERTAIN` | `REVIEW_REQUIRED / AI_ADVISORY_CONCERN` |
+
+Bare stack fragments such as FastAPI, Kafka, Kubernetes, SQLAlchemy, Alembic,
+Flutter, RabbitMQ, and CI/CD remain audit-only `AMBIGUOUS` classifications
+until bounded source context proves a deterministic mandatory/preference rule.
+The current safe behavior remains: absent candidate evidence is `UNKNOWN`, not
+`MISSING`, and `AMBIGUOUS` is not a new production decision rule.
+
 ## Router versus AI disagreement
 
 Router and AI scores are different scales and answer different questions, so
@@ -323,13 +343,16 @@ The design should:
    equivalent compound domains.
 3. Treat office availability as non-blocking unless the source explicitly
    requires office attendance, relocation, or a named location.
-4. Preserve the Stage 29.6 precedence and threshold of 65 unchanged.
-5. Preserve `UNKNOWN` for absent candidate evidence and never turn it into
+4. Preserve ambiguous bare stack fragments as audit-only until source context
+   and mandatory/preference cues are available; do not mass-change their
+   decision semantics.
+5. Preserve the Stage 29.6 precedence and threshold of 65 unchanged.
+6. Preserve `UNKNOWN` for absent candidate evidence and never turn it into
    `MISSING` merely to reduce review volume.
-6. Keep AI recommendation advisory. `DO_NOT_APPLY` at a passing score must
+7. Keep AI recommendation advisory. `DO_NOT_APPLY` at a passing score must
    remain `REVIEW_REQUIRED / AI_ADVISORY_CONCERN` when no stronger local gate
    fires.
-7. Add observational extraction/provenance telemetry before changing
+8. Add observational extraction/provenance telemetry before changing
    decision semantics.
 
 No proposed change is authorized by this document. In particular, increasing
@@ -371,6 +394,7 @@ score/recommendation independence, family behavior, router/AI disagreement,
 and telemetry gaps are documented; likely false rejection patterns have
 regression fixtures; and no production implementation or HH write was made.
 
-For this baseline, `MATCH=0` is acceptable only as an audit result. The two
-likely false patterns above must be resolved or explicitly accepted in a
-separate reviewed implementation step before they can be considered stable.
+For this baseline, `MATCH=0` is acceptable as an audit result. The two likely
+false patterns above require the expected reason-correction transitions in the
+separate reviewed implementation step; neither transition is a MATCH-creation
+objective.
