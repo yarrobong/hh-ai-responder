@@ -2,12 +2,18 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,6 +37,22 @@ func validAPIApplicationApproval(now time.Time) APIApplicationApproval {
 		PreviewFreshAt:   now,
 	}
 	value.ContentHash = contentHash(value.CoverLetter)
+	return value
+}
+
+func validManualAPIApplicationApproval(now time.Time) APIApplicationApproval {
+	value := validAPIApplicationApproval(now)
+	score := 82
+	value.Status = pilotManualReviewStatus
+	value.FinalDecision = "REVIEW_REQUIRED"
+	value.ApprovalBasis = manualApprovalBasis
+	value.OperatorApproved = true
+	value.OperatorApprovalTimestamp = now
+	value.OriginalAIScore = &score
+	value.OriginalAIRecommendation = "UNCERTAIN"
+	value.OriginalAIRecommendationReasons = []string{"operator review required"}
+	value.OriginalFinalDecision = "REVIEW_REQUIRED"
+	value.PilotArtifactHash = strings.Repeat("a", 64)
 	return value
 }
 
@@ -223,5 +245,231 @@ func TestValidateAPIApplicationApprovalRequiresExactFreshIdentity(t *testing.T) 
 				t.Fatalf("error=%v, want %v", err, test.err)
 			}
 		})
+	}
+}
+
+func TestValidateAPIApplicationApprovalAcceptsManualReviewBasisAndRejectsMalformedProvenance(t *testing.T) {
+	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	manual := validManualAPIApplicationApproval(now)
+	if err := validateAPIApplicationApproval(manual, 42, "resume-provider-7", now); err != nil {
+		t.Fatalf("valid manual approval error=%v", err)
+	}
+	if err := validateAPIApplicationApproval(validAPIApplicationApproval(now), 42, "resume-provider-7", now); err != nil {
+		t.Fatalf("automatic approval compatibility error=%v", err)
+	}
+	tests := []struct {
+		name   string
+		mutate func(*APIApplicationApproval)
+	}{
+		{name: "wrong status", mutate: func(value *APIApplicationApproval) { value.Status = "READY_FOR_EXPLICIT_SEND" }},
+		{name: "match final decision", mutate: func(value *APIApplicationApproval) { value.FinalDecision = "MATCH" }},
+		{name: "wrong basis", mutate: func(value *APIApplicationApproval) { value.ApprovalBasis = "OTHER" }},
+		{name: "operator not approved", mutate: func(value *APIApplicationApproval) { value.OperatorApproved = false }},
+		{name: "missing approval timestamp", mutate: func(value *APIApplicationApproval) { value.OperatorApprovalTimestamp = time.Time{} }},
+		{name: "missing original score", mutate: func(value *APIApplicationApproval) { value.OriginalAIScore = nil }},
+		{name: "wrong original recommendation", mutate: func(value *APIApplicationApproval) { value.OriginalAIRecommendation = "DO_NOT_APPLY" }},
+		{name: "missing pilot hash", mutate: func(value *APIApplicationApproval) { value.PilotArtifactHash = "" }},
+		{name: "missing nonce", mutate: func(value *APIApplicationApproval) { value.Nonce = "" }},
+		{name: "used nonce", mutate: func(value *APIApplicationApproval) { used := now; value.NonceUsedAt = &used }},
+		{name: "changed letter", mutate: func(value *APIApplicationApproval) { value.CoverLetter += " changed" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			value := manual
+			test.mutate(&value)
+			if err := validateAPIApplicationApproval(value, 42, "resume-provider-7", now); err == nil {
+				t.Fatal("malformed manual approval unexpectedly passed")
+			}
+		})
+	}
+}
+
+func TestValidateControlledAPIApplicationPreflightRequiresAllFreshProviderSafetyFacts(t *testing.T) {
+	base := VacancyPreflight{
+		Available: true, ArchivedKnown: true, Archived: false,
+		CanApplyKnown: true, CanApply: true,
+		TestPresentKnown: true, TestPresent: false,
+		SelectedResumeSuitableKnown: true, SelectedResumeSuitable: true,
+		SuitableResumesScanComplete: true, NegotiationScanComplete: true,
+		VacancyTypeKnown: true, VacancyTypeID: "open",
+		ActiveState:              VacancyActiveStateActive,
+		AlreadyRespondedEvidence: AlreadyRespondedEvidence{Value: AlreadyRespondedNo, EvidenceCode: EvidenceExplicitNotResponded},
+	}
+	tests := []struct {
+		name   string
+		mutate func(*VacancyPreflight)
+	}{
+		{name: "duplicate", mutate: func(value *VacancyPreflight) { value.AlreadyRespondedEvidence.Value = AlreadyRespondedYes }},
+		{name: "duplicate unknown", mutate: func(value *VacancyPreflight) { value.AlreadyRespondedEvidence.Value = AlreadyRespondedUnknown }},
+		{name: "unsuitable", mutate: func(value *VacancyPreflight) { value.SelectedResumeSuitable = false }},
+		{name: "suitability unknown", mutate: func(value *VacancyPreflight) { value.SelectedResumeSuitableKnown = false }},
+		{name: "availability unavailable", mutate: func(value *VacancyPreflight) { value.Available = false }},
+		{name: "inactive", mutate: func(value *VacancyPreflight) { value.ActiveState = VacancyActiveStateInactive }},
+		{name: "active unknown", mutate: func(value *VacancyPreflight) { value.ActiveState = VacancyActiveStateUnknown }},
+		{name: "can apply false", mutate: func(value *VacancyPreflight) { value.CanApply = false }},
+		{name: "can apply unknown", mutate: func(value *VacancyPreflight) { value.CanApplyKnown = false }},
+		{name: "test required", mutate: func(value *VacancyPreflight) { value.TestPresent = true }},
+		{name: "test unknown", mutate: func(value *VacancyPreflight) { value.TestPresentKnown = false }},
+		{name: "suitable scan incomplete", mutate: func(value *VacancyPreflight) { value.SuitableResumesScanComplete = false }},
+		{name: "negotiation scan incomplete", mutate: func(value *VacancyPreflight) { value.NegotiationScanComplete = false }},
+		{name: "unknown vacancy type", mutate: func(value *VacancyPreflight) { value.VacancyTypeKnown = false }},
+		{name: "direct response path", mutate: func(value *VacancyPreflight) { value.ResponseIdentifierPresent = true }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			value := base
+			test.mutate(&value)
+			if err := validateControlledAPIApplicationPreflight(value); err == nil {
+				t.Fatal("unsafe fresh preflight unexpectedly passed")
+			}
+		})
+	}
+	if err := validateControlledAPIApplicationPreflight(base); err != nil {
+		t.Fatalf("safe fresh preflight was blocked: %v", err)
+	}
+}
+
+func TestConsumeAPIApplicationApprovalNonceIsDurableAndOneTime(t *testing.T) {
+	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "approval.json")
+	approval := validManualAPIApplicationApproval(now)
+	raw, err := json.Marshal(approval)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := consumeAPIApplicationApprovalNonce(path, approval, 42, "resume-provider-7", now); err != nil {
+		t.Fatal(err)
+	}
+	consumed, err := loadAPIApplicationApproval(path)
+	if err != nil || consumed.NonceUsedAt == nil {
+		t.Fatalf("consumed approval=%+v err=%v", consumed, err)
+	}
+	if err := consumeAPIApplicationApprovalNonce(path, approval, 42, "resume-provider-7", now); !errors.Is(err, errAPIApplicationApprovalNonce) {
+		t.Fatalf("second consumption error=%v, want nonce error", err)
+	}
+}
+
+func TestConsumeAPIApplicationApprovalNonceAllowsExactlyOneCompetingConsumer(t *testing.T) {
+	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "approval.json")
+	approval := validManualAPIApplicationApproval(now)
+	raw, err := json.Marshal(approval)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var wait sync.WaitGroup
+	errs := make(chan error, 2)
+	wait.Add(2)
+	for range 2 {
+		go func() {
+			defer wait.Done()
+			errs <- consumeAPIApplicationApprovalNonce(path, approval, 42, "resume-provider-7", now)
+		}()
+	}
+	wait.Wait()
+	close(errs)
+	successes := 0
+	for err := range errs {
+		if err == nil {
+			successes++
+			continue
+		}
+		if !errors.Is(err, errAPIApplicationApprovalNonce) {
+			t.Fatalf("competing consumer error=%v, want nonce conflict", err)
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("competing consumer successes=%d, want exactly one", successes)
+	}
+}
+
+func TestConsumeAPIApplicationApprovalNonceAcrossProcesses(t *testing.T) {
+	if os.Getenv("HH_API_NONCE_CHILD") == "1" {
+		path := os.Getenv("HH_API_NONCE_APPROVAL")
+		resultPath := os.Getenv("HH_API_NONCE_RESULT")
+		barrier := os.Getenv("HH_API_NONCE_BARRIER")
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			if _, err := os.Stat(barrier); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				_ = os.WriteFile(resultPath, []byte("other"), 0o600)
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+		approval, err := loadAPIApplicationApproval(path)
+		if err == nil {
+			err = consumeAPIApplicationApprovalNonce(path, approval, 42, "resume-provider-7", now)
+		}
+		result := "other"
+		if err == nil {
+			result = "success"
+		} else if errors.Is(err, errAPIApplicationApprovalNonce) {
+			result = "nonce"
+		}
+		_ = os.WriteFile(resultPath, []byte(result), 0o600)
+		return
+	}
+
+	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "approval.json")
+	approval := validManualAPIApplicationApproval(now)
+	raw, err := json.Marshal(approval)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	barrier := filepath.Join(dir, "start")
+	commands := make([]*exec.Cmd, 0, 2)
+	results := make([]string, 0, 2)
+	for index := 0; index < 2; index++ {
+		resultPath := filepath.Join(dir, fmt.Sprintf("result-%d", index))
+		cmd := exec.Command(os.Args[0], "-test.run", "^TestConsumeAPIApplicationApprovalNonceAcrossProcesses$", "-test.v")
+		cmd.Env = append(os.Environ(), "HH_API_NONCE_CHILD=1", "HH_API_NONCE_APPROVAL="+path, "HH_API_NONCE_RESULT="+resultPath, "HH_API_NONCE_BARRIER="+barrier)
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		commands = append(commands, cmd)
+		results = append(results, resultPath)
+	}
+	if err := os.WriteFile(barrier, []byte("go"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, cmd := range commands {
+		if err := cmd.Wait(); err != nil {
+			t.Fatalf("nonce child failed: %v", err)
+		}
+	}
+	successes, nonceFailures := 0, 0
+	for _, resultPath := range results {
+		result, err := os.ReadFile(resultPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch string(result) {
+		case "success":
+			successes++
+		case "nonce":
+			nonceFailures++
+		default:
+			t.Fatalf("unexpected child result %q", result)
+		}
+	}
+	if successes != 1 || nonceFailures != 1 {
+		t.Fatalf("cross-process nonce results success=%d nonce=%d, want 1/1", successes, nonceFailures)
 	}
 }

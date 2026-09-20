@@ -515,6 +515,102 @@ func TestHHAPIApplyDryRunValidatesReadsAndNeverPosts(t *testing.T) {
 	}
 }
 
+func TestHHAPIApplyManualReviewDryRunDoesNotConsumeNonceOrPost(t *testing.T) {
+	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	var methods []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		methods = append(methods, r.Method+" "+r.URL.Path)
+		switch r.URL.Path {
+		case "/vacancies/42":
+			writeHHAPIJSON(t, w, map[string]any{"id": "42", "type": map[string]any{"id": "open"}, "archived": false, "has_test": false, "response_letter_required": false, "apply_alternate_url": "https://hh.example/applicant/vacancy_response?vacancyId=42", "negotiations_url": "/negotiations?vacancy_id=42", "suitable_resumes_url": "/resumes/suitable?vacancy_id=42"})
+		case "/resumes/suitable":
+			writeHHAPIJSON(t, w, map[string]any{"items": []any{map[string]any{"id": "resume-provider-7"}}, "page": 0, "pages": 1, "found": 1})
+		case "/negotiations":
+			writeHHAPIJSON(t, w, map[string]any{"items": []any{}, "page": 0, "pages": 1, "found": 0})
+		default:
+			if r.Method == http.MethodPost {
+				t.Fatalf("manual dry-run issued POST %s", r.URL.Path)
+			}
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	approvalPath := filepath.Join(dir, "approval.json")
+	approval := validManualAPIApplicationApproval(now)
+	raw, err := json.Marshal(approval)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(approvalPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tokenPath := filepath.Join(dir, "token.json")
+	if err := hhapi.NewFileTokenStore(tokenPath).Save(context.Background(), hhapi.OAuthTokens{AccessToken: hhAPIAccessTokenSentinel, TokenType: "bearer", ExpiresAt: now.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testHHAPIConfig(t, server.URL, server.URL+"/token", tokenPath, "https://operator.example/callback")
+	cfg.HHTransport = "api"
+	var out bytes.Buffer
+	if err := runHHAPICommandWithDeps(context.Background(), []string{"apply", "42", "--resume-id", "resume-provider-7", "--approval-file", approvalPath}, cfg, strings.NewReader(""), &out, io.Discard, HHAPICommandDeps{HTTPClient: server.Client(), Now: func() time.Time { return now }}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "WOULD_APPLY") {
+		t.Fatalf("output=%q, want WOULD_APPLY", out.String())
+	}
+	unchanged, err := loadAPIApplicationApproval(approvalPath)
+	if err != nil || unchanged.NonceUsedAt != nil {
+		t.Fatalf("dry-run consumed nonce: approval=%+v err=%v", unchanged, err)
+	}
+	for _, method := range methods {
+		if strings.HasPrefix(method, http.MethodPost+" ") {
+			t.Fatalf("manual dry-run methods=%v", methods)
+		}
+	}
+}
+
+func TestHHAPIApplyManualReviewFreshDuplicateStillBlocks(t *testing.T) {
+	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	var postCount int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			postCount++
+			t.Fatalf("fresh duplicate preflight issued POST %s", r.URL.Path)
+		}
+		switch r.URL.Path {
+		case "/vacancies/42":
+			writeHHAPIJSON(t, w, map[string]any{"id": "42", "type": map[string]any{"id": "open"}, "archived": false, "has_test": false, "response_letter_required": false, "negotiations_url": "/negotiations?vacancy_id=42", "suitable_resumes_url": "/resumes/suitable?vacancy_id=42"})
+		case "/resumes/suitable":
+			writeHHAPIJSON(t, w, map[string]any{"items": []any{map[string]any{"id": "resume-provider-7"}}, "page": 0, "pages": 1, "found": 1})
+		case "/negotiations":
+			writeHHAPIJSON(t, w, map[string]any{"items": []any{map[string]any{"id": "negotiation-42", "vacancy_id": "42", "resume_id": "resume-provider-7"}}, "page": 0, "pages": 1, "found": 1})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	dir := t.TempDir()
+	approvalPath := filepath.Join(dir, "approval.json")
+	raw, err := json.Marshal(validManualAPIApplicationApproval(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(approvalPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tokenPath := filepath.Join(dir, "token.json")
+	if err := hhapi.NewFileTokenStore(tokenPath).Save(context.Background(), hhapi.OAuthTokens{AccessToken: hhAPIAccessTokenSentinel, TokenType: "bearer", ExpiresAt: now.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testHHAPIConfig(t, server.URL, server.URL+"/token", tokenPath, "https://operator.example/callback")
+	cfg.HHTransport = "api"
+	err = runHHAPICommandWithDeps(context.Background(), []string{"apply", "42", "--resume-id", "resume-provider-7", "--approval-file", approvalPath}, cfg, strings.NewReader(""), io.Discard, io.Discard, HHAPICommandDeps{HTTPClient: server.Client(), Now: func() time.Time { return now }})
+	if err == nil || postCount != 0 {
+		t.Fatalf("duplicate apply error=%v postCount=%d, want blocked and zero POST", err, postCount)
+	}
+}
+
 func TestHHAPIApplyRejectsLiveConfigurationWithoutWriteEnabled(t *testing.T) {
 	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 	approvalPath := filepath.Join(t.TempDir(), "approval.json")

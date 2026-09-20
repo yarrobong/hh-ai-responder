@@ -13,6 +13,7 @@ import (
 	"time"
 
 	hhapi "hh-ai-responder/internal/adapters/hh/api"
+	"hh-ai-responder/internal/platform"
 	hhwrite "hh-ai-responder/internal/ports/hhwrite"
 	attemptusecase "hh-ai-responder/internal/usecase/applicationattempt"
 	applicationreconciliation "hh-ai-responder/internal/usecase/applicationreconciliation"
@@ -94,8 +95,15 @@ func validateAPIApplicationApproval(approval APIApplicationApproval, vacancyID i
 	if approvedResumeID == "" || strings.TrimSpace(providerResumeID) == "" || approvedResumeID != strings.TrimSpace(providerResumeID) {
 		return errAPIApplicationApprovalIdentity
 	}
-	if approval.Status != "READY_FOR_EXPLICIT_SEND" || approval.FinalDecision != "MATCH" {
+	automatic := approval.Status == "READY_FOR_EXPLICIT_SEND" && approval.FinalDecision == "MATCH" && strings.TrimSpace(approval.ApprovalBasis) == "" && !approval.OperatorApproved
+	manual := approval.Status == pilotManualReviewStatus && approval.FinalDecision == "REVIEW_REQUIRED" && approval.ApprovalBasis == manualApprovalBasis && approval.OperatorApproved
+	if !automatic && !manual {
 		return errAPIApplicationApprovalState
+	}
+	if manual {
+		if approval.OperatorApprovalTimestamp.IsZero() || approval.OperatorApprovalTimestamp.After(now) || approval.OriginalAIScore == nil || approval.OriginalAIRecommendation != "UNCERTAIN" || approval.OriginalFinalDecision != "REVIEW_REQUIRED" || strings.TrimSpace(approval.PilotArtifactHash) == "" {
+			return errAPIApplicationApprovalState
+		}
 	}
 	if approval.NonceUsedAt != nil || strings.TrimSpace(approval.Nonce) == "" {
 		return errAPIApplicationApprovalNonce
@@ -110,6 +118,85 @@ func validateAPIApplicationApproval(approval APIApplicationApproval, vacancyID i
 	}
 	if now.IsZero() || approval.PreviewFreshAt.IsZero() || approval.PreviewFreshAt.After(now) || now.Sub(approval.PreviewFreshAt) > apiApplicationApprovalMaxAge {
 		return errAPIApplicationApprovalStale
+	}
+	return nil
+}
+
+func validateControlledAPIApplicationPreflight(preflight VacancyPreflight) error {
+	if preflight.alreadyRespondedEvidence().Value != AlreadyRespondedNo {
+		return errors.New("fresh API preflight did not prove duplicate state NO")
+	}
+	if !preflight.SelectedResumeSuitableKnown || !preflight.SelectedResumeSuitable || !preflight.SuitableResumesScanComplete {
+		return errors.New("fresh API preflight did not prove selected resume suitability")
+	}
+	if !preflight.Available {
+		return errors.New("fresh API preflight did not prove application availability AVAILABLE")
+	}
+	if !preflight.ArchivedKnown || preflight.Archived || preflight.activeState() != VacancyActiveStateActive {
+		return errors.New("fresh API preflight did not prove an active vacancy")
+	}
+	if !preflight.CanApplyKnown || !preflight.CanApply {
+		return errors.New("fresh API preflight did not prove can_apply")
+	}
+	if !preflight.TestPresentKnown || preflight.TestPresent {
+		return errors.New("fresh API preflight did not prove a no-test vacancy")
+	}
+	if !preflight.NegotiationScanComplete {
+		return errors.New("fresh API preflight did not complete the duplicate scan")
+	}
+	if !preflight.VacancyTypeKnown || strings.EqualFold(strings.TrimSpace(preflight.VacancyTypeID), "direct") || strings.EqualFold(strings.TrimSpace(preflight.VacancyTypeID), "closed") || preflight.ResponseIdentifierPresent {
+		return errors.New("fresh API preflight did not prove the standard applicant path")
+	}
+	return nil
+}
+
+func approvalProviderResumeID(approval APIApplicationApproval) string {
+	if strings.TrimSpace(approval.ProviderResumeID) != "" {
+		return strings.TrimSpace(approval.ProviderResumeID)
+	}
+	return strings.TrimSpace(approval.SelectedResumeID)
+}
+
+func consumeAPIApplicationApprovalNonce(path string, expected APIApplicationApproval, vacancyID int, providerResumeID string, now time.Time) error {
+	if strings.TrimSpace(path) == "" || strings.TrimSpace(expected.Nonce) == "" || now.IsZero() {
+		return errAPIApplicationApprovalNonce
+	}
+	lockPath := path + ".lock"
+	lock, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return errAPIApplicationApprovalNonce
+		}
+		return fmt.Errorf("API application approval nonce lock could not be acquired: %w", err)
+	}
+	defer func() {
+		_ = lock.Close()
+		_ = os.Remove(lockPath)
+	}()
+	current, err := loadAPIApplicationApproval(path)
+	if err != nil {
+		return err
+	}
+	if current.NonceUsedAt != nil || current.Nonce != expected.Nonce {
+		return errAPIApplicationApprovalNonce
+	}
+	if current.VacancyID != expected.VacancyID || current.VacancyID != vacancyID || approvalProviderResumeID(current) != approvalProviderResumeID(expected) || approvalProviderResumeID(current) != strings.TrimSpace(providerResumeID) {
+		return errAPIApplicationApprovalIdentity
+	}
+	if current.ContentHash != expected.ContentHash {
+		return errAPIApplicationApprovalContent
+	}
+	if err := validateAPIApplicationApproval(current, vacancyID, providerResumeID, now); err != nil {
+		return err
+	}
+	usedAt := now.UTC()
+	current.NonceUsedAt = &usedAt
+	raw, err := json.MarshalIndent(current, "", "  ")
+	if err != nil {
+		return errors.New("API application approval could not be encoded")
+	}
+	if err := platform.WritePrivateFileAtomic(path, append(raw, '\n'), ".hh-api-approval-*.tmp"); err != nil {
+		return fmt.Errorf("API application approval could not be persisted: %w", err)
 	}
 	return nil
 }
@@ -146,8 +233,8 @@ func runHHAPIApply(ctx context.Context, args []string, cfg Config, stdout, stder
 	if err != nil {
 		return fmt.Errorf("HH API apply GET-only preflight failed: %w", err)
 	}
-	if !preflight.Available {
-		return fmt.Errorf("HH API apply blocked by preflight: %s", hhAPIAvailabilityReason(preflight))
+	if err := validateControlledAPIApplicationPreflight(preflight); err != nil {
+		return fmt.Errorf("HH API apply blocked by preflight: %w", err)
 	}
 	if approval.CoverLetter == "" && (!preflight.LetterRequiredKnown || preflight.LetterRequired) {
 		return errors.New("HH API apply requires a validated cover letter when HH requires one or its state is unknown")
@@ -170,6 +257,9 @@ func runHHAPIApply(ctx context.Context, args []string, cfg Config, stdout, stder
 	if cfg.DryRun {
 		_, _ = fmt.Fprintf(stdout, "WOULD_APPLY vacancy_id=%d resume_id=%s approval_file=explicit preflight=AVAILABLE\n", vacancyID, safeHHAPIResumeID(providerResumeID))
 		return nil
+	}
+	if err := consumeAPIApplicationApprovalNonce(approvalPath, approval, vacancyID, providerResumeID, now); err != nil {
+		return err
 	}
 	store := deps.ApplicationAttempts
 	if store == nil {
