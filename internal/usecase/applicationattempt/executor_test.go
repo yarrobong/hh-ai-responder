@@ -190,3 +190,31 @@ func TestExecutorRejectedAttemptCanBeReplayedAsNewAttempt(t *testing.T) {
 		t.Fatalf("REJECTED was not replayable on a later independent attempt: err=%v calls=%d", err, fake.calls)
 	}
 }
+
+func TestExecutorProvenPreDispatchFailureReleasesReservation(t *testing.T) {
+	store := &fakeStore{}
+	fake := &fakeExecutor{result: applicationsubmission.ExecutionResult{Outcome: applicationsubmission.ExecutionNotSent}}
+	executor := NewExecutor(store, fake, nil)
+	if _, err := executor.SubmitApplication(context.Background(), requestFixture()); err != nil {
+		t.Fatal(err)
+	}
+	fake.result = applicationsubmission.ExecutionResult{Outcome: applicationsubmission.ExecutionAccepted}
+	if _, err := executor.SubmitApplication(context.Background(), requestFixture()); err != nil || fake.calls != 2 {
+		t.Fatalf("proven pre-dispatch failure did not release reservation: err=%v calls=%d", err, fake.calls)
+	}
+}
+
+func TestExecutorPossibleDispatchLocksVacancyAcrossResumeAndRestart(t *testing.T) {
+	store := &fakeStore{}
+	fake := &fakeExecutor{result: applicationsubmission.ExecutionResult{Outcome: applicationsubmission.ExecutionDeliveryUncertain}}
+	if _, err := NewExecutor(store, fake, nil).SubmitApplication(context.Background(), requestFixture()); err != nil {
+		t.Fatal(err)
+	}
+	// A new executor instance models a process restart. The persisted store,
+	// not the executor instance, must keep the vacancy blocked.
+	restarted := NewExecutor(store, &fakeExecutor{result: applicationsubmission.ExecutionResult{Outcome: applicationsubmission.ExecutionAccepted}}, nil)
+	_, err := restarted.SubmitApplication(context.Background(), applicationsubmission.ApplicationRequest{VacancyID: 42, ResumeID: "resume-2"})
+	if !errors.Is(err, ErrAttemptBlocked) {
+		t.Fatalf("different resume bypassed possible-dispatch lock: %v", err)
+	}
+}

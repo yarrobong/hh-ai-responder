@@ -12,7 +12,9 @@ import (
 	"time"
 
 	hhapi "hh-ai-responder/internal/adapters/hh/api"
+	hhwrite "hh-ai-responder/internal/ports/hhwrite"
 	attemptusecase "hh-ai-responder/internal/usecase/applicationattempt"
+	applicationreconciliation "hh-ai-responder/internal/usecase/applicationreconciliation"
 	applicationsubmission "hh-ai-responder/internal/usecase/applicationsubmission"
 	hhwritegateway "hh-ai-responder/internal/usecase/hhwritegateway"
 	"hh-ai-responder/internal/vacancy"
@@ -172,6 +174,17 @@ func runHHAPIApply(ctx context.Context, args []string, cfg Config, stdout, stder
 	}, applicationsubmission.Options{WriteEnabled: true, DryRun: false, RequireAvailabilityEvidence: true})
 	result, submitErr := service.Submit(ctx, input)
 	_, _ = fmt.Fprintf(stdout, "APPLICATION_RESULT vacancy_id=%d resume_id=%s status=%s\n", vacancyID, safeHHAPIResumeID(providerResumeID), result.Status)
+	if result.Execution.AttemptID != "" && (result.Execution.ApplicationClass == hhwrite.ApplicationResultSuccess || result.Execution.ApplicationClass == hhwrite.ApplicationResultAlreadyApplied || result.Execution.ApplicationClass == hhwrite.ApplicationResultUnknownSendResult) {
+		reconciliationStore, ok := store.(applicationreconciliation.AttemptStore)
+		if !ok {
+			return fmt.Errorf("HH API application reconciliation store capability is unavailable")
+		}
+		finalOutcome, _, reconcileErr := reconcileControlledAPIApplication(ctx, reconciliationStore, &apiApplicationEvidenceReader{client: client}, result.Execution.AttemptID, result.Execution.ApplicationClass, now)
+		_, _ = fmt.Fprintf(stdout, "FINAL_OUTCOME=%s\n", finalOutcome)
+		if reconcileErr != nil {
+			return reconcileErr
+		}
+	}
 	return submitErr
 }
 
@@ -241,16 +254,85 @@ func (e apiApplicationExecutor) SubmitApplication(ctx context.Context, request a
 		return applicationsubmission.ExecutionResult{Outcome: applicationsubmission.ExecutionNotSent}, errors.New("HH API application write gateway is unavailable")
 	}
 	result, err := e.gateway.SubmitVacancyResponse(ctx, hhwritegateway.VacancyResponseRequest{VacancyID: request.VacancyID, ProviderResumeID: request.ResumeID, Letter: request.Letter})
-	execution := applicationsubmission.ExecutionResult{ProviderID: result.ProviderID, ProviderStatus: result.ProviderStatus, Metadata: result.Metadata, TransportTried: result.TransportAttempted}
+	execution := applicationsubmission.ExecutionResult{ApplicationClass: result.ApplicationClass, ProviderID: result.ProviderID, ProviderStatus: result.ProviderStatus, Metadata: result.Metadata, TransportTried: result.TransportAttempted}
 	switch result.Outcome {
 	case hhwritegateway.OutcomeAccepted:
 		execution.Outcome = applicationsubmission.ExecutionAccepted
 	case hhwritegateway.OutcomeDeliveryUncertain, hhwritegateway.OutcomePersistenceUncertain:
 		execution.Outcome = applicationsubmission.ExecutionDeliveryUncertain
 	case hhwritegateway.OutcomeRejected:
-		execution.Outcome = applicationsubmission.ExecutionRejected
+		if result.ApplicationClass == hhwrite.ApplicationResultAlreadyApplied {
+			execution.Outcome = applicationsubmission.ExecutionDeliveryUncertain
+		} else {
+			execution.Outcome = applicationsubmission.ExecutionRejected
+		}
 	default:
 		execution.Outcome = applicationsubmission.ExecutionNotSent
 	}
 	return execution, err
+}
+
+type APIApplicationFinalOutcome string
+
+const (
+	APIApplicationFinalPostSuccessReconciled        APIApplicationFinalOutcome = "POST_SUCCESS_RECONCILED"
+	APIApplicationFinalPostSuccessUnconfirmed       APIApplicationFinalOutcome = "POST_SUCCESS_UNCONFIRMED"
+	APIApplicationFinalAlreadyAppliedReconciled     APIApplicationFinalOutcome = "ALREADY_APPLIED_RECONCILED"
+	APIApplicationFinalUnknownSendReconciledSuccess APIApplicationFinalOutcome = "UNKNOWN_SEND_RECONCILED_SUCCESS"
+	APIApplicationFinalUnknownSendUnresolved        APIApplicationFinalOutcome = "UNKNOWN_SEND_UNRESOLVED"
+)
+
+func reconcileControlledAPIApplication(ctx context.Context, store applicationreconciliation.AttemptStore, reader applicationreconciliation.EvidenceReader, attemptID string, class hhwrite.ApplicationResultClass, now time.Time) (APIApplicationFinalOutcome, applicationreconciliation.Result, error) {
+	if class != hhwrite.ApplicationResultSuccess && class != hhwrite.ApplicationResultAlreadyApplied && class != hhwrite.ApplicationResultUnknownSendResult {
+		return "", applicationreconciliation.Result{}, nil
+	}
+	service := applicationreconciliation.NewService(applicationreconciliation.Dependencies{Attempts: store, Reader: reader, Now: func() time.Time { return now }})
+	reconciled, err := service.Reconcile(ctx, attemptID)
+	if class == hhwrite.ApplicationResultSuccess {
+		if reconciled.Status == applicationreconciliation.StatusConfirmed {
+			return APIApplicationFinalPostSuccessReconciled, reconciled, err
+		}
+		return APIApplicationFinalPostSuccessUnconfirmed, reconciled, err
+	}
+	if class == hhwrite.ApplicationResultAlreadyApplied {
+		if err != nil {
+			return APIApplicationFinalUnknownSendUnresolved, reconciled, err
+		}
+		return APIApplicationFinalAlreadyAppliedReconciled, reconciled, nil
+	}
+	if reconciled.Status == applicationreconciliation.StatusConfirmed {
+		return APIApplicationFinalUnknownSendReconciledSuccess, reconciled, err
+	}
+	return APIApplicationFinalUnknownSendUnresolved, reconciled, err
+}
+
+type apiApplicationEvidenceReader struct{ client *hhapi.APIHHClient }
+
+var _ applicationreconciliation.EvidenceReader = (*apiApplicationEvidenceReader)(nil)
+
+func (r *apiApplicationEvidenceReader) ReadVacancyResponseEvidence(ctx context.Context, target applicationreconciliation.Target) (applicationreconciliation.EvidenceSnapshot, error) {
+	if r == nil || r.client == nil || target.VacancyID <= 0 || strings.TrimSpace(target.ResumeID) == "" {
+		return applicationreconciliation.EvidenceSnapshot{}, errors.New("API application reconciliation target is invalid")
+	}
+	preflight, err := apiVacancyPreflightWithSource(ctx, r.client, target.VacancyID, target.ResumeID)
+	snapshot := applicationreconciliation.EvidenceSnapshot{VacancyID: target.VacancyID, ObservedAt: time.Now().UTC()}
+	if err != nil {
+		snapshot.PreflightError = "targeted API vacancy preflight failed"
+		snapshot.ApplicationsError = "targeted API negotiation read failed"
+		return snapshot, err
+	}
+	evidence := preflight.alreadyRespondedEvidence()
+	snapshot.PreflightAvailable = true
+	snapshot.Preflight = applicationreconciliation.PreflightEvidence{
+		Available: preflight.Available, AlreadyResponded: evidence.Value == AlreadyRespondedYes,
+		AlreadyRespondedKnown: evidence.Value != AlreadyRespondedUnknown, CanApply: preflight.CanApply, CanApplyKnown: preflight.CanApplyKnown,
+	}
+	snapshot.ApplicationsAvailable = true
+	if preflight.ExistingNegotiation && strings.TrimSpace(preflight.NegotiationID) != "" {
+		snapshot.Applications = []applicationreconciliation.ProviderResponse{{
+			VacancyID: target.VacancyID, NegotiationID: preflight.NegotiationID, ResponseByApplicant: true,
+			Source: "api_targeted_negotiation_scan",
+		}}
+	}
+	return snapshot, nil
 }

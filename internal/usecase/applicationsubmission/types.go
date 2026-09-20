@@ -3,6 +3,7 @@ package applicationsubmission
 import (
 	"context"
 
+	hhwrite "hh-ai-responder/internal/ports/hhwrite"
 	"hh-ai-responder/internal/vacancy"
 )
 
@@ -133,12 +134,13 @@ const (
 // ExecutionResult contains provider-neutral transport evidence returned by
 // the R11 executor adapter. It is separate from local event/projection state.
 type ExecutionResult struct {
-	AttemptID      string
-	Outcome        ExecutionOutcome
-	ProviderID     string
-	ProviderStatus int
-	Metadata       map[string]string
-	TransportTried bool
+	AttemptID        string
+	Outcome          ExecutionOutcome
+	ApplicationClass hhwrite.ApplicationResultClass
+	ProviderID       string
+	ProviderStatus   int
+	Metadata         map[string]string
+	TransportTried   bool
 }
 
 type ApplicationExecutor interface {

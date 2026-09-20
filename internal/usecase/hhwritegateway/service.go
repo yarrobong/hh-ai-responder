@@ -356,6 +356,7 @@ func gatewayOutcome(outcome hhwrite.Outcome) GatewayOutcome {
 }
 
 func mapResult(result Result, writeResult hhwrite.WriteResult) Result {
+	result.ApplicationClass = writeResult.Class
 	result.ProviderID, result.ProviderStatus, result.Metadata = writeResult.ProviderID, writeResult.ProviderStatus, cloneMap(writeResult.Metadata)
 	result.Timestamp = timestamp(writeResult.Timestamp, result.Timestamp)
 	return result

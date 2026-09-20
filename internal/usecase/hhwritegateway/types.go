@@ -115,6 +115,7 @@ type Result struct {
 	ActionID            string
 	Operation           string
 	Outcome             GatewayOutcome
+	ApplicationClass    hhwrite.ApplicationResultClass
 	Status              ActionStatus
 	TransportAttempted  bool
 	ProviderID          string
