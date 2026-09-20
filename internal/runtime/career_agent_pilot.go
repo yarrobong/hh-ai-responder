@@ -792,7 +792,10 @@ func loadPilotArtifact(path string) (PilotArtifact, error) {
 	if err := decoder.Decode(&artifact); err != nil {
 		return PilotArtifact{}, fmt.Errorf("invalid pilot artifact: %w", err)
 	}
-	if artifact.Version != pilotArtifactVersion || artifact.VacancyID <= 0 || strings.TrimSpace(artifact.CoverLetter) == "" || strings.TrimSpace(artifact.ContentHash) == "" || strings.TrimSpace(artifact.Nonce) == "" {
+	if artifact.Version != pilotArtifactVersion || artifact.VacancyID <= 0 || strings.TrimSpace(artifact.ContentHash) == "" || strings.TrimSpace(artifact.Nonce) == "" {
+		return PilotArtifact{}, errors.New("pilot artifact is incomplete")
+	}
+	if artifact.CoverLetter == "" && (artifact.Preflight.CoverLetterRequired == nil || *artifact.Preflight.CoverLetterRequired) {
 		return PilotArtifact{}, errors.New("pilot artifact is incomplete")
 	}
 	return artifact, nil

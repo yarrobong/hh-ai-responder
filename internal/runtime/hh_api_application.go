@@ -91,8 +91,10 @@ func validateAPIApplicationApproval(approval APIApplicationApproval, vacancyID i
 	if approval.NonceUsedAt != nil || strings.TrimSpace(approval.Nonce) == "" {
 		return errAPIApplicationApprovalNonce
 	}
-	if err := validatePilotCoverLetter(approval.CoverLetter); err != nil {
-		return fmt.Errorf("%w: %v", errAPIApplicationApprovalContent, err)
+	if approval.CoverLetter != "" {
+		if err := validatePilotCoverLetter(approval.CoverLetter); err != nil {
+			return fmt.Errorf("%w: %v", errAPIApplicationApprovalContent, err)
+		}
 	}
 	if strings.TrimSpace(approval.ContentHash) == "" || contentHash(approval.CoverLetter) != strings.TrimSpace(approval.ContentHash) {
 		return errAPIApplicationApprovalContent
@@ -137,6 +139,9 @@ func runHHAPIApply(ctx context.Context, args []string, cfg Config, stdout, stder
 	}
 	if !preflight.Available {
 		return fmt.Errorf("HH API apply blocked by preflight: %s", hhAPIAvailabilityReason(preflight))
+	}
+	if approval.CoverLetter == "" && (!preflight.LetterRequiredKnown || preflight.LetterRequired) {
+		return errors.New("HH API apply requires a validated cover letter when HH requires one or its state is unknown")
 	}
 	if preflight.TestPresentKnown && preflight.TestPresent {
 		return errors.New("HH API apply does not support a vacancy with a required test")

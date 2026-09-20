@@ -134,16 +134,26 @@ HH_DRY_RUN=true HH_WRITE_ENABLED=false STORAGE_BACKEND=json \
 
 ```sh
 HH_TRANSPORT=api HH_DRY_RUN=true HH_WRITE_ENABLED=false \
+  ./hh-ai-responder hh-api approval export \
+  --pilot ./career-agent-pilot.json --out ./api-approval.json
+
+HH_TRANSPORT=api HH_DRY_RUN=true HH_WRITE_ENABLED=false \
   ./hh-ai-responder hh-api apply 137112468 \
-  --resume-id <provider-resume-id> --approval-file ./approval.json
+  --resume-id <provider-resume-id> --approval-file ./api-approval.json
 ```
 
-Dry-run выполняет approval validation и свежий GET-only preflight и может
+Сначала read-only export принимает только `PILOT: READY_FOR_EXPLICIT_SEND` с
+решением `MATCH`, точно связывает vacancy и выбранное provider resume,
+нормализует только внутреннее представление
+`hh-resume-provider-id-...` и атомарно создаёт private approval-файл. Он не
+выполняет запросов к HH. Dry-run выполняет approval validation и свежий GET-only preflight и может
 вывести `WOULD_APPLY`, но не создаёт mutation adapter и не отправляет POST.
 `--approval-file` обязателен: default/stale artifact автоматически не
 подбирается. Артефакт должен точно соответствовать vacancy и provider resume,
-содержать непустое проверенное письмо, `READY_FOR_EXPLICIT_SEND`, решение
-`MATCH`, nonce, content hash и свежий `preview_fresh_at`.
+содержать `READY_FOR_EXPLICIT_SEND`, решение `MATCH`, nonce, content hash и
+свежий `preview_fresh_at`. Письмо сохраняется побайтно; пустое/отсутствующее
+письмо разрешено только когда свежий HH preflight достоверно сообщает
+`response_letter_required=false`.
 
 Единственный live-вызов имеет тот же точный синтаксис и требует одновременно
 `HH_TRANSPORT=api HH_DRY_RUN=false HH_WRITE_ENABLED=true`. За один invocation

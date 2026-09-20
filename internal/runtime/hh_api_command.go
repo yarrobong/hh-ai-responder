@@ -53,7 +53,7 @@ func runHHAPICommandWithDeps(ctx context.Context, args []string, cfg Config, std
 		stderr = io.Discard
 	}
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
-		return errors.New("hh-api command requires a subcommand: auth, doctor, logout, preflight, or apply")
+		return errors.New("hh-api command requires a subcommand: auth, doctor, logout, preflight, approval, or apply")
 	}
 	switch args[0] {
 	case "auth":
@@ -69,6 +69,8 @@ func runHHAPICommandWithDeps(ctx context.Context, args []string, cfg Config, std
 		return runHHAPIPreflight(ctx, args[1:], cfg, stdout, stderr, deps)
 	case "apply":
 		return runHHAPIApply(ctx, args[1:], cfg, stdout, stderr, deps)
+	case "approval":
+		return runHHAPIApprovalCommand(args[1:], stdout)
 	default:
 		return errors.New("unknown hh-api subcommand")
 	}
