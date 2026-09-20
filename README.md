@@ -138,6 +138,11 @@ HH_TRANSPORT=api HH_DRY_RUN=true HH_WRITE_ENABLED=false \
   --pilot ./career-agent-pilot.json --out ./api-approval.json
 
 HH_TRANSPORT=api HH_DRY_RUN=true HH_WRITE_ENABLED=false \
+  ./hh-ai-responder hh-api approval review \
+  --pilot ./career-agent-pilot.json --out ./api-manual-approval.json \
+  [--letter-file ./reviewed-letter.txt]
+
+HH_TRANSPORT=api HH_DRY_RUN=true HH_WRITE_ENABLED=false \
   ./hh-ai-responder hh-api apply 137112468 \
   --resume-id <provider-resume-id> --approval-file ./api-approval.json
 ```
@@ -148,6 +153,12 @@ HH_TRANSPORT=api HH_DRY_RUN=true HH_WRITE_ENABLED=false \
 `hh-resume-provider-id-...` и атомарно создаёт private approval-файл. Он не
 выполняет запросов к HH. Dry-run выполняет approval validation и свежий GET-only preflight и может
 вывести `WOULD_APPLY`, но не создаёт mutation adapter и не отправляет POST.
+Команда `approval review` — отдельное явно вызванное локальное действие для
+`MANUAL_REVIEW_BEFORE_SEND`: она принимает только `REVIEW_REQUIRED` с
+AI-рекомендацией `UNCERTAIN`, без hard missing/unknown, выпускает новый nonce,
+сохраняет исходную AI-позицию и не делает запросов к HH. Если указан
+`--letter-file`, его содержимое связывается побайтно; без него сохраняется
+письмо pilot. Это не превращает `REVIEW_REQUIRED` в автоматический `MATCH`.
 `--approval-file` обязателен: default/stale artifact автоматически не
 подбирается. Артефакт должен точно соответствовать vacancy и provider resume,
 содержать `READY_FOR_EXPLICIT_SEND`, решение `MATCH`, nonce, content hash и

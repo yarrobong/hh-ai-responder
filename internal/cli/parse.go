@@ -225,14 +225,18 @@ func validateCommandArgs(command CommandKind, args []string) error {
 }
 
 func validateHHAPIApprovalArgs(args []string) error {
-	if len(args) == 0 || args[0] != "export" {
-		return errors.New("hh-api approval requires the export action")
+	if len(args) == 0 {
+		return errors.New("hh-api approval requires the export or review action")
 	}
-	pilot, output := false, false
+	action := args[0]
+	if action != "export" && action != "review" {
+		return errors.New("hh-api approval requires the export or review action")
+	}
+	pilot, output, letter := false, false, false
 	for index := 1; index < len(args); index++ {
 		arg := args[index]
 		switch {
-		case arg == "--pilot", arg == "--out":
+		case arg == "--pilot", arg == "--out", arg == "--letter-file":
 			if index+1 >= len(args) || strings.HasPrefix(args[index+1], "-") || strings.TrimSpace(args[index+1]) == "" {
 				return fmt.Errorf("hh-api approval export %s requires a value", arg)
 			}
@@ -241,11 +245,19 @@ func validateHHAPIApprovalArgs(args []string) error {
 					return errors.New("hh-api approval export accepts exactly one --pilot")
 				}
 				pilot = true
-			} else {
+			} else if arg == "--out" {
 				if output {
 					return errors.New("hh-api approval export accepts exactly one --out")
 				}
 				output = true
+			} else {
+				if action != "review" {
+					return errors.New("hh-api approval export accepts only --pilot and --out")
+				}
+				if letter {
+					return errors.New("hh-api approval review accepts exactly one --letter-file")
+				}
+				letter = true
 			}
 			index++
 		case strings.HasPrefix(arg, "--pilot="):
@@ -258,12 +270,20 @@ func validateHHAPIApprovalArgs(args []string) error {
 				return errors.New("hh-api approval export requires exactly one --out")
 			}
 			output = true
+		case strings.HasPrefix(arg, "--letter-file="):
+			if action != "review" || letter || strings.TrimSpace(strings.TrimPrefix(arg, "--letter-file=")) == "" {
+				return errors.New("hh-api approval review requires exactly one --letter-file value")
+			}
+			letter = true
 		default:
-			return errors.New("hh-api approval export accepts only --pilot and --out")
+			return fmt.Errorf("hh-api approval %s accepts only --pilot, --out, and optional --letter-file", action)
 		}
 	}
 	if !pilot || !output {
-		return errors.New("hh-api approval export requires --pilot and --out")
+		return fmt.Errorf("hh-api approval %s requires --pilot and --out", action)
+	}
+	if action == "export" && letter {
+		return errors.New("hh-api approval export accepts only --pilot and --out")
 	}
 	return nil
 }

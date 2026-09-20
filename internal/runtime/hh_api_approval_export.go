@@ -1,10 +1,13 @@
 package runtime
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -142,9 +145,12 @@ func pilotProviderResumeID(artifact PilotArtifact) (string, error) {
 	return providerID, nil
 }
 
-func runHHAPIApprovalCommand(args []string, stdout io.Writer) error {
-	if len(args) == 0 || args[0] != "export" {
-		return errors.New("hh-api approval requires: export --pilot <path> --out <path>")
+func runHHAPIApprovalCommand(args []string, stdout io.Writer, deps HHAPICommandDeps) error {
+	if len(args) == 0 || (args[0] != "export" && args[0] != "review") {
+		return errors.New("hh-api approval requires: export or review --pilot <path> --out <path>")
+	}
+	if args[0] == "review" {
+		return runHHAPIApprovalReview(args[1:], stdout, deps)
 	}
 	pilotPath, outputPath, err := parseHHAPIApprovalExportArgs(args[1:])
 	if err != nil {
@@ -167,6 +173,56 @@ func runHHAPIApprovalCommand(args []string, stdout io.Writer) error {
 	}
 	if stdout != nil {
 		_, _ = fmt.Fprintf(stdout, "API_APPROVAL_EXPORTED vacancy_id=%d resume_id=%s\n", approval.VacancyID, safeHHAPIResumeID(approval.ProviderResumeID))
+	}
+	return nil
+}
+
+func runHHAPIApprovalReview(args []string, stdout io.Writer, deps HHAPICommandDeps) error {
+	pilotPath, outputPath, letterPath, err := parseHHAPIApprovalReviewArgs(args)
+	if err != nil {
+		return err
+	}
+	artifact, raw, err := loadPilotArtifactForManualApproval(pilotPath)
+	if err != nil {
+		return fmt.Errorf("pilot artifact could not be loaded: %w", err)
+	}
+	now := time.Now().UTC()
+	if deps.Now != nil {
+		now = deps.Now().UTC()
+	}
+	providerResumeID, err := validateManualPilotArtifact(artifact, artifact.CoverLetter, now)
+	if err != nil {
+		return err
+	}
+	reviewedLetter := artifact.CoverLetter
+	if letterPath != "" {
+		letterBytes, readErr := os.ReadFile(letterPath)
+		if readErr != nil {
+			return errors.New("reviewed cover-letter file could not be read")
+		}
+		if len(letterBytes) > 1<<20 {
+			return errors.New("reviewed cover-letter file is too large")
+		}
+		reviewedLetter = string(letterBytes)
+		if _, err := validateManualPilotArtifact(artifact, reviewedLetter, now); err != nil {
+			return err
+		}
+	}
+	nonce, err := generateUUIDv4()
+	if err != nil {
+		return fmt.Errorf("manual approval nonce generation failed: %w", err)
+	}
+	pilotHash := sha256.Sum256(raw)
+	approval := buildManualAPIApplicationApproval(artifact, providerResumeID, reviewedLetter, hex.EncodeToString(pilotHash[:]), nonce, now)
+	encoded, err := json.MarshalIndent(approval, "", "  ")
+	if err != nil {
+		return errors.New("API manual application approval could not be encoded")
+	}
+	if err := platform.WritePrivateFileAtomic(outputPath, append(encoded, '\n'), ".hh-api-approval-*.tmp"); err != nil {
+		return fmt.Errorf("API manual application approval could not be written: %w", err)
+	}
+	if stdout != nil {
+		_, _ = fmt.Fprintf(stdout, "API_MANUAL_APPROVAL_CREATED vacancy_id=%d approval_basis=%s\n", approval.VacancyID, manualApprovalBasis)
 	}
 	return nil
 }
@@ -211,4 +267,57 @@ func parseHHAPIApprovalExportArgs(args []string) (string, string, error) {
 		return "", "", errors.New("usage: hh-api approval export --pilot <path> --out <path>")
 	}
 	return pilotPath, outputPath, nil
+}
+
+func parseHHAPIApprovalReviewArgs(args []string) (string, string, string, error) {
+	pilotPath, outputPath, letterPath := "", "", ""
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		switch {
+		case arg == "--pilot", arg == "--out", arg == "--letter-file":
+			if index+1 >= len(args) || strings.TrimSpace(args[index+1]) == "" || strings.HasPrefix(args[index+1], "-") {
+				return "", "", "", fmt.Errorf("%s requires a value", arg)
+			}
+			value := strings.TrimSpace(args[index+1])
+			switch arg {
+			case "--pilot":
+				if pilotPath != "" {
+					return "", "", "", errors.New("hh-api approval review accepts exactly one --pilot")
+				}
+				pilotPath = value
+			case "--out":
+				if outputPath != "" {
+					return "", "", "", errors.New("hh-api approval review accepts exactly one --out")
+				}
+				outputPath = value
+			case "--letter-file":
+				if letterPath != "" {
+					return "", "", "", errors.New("hh-api approval review accepts exactly one --letter-file")
+				}
+				letterPath = value
+			}
+			index++
+		case strings.HasPrefix(arg, "--pilot="):
+			if pilotPath != "" || strings.TrimSpace(strings.TrimPrefix(arg, "--pilot=")) == "" {
+				return "", "", "", errors.New("hh-api approval review requires exactly one --pilot")
+			}
+			pilotPath = strings.TrimSpace(strings.TrimPrefix(arg, "--pilot="))
+		case strings.HasPrefix(arg, "--out="):
+			if outputPath != "" || strings.TrimSpace(strings.TrimPrefix(arg, "--out=")) == "" {
+				return "", "", "", errors.New("hh-api approval review requires exactly one --out")
+			}
+			outputPath = strings.TrimSpace(strings.TrimPrefix(arg, "--out="))
+		case strings.HasPrefix(arg, "--letter-file="):
+			if letterPath != "" || strings.TrimSpace(strings.TrimPrefix(arg, "--letter-file=")) == "" {
+				return "", "", "", errors.New("hh-api approval review requires exactly one --letter-file")
+			}
+			letterPath = strings.TrimSpace(strings.TrimPrefix(arg, "--letter-file="))
+		default:
+			return "", "", "", errors.New("hh-api approval review accepts only --pilot, --out, and optional --letter-file")
+		}
+	}
+	if pilotPath == "" || outputPath == "" {
+		return "", "", "", errors.New("usage: hh-api approval review --pilot <path> --out <path> [--letter-file <path>]")
+	}
+	return pilotPath, outputPath, letterPath, nil
 }

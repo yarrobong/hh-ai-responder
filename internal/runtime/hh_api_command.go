@@ -70,7 +70,7 @@ func runHHAPICommandWithDeps(ctx context.Context, args []string, cfg Config, std
 	case "apply":
 		return runHHAPIApply(ctx, args[1:], cfg, stdout, stderr, deps)
 	case "approval":
-		return runHHAPIApprovalCommand(args[1:], stdout)
+		return runHHAPIApprovalCommand(args[1:], stdout, deps)
 	default:
 		return errors.New("unknown hh-api subcommand")
 	}

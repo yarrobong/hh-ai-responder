@@ -3,7 +3,10 @@ package runtime
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -169,6 +172,133 @@ func TestPilotArtifactLoaderKeepsAutomaticNonceRequirementSeparateFromManualRevi
 	}
 	if _, err := loadPilotArtifact(path); err == nil {
 		t.Fatal("automatic loader accepted a manual pilot without a nonce")
+	}
+}
+
+func TestHHAPIApprovalReviewPreservesManualProvenanceAndUsesNoHTTP(t *testing.T) {
+	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	pilotPath := filepath.Join(dir, "manual-pilot.json")
+	approvalPath := filepath.Join(dir, "manual-approval.json")
+	pilot := manualPilotFixture(now)
+	raw, err := json.Marshal(pilot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pilotPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := runHHAPICommandWithDeps(context.Background(), []string{"approval", "review", "--pilot", pilotPath, "--out", approvalPath}, Config{}, nil, &out, nil, HHAPICommandDeps{Now: func() time.Time { return now }}); err != nil {
+		t.Fatal(err)
+	}
+	approval, err := loadAPIApplicationApproval(approvalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pilotHash := sha256.Sum256(raw)
+	if approval.FinalDecision != "REVIEW_REQUIRED" || approval.OriginalFinalDecision != "REVIEW_REQUIRED" || approval.ApprovalBasis != manualApprovalBasis || !approval.OperatorApproved || approval.Nonce == "" || approval.Nonce == pilot.Nonce || approval.ContentHash != contentHash(approval.CoverLetter) || approval.OriginalAIRecommendation != "UNCERTAIN" || approval.PilotArtifactHash != hex.EncodeToString(pilotHash[:]) {
+		t.Fatalf("manual approval=%+v", approval)
+	}
+	afterPilot, err := os.ReadFile(pilotPath)
+	if err != nil || !bytes.Equal(afterPilot, raw) {
+		t.Fatalf("source pilot changed: err=%v equal=%t", err, bytes.Equal(afterPilot, raw))
+	}
+	info, err := os.Stat(approvalPath)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("approval mode/info: err=%v info=%v", err, info)
+	}
+	if strings.Contains(out.String(), pilotPath) || strings.Contains(out.String(), approvalPath) || strings.Contains(out.String(), "resume-provider-7") || strings.Contains(out.String(), pilot.CoverLetter) {
+		t.Fatalf("review output was not sanitized: %q", out.String())
+	}
+}
+
+func TestHHAPIApprovalReviewBindsExactLetterFileAndChecksSourceIntegrityFirst(t *testing.T) {
+	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	pilotPath := filepath.Join(dir, "manual-pilot.json")
+	letterPath := filepath.Join(dir, "reviewed-letter.txt")
+	approvalPath := filepath.Join(dir, "manual-approval.json")
+	pilot := manualPilotFixture(now)
+	raw, err := json.Marshal(pilot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pilotPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	letterBytes := []byte("Здравствуйте, API-интеграции обсудим предметно.\n")
+	if err := os.WriteFile(letterPath, letterBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runHHAPICommandWithDeps(context.Background(), []string{"approval", "review", "--pilot", pilotPath, "--out", approvalPath, "--letter-file", letterPath}, Config{}, nil, io.Discard, nil, HHAPICommandDeps{Now: func() time.Time { return now }}); err != nil {
+		t.Fatal(err)
+	}
+	approval, err := loadAPIApplicationApproval(approvalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pilotHash := sha256.Sum256(raw)
+	if approval.CoverLetter != string(letterBytes) || approval.ContentHash != contentHash(string(letterBytes)) || approval.PilotArtifactHash != hex.EncodeToString(pilotHash[:]) {
+		t.Fatalf("letter binding=%+v", approval)
+	}
+	if err := os.WriteFile(letterPath, []byte("changed after approval"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pilotPath, []byte(`{"version":1,"status":"REJECT"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	unchanged, err := loadAPIApplicationApproval(approvalPath)
+	if err != nil || unchanged.CoverLetter != string(letterBytes) || unchanged.ContentHash != contentHash(string(letterBytes)) {
+		t.Fatalf("approval changed after source edits: approval=%+v err=%v", unchanged, err)
+	}
+}
+
+func TestHHAPIApprovalReviewAppliesEmptyLetterPolicyB(t *testing.T) {
+	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name        string
+		required    *bool
+		override    string
+		wantSuccess bool
+	}{
+		{name: "known not required", required: func() *bool { value := false; return &value }(), wantSuccess: true},
+		{name: "required", required: func() *bool { value := true; return &value }()},
+		{name: "unknown", required: nil},
+		{name: "non-empty override", required: func() *bool { value := false; return &value }(), override: "Letter reviewed exactly.", wantSuccess: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			pilot := manualPilotFixture(now)
+			pilot.CoverLetter = ""
+			pilot.ContentHash = contentHash("")
+			pilot.Preflight.CoverLetterRequired = test.required
+			pilotPath := filepath.Join(dir, "pilot.json")
+			approvalPath := filepath.Join(dir, "approval.json")
+			raw, err := json.Marshal(pilot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(pilotPath, raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			args := []string{"approval", "review", "--pilot", pilotPath, "--out", approvalPath}
+			if test.override != "" {
+				letterPath := filepath.Join(dir, "letter.txt")
+				if err := os.WriteFile(letterPath, []byte(test.override), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				args = append(args, "--letter-file", letterPath)
+			}
+			err = runHHAPICommandWithDeps(context.Background(), args, Config{}, nil, io.Discard, nil, HHAPICommandDeps{Now: func() time.Time { return now }})
+			if test.wantSuccess && err != nil {
+				t.Fatalf("review error=%v", err)
+			}
+			if !test.wantSuccess && err == nil {
+				t.Fatal("empty-letter review unexpectedly succeeded")
+			}
+		})
 	}
 }
 
