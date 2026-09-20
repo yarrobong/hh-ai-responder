@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	hhwrite "hh-ai-responder/internal/ports/hhwrite"
 )
@@ -88,7 +89,11 @@ func (c *APIHHClient) postNegotiation(ctx context.Context, request hhwrite.Vacan
 	httpRequest.Header.Set("User-Agent", c.userAgent)
 	httpRequest.Header.Set("Accept", "application/json")
 	httpRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	response, err := c.httpClient.Do(httpRequest)
+	mutationClient := *c.httpClient
+	mutationClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	response, err := mutationClient.Do(httpRequest)
 	if err != nil {
 		return applicationUnknownSendResult(0, nil, err)
 	}
@@ -104,6 +109,9 @@ func (c *APIHHClient) postNegotiation(ctx context.Context, request hhwrite.Vacan
 	if response.StatusCode == http.StatusTooManyRequests {
 		return applicationRateLimited(response.StatusCode, errors.New("HH API application rate limit was reached"))
 	}
+	if response.StatusCode >= 300 && response.StatusCode < 400 {
+		return applicationUnknownSendResult(response.StatusCode, metadata, errors.New("HH API application redirect was not followed"))
+	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		if readErr != nil || bodyTooLarge {
 			return applicationBusinessRejected(response.StatusCode, errors.New("HH API application response could not be classified"))
@@ -117,7 +125,7 @@ func (c *APIHHClient) postNegotiation(ctx context.Context, request hhwrite.Vacan
 		Outcome:        hhwrite.OutcomeAccepted,
 		Class:          hhwrite.ApplicationResultSuccess,
 		ProviderStatus: response.StatusCode,
-		ProviderID:     applicationProviderID(body),
+		ProviderID:     applicationProviderID(body, response.Header.Get("Location")),
 		Timestamp:      time.Now().UTC(),
 		Metadata:       metadata,
 	}, nil
@@ -136,18 +144,55 @@ func applicationResultForAPIError(err error) (hhwrite.WriteResult, error) {
 	return applicationNotSent(hhwrite.ErrorAuthentication, errors.New("HH API application authentication setup failed"))
 }
 
-func applicationProviderID(body []byte) string {
+func applicationProviderID(body []byte, location string) string {
 	var value map[string]json.RawMessage
-	if json.Unmarshal(body, &value) != nil {
+	if json.Unmarshal(body, &value) == nil {
+		for _, key := range []string{"id", "negotiation_id", "negotiationId"} {
+			var result string
+			if json.Unmarshal(value[key], &result) == nil {
+				if result = sanitizeApplicationProviderID(result); result != "" {
+					return result
+				}
+			}
+		}
+	}
+	return applicationProviderIDFromLocation(location)
+}
+
+func applicationProviderIDFromLocation(location string) string {
+	location = strings.TrimSpace(location)
+	if location == "" || strings.ContainsAny(location, "\r\n") {
 		return ""
 	}
+	parsed, err := url.Parse(location)
+	if err != nil {
+		return ""
+	}
+	path := strings.TrimSuffix(parsed.EscapedPath(), "/")
+	segments := strings.Split(path, "/")
+	for index := len(segments) - 1; index > 0; index-- {
+		if segments[index-1] != "negotiations" {
+			continue
+		}
+		candidate, unescapeErr := url.PathUnescape(segments[index])
+		if unescapeErr == nil {
+			return sanitizeApplicationProviderID(candidate)
+		}
+	}
 	for _, key := range []string{"id", "negotiation_id", "negotiationId"} {
-		var result string
-		if json.Unmarshal(value[key], &result) == nil {
-			return boundedField(result)
+		if candidate := sanitizeApplicationProviderID(parsed.Query().Get(key)); candidate != "" {
+			return candidate
 		}
 	}
 	return ""
+}
+
+func sanitizeApplicationProviderID(value string) string {
+	value = boundedField(value)
+	if value == "" || strings.ContainsAny(value, "/?#\r\n") || strings.IndexFunc(value, unicode.IsControl) >= 0 {
+		return ""
+	}
+	return value
 }
 
 type structuredApplicationError struct {

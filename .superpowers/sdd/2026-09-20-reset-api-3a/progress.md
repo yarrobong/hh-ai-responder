@@ -12,7 +12,7 @@
 ## Tasks
 
 - Task 1: complete — RED: `go test ./internal/adapters/hh/api -run 'TestAPIApplicationWriter(ClassifiesDeterministicResponses|BoundsStructuredErrorEvidence)' -count=1` failed on undocumented 403/OAuth/captcha cases; GREEN: same focused tests and `go test ./internal/adapters/hh/api -count=1` passed; structured evidence is bounded/sanitized and duplicate substring text is not classified as already-applied.
-- Task 2: pending
+- Task 2: complete — RED: new `307`/`308` redirect-count and Location-identity tests failed because the current client followed redirects and ignored Location; GREEN: `go test ./internal/adapters/hh/api -count=1` passed after scoped redirect disabling, 3xx ambiguity mapping, and sanitized Location identity extraction.
 - Task 3: pending
 - Task 4: pending
 - Task 5: pending

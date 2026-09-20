@@ -163,3 +163,51 @@ func TestAPIApplicationWriterMapsAmbiguousTransportWithoutRetry(t *testing.T) {
 		t.Fatalf("calls=%d, want exactly one POST", calls.Load())
 	}
 }
+
+func TestAPIApplicationWriterDoesNotFollowPostRedirects(t *testing.T) {
+	for _, status := range []int{http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var originalCalls atomic.Int32
+			var targetCalls atomic.Int32
+			target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				targetCalls.Add(1)
+				w.WriteHeader(http.StatusCreated)
+			}))
+			defer target.Close()
+			original := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				originalCalls.Add(1)
+				w.Header().Set("Location", target.URL+"/negotiations/redirect-target")
+				w.WriteHeader(status)
+			}))
+			defer original.Close()
+
+			client := newAPIClient(t, original.URL, &memoryTokenStore{loaded: validTokens()})
+			result, err := NewAPIApplicationWriter(client).SubmitVacancyResponse(context.Background(), hhwrite.VacancyResponseRequest{VacancyID: 42, ProviderResumeID: "resume-7"})
+			if err == nil || !hhwrite.IsAmbiguous(err) {
+				t.Fatalf("err=%v, want ambiguous redirect result", err)
+			}
+			if result.Class != hhwrite.ApplicationResultUnknownSendResult || result.ProviderStatus != status {
+				t.Fatalf("result=%+v, want unknown status %d", result, status)
+			}
+			if originalCalls.Load() != 1 || targetCalls.Load() != 0 {
+				t.Fatalf("original calls=%d target calls=%d, want 1 and 0", originalCalls.Load(), targetCalls.Load())
+			}
+		})
+	}
+}
+
+func TestAPIApplicationWriterExtractsSanitizedLocationIdentity(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "/negotiations/negotiation-42?token=must-not-leak")
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer server.Close()
+	client := newAPIClient(t, server.URL, &memoryTokenStore{loaded: validTokens()})
+	result, err := NewAPIApplicationWriter(client).SubmitVacancyResponse(context.Background(), hhwrite.VacancyResponseRequest{VacancyID: 42, ProviderResumeID: "resume-7"})
+	if err != nil || result.Class != hhwrite.ApplicationResultSuccess || result.ProviderID != "negotiation-42" {
+		t.Fatalf("result=%+v err=%v, want sanitized Location identity", result, err)
+	}
+	if strings.Contains(result.ProviderID, "token") {
+		t.Fatalf("provider ID leaked Location query: %q", result.ProviderID)
+	}
+}
