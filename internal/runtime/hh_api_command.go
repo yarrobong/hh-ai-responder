@@ -129,6 +129,15 @@ func runHHAPIPreflight(ctx context.Context, args []string, cfg Config, stdout, s
 	_, _ = fmt.Fprintf(stdout, "Vacancy ID: %d\n", vacancyID)
 	_, _ = fmt.Fprintf(stdout, "requested resume ID: %s\n", safeHHAPIResumeID(selectedID))
 	_, _ = fmt.Fprintf(stdout, "selected provider resume title: %s\n", hhAPIResumeTitle(resumes, selectedID))
+	_, _ = fmt.Fprintf(stdout, "duplicate: %s\n", hhAPITriState(evidence.Value != AlreadyRespondedUnknown, evidence.Value == AlreadyRespondedYes))
+	_, _ = fmt.Fprintf(stdout, "suitable: %s\n", hhAPITriState(preflight.SelectedResumeSuitableKnown, preflight.SelectedResumeSuitable))
+	_, _ = fmt.Fprintf(stdout, "active/archive state: %s\n", string(preflight.activeState()))
+	_, _ = fmt.Fprintf(stdout, "archived: %s\n", hhAPITriState(preflight.ArchivedKnown, preflight.Archived))
+	_, _ = fmt.Fprintf(stdout, "vacancy type: %s\n", hhAPIVacancyType(preflight))
+	_, _ = fmt.Fprintf(stdout, "response_url present: %s\n", hhAPIPresentAbsent(preflight.ResponseIdentifierPresent))
+	_, _ = fmt.Fprintf(stdout, "apply_alternate_url present: %s\n", hhAPIPresentAbsent(preflight.ApplyAlternateURLPresent))
+	_, _ = fmt.Fprintf(stdout, "has_test: %s\n", hhAPITriState(preflight.TestPresentKnown, preflight.TestPresent))
+	_, _ = fmt.Fprintf(stdout, "response_letter_required: %s\n", hhAPITriState(preflight.LetterRequiredKnown, preflight.LetterRequired))
 	_, _ = fmt.Fprintf(stdout, "got_response relation: %s\n", hhAPIYesNo(preflight.GotResponseRelation))
 	_, _ = fmt.Fprintf(stdout, "negotiations URL present: %s\n", hhAPIYesNo(preflight.NegotiationsURLPresent))
 	_, _ = fmt.Fprintf(stdout, "suitable resumes URL present: %s\n", hhAPIYesNo(preflight.SuitableResumesURLPresent))
@@ -144,6 +153,8 @@ func runHHAPIPreflight(ctx context.Context, args []string, cfg Config, stdout, s
 	_, _ = fmt.Fprintf(stdout, "matching negotiation: %s\n", hhAPIYesNo(preflight.MatchingNegotiation))
 	_, _ = fmt.Fprintf(stdout, "negotiation scan complete: %s\n", hhAPIYesNo(preflight.NegotiationScanComplete))
 	_, _ = fmt.Fprintf(stdout, "application availability: %s\n", hhAPIAvailability(preflight))
+	_, _ = fmt.Fprintf(stdout, "availability reason: %s\n", hhAPIAvailabilityReason(preflight))
+	_, _ = fmt.Fprintln(stdout, "server acceptance: NOT_ATTEMPTED (POST not issued)")
 	_, _ = fmt.Fprintf(stdout, "final duplicate state: %s\n", string(evidence.Value))
 	return nil
 }
@@ -163,9 +174,20 @@ func runHHAPIAllResumePreflight(ctx context.Context, client *hhapi.APIHHClient, 
 		}
 		_, _ = fmt.Fprintf(stdout, "resume provider ID: %s\n", safeHHAPIResumeID(id))
 		_, _ = fmt.Fprintf(stdout, "resume title: %s\n", firstNonEmpty(strings.TrimSpace(resume.Title), "UNKNOWN"))
+		evidence := preflight.alreadyRespondedEvidence()
+		_, _ = fmt.Fprintf(stdout, "duplicate: %s\n", hhAPITriState(evidence.Value != AlreadyRespondedUnknown, evidence.Value == AlreadyRespondedYes))
+		_, _ = fmt.Fprintf(stdout, "active/archive state: %s\n", string(preflight.activeState()))
+		_, _ = fmt.Fprintf(stdout, "archived: %s\n", hhAPITriState(preflight.ArchivedKnown, preflight.Archived))
+		_, _ = fmt.Fprintf(stdout, "vacancy type: %s\n", hhAPIVacancyType(preflight))
+		_, _ = fmt.Fprintf(stdout, "response_url present: %s\n", hhAPIPresentAbsent(preflight.ResponseIdentifierPresent))
+		_, _ = fmt.Fprintf(stdout, "apply_alternate_url present: %s\n", hhAPIPresentAbsent(preflight.ApplyAlternateURLPresent))
+		_, _ = fmt.Fprintf(stdout, "has_test: %s\n", hhAPITriState(preflight.TestPresentKnown, preflight.TestPresent))
+		_, _ = fmt.Fprintf(stdout, "response_letter_required: %s\n", hhAPITriState(preflight.LetterRequiredKnown, preflight.LetterRequired))
 		_, _ = fmt.Fprintf(stdout, "present in suitable_resumes: %s\n", hhAPITriState(preflight.SelectedResumeSuitableKnown, preflight.SelectedResumeSuitable))
 		_, _ = fmt.Fprintf(stdout, "scan complete: %s\n", hhAPIYesNo(preflight.SuitableResumesScanComplete))
 		_, _ = fmt.Fprintf(stdout, "application availability: %s\n", hhAPIAvailability(preflight))
+		_, _ = fmt.Fprintf(stdout, "availability reason: %s\n", hhAPIAvailabilityReason(preflight))
+		_, _ = fmt.Fprintln(stdout, "server acceptance: NOT_ATTEMPTED (POST not issued)")
 	}
 	return nil
 }
@@ -192,13 +214,46 @@ func hhAPIResumeTitle(resumes []hhread.ResumeRecord, requestedID string) string 
 }
 
 func hhAPIAvailability(preflight VacancyPreflight) string {
-	if preflight.Available {
-		return "AVAILABLE"
+	return applicationAvailabilityValue(preflight)
+}
+
+func hhAPIVacancyType(preflight VacancyPreflight) string {
+	if !preflight.VacancyTypeKnown || strings.TrimSpace(preflight.VacancyTypeID) == "" {
+		return "UNKNOWN"
 	}
-	if (preflight.CanApplyKnown && !preflight.CanApply) || (preflight.SelectedResumeSuitableKnown && !preflight.SelectedResumeSuitable) {
-		return "UNAVAILABLE"
+	return strings.TrimSpace(preflight.VacancyTypeID)
+}
+
+func hhAPIAvailabilityReason(preflight VacancyPreflight) string {
+	evidence := preflight.alreadyRespondedEvidence()
+	switch {
+	case evidence.Value == AlreadyRespondedYes:
+		return "duplicate response is proven"
+	case preflight.SelectedResumeSuitableKnown && !preflight.SelectedResumeSuitable:
+		return "selected resume is not in complete suitable_resumes scan"
+	case preflight.TestPresentKnown && preflight.TestPresent:
+		return "test_required is documented as unavailable through applicant API"
+	case strings.EqualFold(strings.TrimSpace(preflight.VacancyTypeID), "direct") || preflight.ResponseIdentifierPresent:
+		return "direct/external response path is not standard applicant POST /negotiations"
+	case strings.EqualFold(strings.TrimSpace(preflight.VacancyTypeID), "closed"):
+		return "vacancy type is explicitly closed for applicant responses"
+	case preflight.ArchivedKnown && preflight.Archived:
+		return "vacancy is archived"
+	case preflight.activeState() == VacancyActiveStateInactive:
+		return "vacancy is explicitly inactive or closed for applicants"
+	case !preflight.VacancyTypeKnown:
+		return "vacancy type is unknown; standard HH response path is unproven"
+	case evidence.Value != AlreadyRespondedNo:
+		return "duplicate state is not proven NO"
+	case !preflight.SelectedResumeSuitableKnown || !preflight.SuitableResumesScanComplete:
+		return "selected resume suitability is incomplete"
+	case !preflight.NegotiationScanComplete:
+		return "duplicate scan is incomplete"
+	case !preflight.Available:
+		return "API application attempt is not proven eligible"
+	default:
+		return "eligible to attempt standard POST; server acceptance is not guaranteed"
 	}
-	return "UNKNOWN"
 }
 
 func hhAPIYesNo(value bool) string {

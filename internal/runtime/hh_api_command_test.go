@@ -281,11 +281,12 @@ func TestHHAPIPreflightIsGETOnlyAndSanitized(t *testing.T) {
 				"negotiations_url":     "/negotiations?vacancy_id=42",
 				"suitable_resumes_url": "/vacancies/42/suitable_resumes",
 				"archived":             false, "has_test": false, "response_letter_required": false,
+				"type": map[string]any{"id": "open"}, "apply_alternate_url": "https://hh.example/applicant/vacancy_response?vacancyId=42",
 			})
 		case "/vacancies/42/suitable_resumes":
 			writeHHAPIJSON(t, w, map[string]any{"items": []any{map[string]any{"id": "resume-1"}}, "page": 0, "pages": 1})
 		case "/negotiations":
-			writeHHAPIJSON(t, w, map[string]any{"items": []any{}})
+			writeHHAPIJSON(t, w, map[string]any{"items": []any{}, "page": 0, "pages": 1})
 		default:
 			http.NotFound(w, r)
 		}
@@ -302,7 +303,7 @@ func TestHHAPIPreflightIsGETOnlyAndSanitized(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := out.String()
-	for _, want := range []string{"Vacancy ID: 42", "requested resume ID: present", "selected provider resume title: Backend", "got_response relation: NO", "negotiations URL present: YES", "suitable resumes URL present: YES", "suitable endpoint scan complete: YES", "suitable resume IDs discovered: 1", "requested resume present: YES", "selected resume suitable: YES", "existing negotiation: UNKNOWN", "negotiation ID: absent", "negotiation collections discovered: 0", "negotiation collections checked: 0", "negotiation pages checked: 0", "matching negotiation: NO", "negotiation scan complete: NO", "application availability: UNKNOWN", "final duplicate state: UNKNOWN"} {
+	for _, want := range []string{"Vacancy ID: 42", "requested resume ID: present", "selected provider resume title: Backend", "duplicate: NO", "suitable: YES", "archived: NO", "vacancy type: open", "response_url present: absent", "apply_alternate_url present: present", "has_test: NO", "response_letter_required: NO", "got_response relation: NO", "negotiations URL present: YES", "suitable resumes URL present: YES", "suitable endpoint scan complete: YES", "suitable resume IDs discovered: 1", "requested resume present: YES", "selected resume suitable: YES", "existing negotiation: NO", "negotiation ID: absent", "negotiation collections discovered: 0", "negotiation collections checked: 0", "negotiation pages checked: 1", "matching negotiation: NO", "negotiation scan complete: YES", "application availability: AVAILABLE", "final duplicate state: NO"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("output=%q, missing %q", output, want)
 		}

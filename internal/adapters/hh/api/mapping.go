@@ -125,6 +125,9 @@ func mapVacancyWire(value wireVacancy) (hhread.VacancyRecord, error) {
 		result.UserTestPresent, result.UserTestPresentKnown = *testPresent, true
 	}
 	result.ResponseURL = strings.TrimSpace(value.ResponseURL)
+	result.ApplyAlternateURL = strings.TrimSpace(value.ApplyAlternateURL)
+	result.TypeID = namedIDOrValue(value.Type)
+	result.TypeIDKnown = result.TypeID != ""
 	if responded, evidence, relationErr := relationValue(value); relationErr == nil && responded != nil {
 		copy := *responded
 		result.AlreadyResponded = &copy

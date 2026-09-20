@@ -82,14 +82,18 @@ type wireVacancy struct {
 	UserTestPresent        *bool           `json:"has_test"`
 	TestPresent            *bool           `json:"test_present"`
 	ResponseURL            string          `json:"response_url"`
+	ApplyAlternateURL      string          `json:"apply_alternate_url"`
+	Type                   wireNamed       `json:"type"`
 	NegotiationsURL        string          `json:"negotiations_url"`
 	SuitableResumesURL     string          `json:"suitable_resumes_url"`
 	ClosedForApplicants    *bool           `json:"closed_for_applicants"`
-	QuickResponsesAllowed  *bool           `json:"quick_responses_allowed"`
-	AlreadyResponded       *bool           `json:"already_responded"`
-	Responded              *bool           `json:"responded"`
-	Relation               *wireRelation   `json:"relation"`
-	Relations              []string        `json:"relations"`
+	// This optional field is decoded for compatibility only. It is not part of
+	// the documented applicant application contract.
+	QuickResponsesAllowed *bool         `json:"quick_responses_allowed"`
+	AlreadyResponded      *bool         `json:"already_responded"`
+	Responded             *bool         `json:"responded"`
+	Relation              *wireRelation `json:"relation"`
+	Relations             []string      `json:"relations"`
 }
 
 type wireRelation struct {

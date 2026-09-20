@@ -43,6 +43,10 @@ type VacancyPreflight struct {
 	CanApply                         bool
 	CanApplyKnown                    bool
 	ResponseURL                      string
+	ApplyAlternateURL                string
+	ApplyAlternateURLPresent         bool
+	VacancyTypeID                    string
+	VacancyTypeKnown                 bool
 	ResponseIdentifierPresent        bool
 	NegotiationIdentifierPresent     bool
 	NegotiationID                    string `json:"-"`
@@ -84,6 +88,9 @@ const (
 	ActiveEvidenceResponseLink                VacancyActiveEvidenceCode = "VACANCY_SCOPED_RESPONSE_LINK"
 	ActiveEvidenceApplicationForm             VacancyActiveEvidenceCode = "VACANCY_SCOPED_APPLICATION_FORM"
 	ActiveEvidenceProviderCanApply            VacancyActiveEvidenceCode = "PROVIDER_CAN_APPLY"
+	ActiveEvidenceStandardApplicantAPI        VacancyActiveEvidenceCode = "STANDARD_APPLICANT_API_PATH"
+	ActiveEvidenceDirectResponsePath          VacancyActiveEvidenceCode = "DIRECT_RESPONSE_PATH"
+	ActiveEvidenceAPIRequiredTest             VacancyActiveEvidenceCode = "API_REQUIRED_TEST"
 	ActiveEvidenceProviderClosedForApplicants VacancyActiveEvidenceCode = "PROVIDER_CLOSED_FOR_APPLICANTS"
 	ActiveEvidenceAuthFailure                 VacancyActiveEvidenceCode = "AUTH_FAILURE"
 	ActiveEvidenceContradiction               VacancyActiveEvidenceCode = "ACTIVE_INACTIVE_CONTRADICTION"
@@ -124,6 +131,13 @@ type VacancyPreflightResult struct {
 	Type                             string                   `json:"type"`
 	VacancyID                        int                      `json:"vacancy_id"`
 	ResponseURL                      string                   `json:"response_url,omitempty"`
+	Available                        bool                     `json:"available"`
+	ApplicationAttemptEligible       bool                     `json:"application_attempt_eligible"`
+	ApplicationAvailability          string                   `json:"application_availability"`
+	ApplyAlternateURL                string                   `json:"apply_alternate_url,omitempty"`
+	ApplyAlternateURLPresent         bool                     `json:"apply_alternate_url_present"`
+	VacancyTypeID                    string                   `json:"vacancy_type_id,omitempty"`
+	VacancyTypeKnown                 bool                     `json:"vacancy_type_known"`
 	Archived                         *bool                    `json:"archived"`
 	ArchivedKnown                    bool                     `json:"archived_known"`
 	AlreadyResponded                 *bool                    `json:"already_responded"`
@@ -172,6 +186,13 @@ func (p VacancyPreflight) event() VacancyPreflightResult {
 		Type:                             "vacancy_preflight",
 		VacancyID:                        p.VacancyID,
 		ResponseURL:                      p.ResponseURL,
+		Available:                        p.Available,
+		ApplicationAttemptEligible:       p.Available,
+		ApplicationAvailability:          applicationAvailabilityValue(p),
+		ApplyAlternateURL:                p.ApplyAlternateURL,
+		ApplyAlternateURLPresent:         p.ApplyAlternateURLPresent,
+		VacancyTypeID:                    p.VacancyTypeID,
+		VacancyTypeKnown:                 p.VacancyTypeKnown,
 		Archived:                         knownBoolPointer(p.Archived, p.ArchivedKnown),
 		ArchivedKnown:                    p.ArchivedKnown,
 		AlreadyResponded:                 knownBoolPointer(evidence.Value == AlreadyRespondedYes, evidence.Value != AlreadyRespondedUnknown),
@@ -688,6 +709,8 @@ func apiVacancyPreflight(record hhread.VacancyRecord, vacancyID int) VacancyPref
 		WorkSchedule: record.Schedule, WorkScheduleKnown: strings.TrimSpace(record.Schedule) != "",
 		WorkExperience: record.Experience, WorkExperienceKnown: strings.TrimSpace(record.Experience) != "",
 		ResponseURL: record.ResponseURL, ResponseIdentifierPresent: strings.TrimSpace(record.ResponseURL) != "",
+		ApplyAlternateURL: record.ApplyAlternateURL, ApplyAlternateURLPresent: strings.TrimSpace(record.ApplyAlternateURL) != "",
+		VacancyTypeID: record.TypeID, VacancyTypeKnown: record.TypeIDKnown,
 		ActiveState: VacancyActiveStateUnknown,
 	}
 	if record.AlreadyResponded != nil {
@@ -719,26 +742,49 @@ func apiVacancyPreflight(record hhread.VacancyRecord, vacancyID int) VacancyPref
 	} else if record.ArchivedKnown && record.Archived {
 		preflight.CanApply, preflight.CanApplyKnown = false, true
 		setActiveEvidence(&preflight, VacancyActiveStateInactive, ActiveEvidenceProviderArchivedTrue)
-	} else if record.QuickResponsesAllowedKnown && record.QuickResponsesAllowed {
+	} else if strings.EqualFold(strings.TrimSpace(record.TypeID), "direct") || strings.TrimSpace(record.ResponseURL) != "" {
+		// Direct/external vacancies expose a provider response URL and are not
+		// the standard applicant POST /negotiations path.
+		preflight.CanApply, preflight.CanApplyKnown = false, true
+		setActiveEvidence(&preflight, VacancyActiveStateActive, ActiveEvidenceDirectResponsePath)
+	} else if strings.EqualFold(strings.TrimSpace(record.TypeID), "closed") {
+		// The legacy closed vacancy type is explicit provider evidence that the
+		// standard applicant response path is unavailable.
+		preflight.CanApply, preflight.CanApplyKnown = false, true
+	} else if !record.UserTestPresentKnown {
+		// The documented API error test_required is unsafe to predict when the
+		// vacancy test state itself is unknown.
+		setActiveEvidence(&preflight, VacancyActiveStateActive, ActiveEvidenceAPIRequiredTest)
+	} else if record.UserTestPresent {
+		// HH documents test_required as an API-unavailable response path. This
+		// is an explicit API limitation, not a prediction of POST success.
+		preflight.CanApply, preflight.CanApplyKnown = false, true
+		setActiveEvidence(&preflight, VacancyActiveStateActive, ActiveEvidenceAPIRequiredTest)
+	} else if record.TypeIDKnown && strings.EqualFold(strings.TrimSpace(record.TypeID), "open") && record.ArchivedKnown && !record.Archived {
 		preflight.CanApply, preflight.CanApplyKnown = true, true
-		setActiveEvidence(&preflight, VacancyActiveStateActive, ActiveEvidenceProviderCanApply)
+		setActiveEvidence(&preflight, VacancyActiveStateActive, ActiveEvidenceStandardApplicantAPI)
 	} else if record.ArchivedKnown && !record.Archived {
 		setActiveEvidence(&preflight, VacancyActiveStateActive, ActiveEvidenceProviderArchivedFalse)
 	}
 	return preflight
 }
 
-// finalizeAPIApplicationAvailability keeps application availability separate
-// from duplicate state, resume suitability, and vacancy activity. A positive
-// API availability proof requires all of those independent read-only facts;
-// explicit provider negatives remain UNAVAILABLE, while every incomplete or
-// ambiguous combination remains UNKNOWN.
+// finalizeAPIApplicationAvailability derives APPLICATION_ATTEMPT_ELIGIBLE from
+// documented, read-only prerequisites. AVAILABLE means it is safe to attempt
+// the standard applicant POST; it does not predict SERVER_ACCEPTANCE. The
+// server remains authoritative for already_applied, limits, and other business
+// errors returned by POST /negotiations. quick_responses_allowed is not part of
+// this derivation because HH does not document it as an applicant capability.
 func finalizeAPIApplicationAvailability(preflight *VacancyPreflight) {
 	if preflight == nil {
 		return
 	}
 	preflight.Available = false
 	if preflight.CanApplyKnown && !preflight.CanApply {
+		return
+	}
+	if preflight.alreadyRespondedEvidence().Value == AlreadyRespondedYes {
+		preflight.CanApply, preflight.CanApplyKnown = false, true
 		return
 	}
 	if preflight.SelectedResumeSuitableKnown && !preflight.SelectedResumeSuitable {
@@ -753,6 +799,16 @@ func finalizeAPIApplicationAvailability(preflight *VacancyPreflight) {
 		return
 	}
 	preflight.Available = true
+}
+
+func applicationAvailabilityValue(preflight VacancyPreflight) string {
+	if preflight.Available {
+		return "AVAILABLE"
+	}
+	if (preflight.CanApplyKnown && !preflight.CanApply) || (preflight.SelectedResumeSuitableKnown && !preflight.SelectedResumeSuitable) {
+		return "UNAVAILABLE"
+	}
+	return "UNKNOWN"
 }
 
 func (r *HHAIResponder) rememberVacancyPreflight(preflight VacancyPreflight) {

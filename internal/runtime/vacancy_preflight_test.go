@@ -347,9 +347,10 @@ func TestProviderResumeIdentityNormalizesOnlyKnownInternalProviderPrefix(t *test
 func TestAPIApplicationAvailabilityRequiresCompletePositiveProviderEvidence(t *testing.T) {
 	baseDetail := hhread.VacancyRecord{
 		ID: 42, ArchivedKnown: true, ClosedForApplicantsKnown: true,
-		NegotiationsURL:       "https://api.example/negotiations?vacancy_id=42",
-		SuitableResumesURL:    "https://api.example/suitable",
-		QuickResponsesAllowed: true, QuickResponsesAllowedKnown: true,
+		NegotiationsURL:    "https://api.example/negotiations?vacancy_id=42",
+		SuitableResumesURL: "https://api.example/suitable",
+		TypeID:             "open", TypeIDKnown: true,
+		ApplyAlternateURL:           "https://hh.example/applicant/vacancy_response?vacancyId=42",
 		ResponseLetterRequiredKnown: true, UserTestPresentKnown: true,
 	}
 	newSource := func(detail hhread.VacancyRecord) *apiApplicationPreflightFake {
@@ -371,7 +372,7 @@ func TestAPIApplicationAvailabilityRequiresCompletePositiveProviderEvidence(t *t
 		{name: "duplicate yes blocks regardless of availability", mutate: func(source *apiApplicationPreflightFake) {
 			responded := true
 			source.detail.AlreadyResponded = &responded
-		}, wantKnown: false, wantApply: false, wantResult: VacancyReject},
+		}, wantKnown: true, wantApply: false, wantResult: VacancyReject},
 		{name: "duplicate unknown fails closed", mutate: func(source *apiApplicationPreflightFake) {
 			source.collections.DirectPage = nil
 			source.collectionsErr = errors.New("negotiation scan unavailable")
@@ -390,8 +391,29 @@ func TestAPIApplicationAvailabilityRequiresCompletePositiveProviderEvidence(t *t
 			closed := true
 			source.detail.ClosedForApplicants = closed
 		}, wantKnown: true, wantApply: false, wantResult: VacancyReject},
-		{name: "missing provider respondability is unknown", mutate: func(source *apiApplicationPreflightFake) {
+		{name: "missing undocumented quick response flag does not block", mutate: func(source *apiApplicationPreflightFake) {
 			source.detail.QuickResponsesAllowedKnown = false
+		}, wantKnown: true, wantApply: true, wantResult: VacancyMatch},
+		{name: "false undocumented quick response flag does not block", mutate: func(source *apiApplicationPreflightFake) {
+			value := false
+			source.detail.QuickResponsesAllowed, source.detail.QuickResponsesAllowedKnown = value, true
+		}, wantKnown: true, wantApply: true, wantResult: VacancyMatch},
+		{name: "direct response path is unavailable through applicant API", mutate: func(source *apiApplicationPreflightFake) {
+			source.detail.TypeID = "direct"
+			source.detail.ResponseURL = "https://employer.example/apply"
+		}, wantKnown: true, wantApply: false, wantResult: VacancyReject},
+		{name: "closed vacancy type is unavailable through applicant API", mutate: func(source *apiApplicationPreflightFake) {
+			source.detail.TypeID = "closed"
+		}, wantKnown: true, wantApply: false, wantResult: VacancyReject},
+		{name: "mandatory test is unavailable through applicant API", mutate: func(source *apiApplicationPreflightFake) {
+			testPresent := true
+			source.detail.UserTestPresent, source.detail.UserTestPresentKnown = testPresent, true
+		}, wantKnown: true, wantApply: false, wantResult: VacancyReject},
+		{name: "unknown test state keeps API availability unknown", mutate: func(source *apiApplicationPreflightFake) {
+			source.detail.UserTestPresentKnown = false
+		}, wantKnown: false, wantApply: false, wantResult: VacancyReviewRequired},
+		{name: "unknown vacancy type keeps API availability unknown", mutate: func(source *apiApplicationPreflightFake) {
+			source.detail.TypeID, source.detail.TypeIDKnown = "", false
 		}, wantKnown: false, wantApply: false, wantResult: VacancyReviewRequired},
 		{name: "incomplete scan is unknown", mutate: func(source *apiApplicationPreflightFake) {
 			source.collections.DirectPage = &hhread.NegotiationPage{Page: 0, Pages: 2, PagesKnown: true, Complete: false, NextURL: "https://api.example/negotiations?vacancy_id=42&page=1"}

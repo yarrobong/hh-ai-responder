@@ -41,17 +41,23 @@ type VacancyRecord struct {
 	UserTestPresent             bool
 	UserTestPresentKnown        bool
 	ResponseURL                 string
+	ApplyAlternateURL           string
+	TypeID                      string
+	TypeIDKnown                 bool
 	NegotiationsURL             string
 	SuitableResumesURL          string
 	Relations                   []string
 	ClosedForApplicants         bool
 	ClosedForApplicantsKnown    bool
-	QuickResponsesAllowed       bool
-	QuickResponsesAllowedKnown  bool
-	AlreadyResponded            *bool
-	AlreadyRespondedEvidence    string
-	ProfessionalRoles           []string
-	Metadata                    map[string]string
+	// QuickResponsesAllowed is an optional provider field retained only for
+	// compatibility/audit visibility. HH does not document it as applicant
+	// response capability and it must not gate API application eligibility.
+	QuickResponsesAllowed      bool
+	QuickResponsesAllowedKnown bool
+	AlreadyResponded           *bool
+	AlreadyRespondedEvidence   string
+	ProfessionalRoles          []string
+	Metadata                   map[string]string
 }
 
 type VacancyPage struct {
