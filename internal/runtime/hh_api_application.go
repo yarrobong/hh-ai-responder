@@ -140,7 +140,10 @@ func runHHAPIApply(ctx context.Context, args []string, cfg Config, stdout, stder
 	if preflight.TestPresentKnown && preflight.TestPresent {
 		return errors.New("HH API apply does not support a vacancy with a required test")
 	}
-	if preflight.ResponseIdentifierPresent || preflight.ApplyAlternateURLPresent {
+	// apply_alternate_url is the normal HH web-response URL and is retained
+	// for diagnostics. Only a direct vacancy response URL identifies a path
+	// outside the standard applicant API mutation.
+	if preflight.ResponseIdentifierPresent {
 		return errors.New("HH API apply does not support a direct or external response path")
 	}
 	prepared := applicationsubmission.PreparedApplication{

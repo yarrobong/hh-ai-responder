@@ -470,7 +470,8 @@ func TestHHAPIApplyDryRunValidatesReadsAndNeverPosts(t *testing.T) {
 			writeHHAPIJSON(t, w, map[string]any{
 				"id": "42", "type": map[string]any{"id": "open"}, "archived": false,
 				"has_test": false, "response_letter_required": false,
-				"negotiations_url": "/negotiations?vacancy_id=42", "suitable_resumes_url": "/resumes/suitable?vacancy_id=42",
+				"apply_alternate_url": "https://hh.example/applicant/vacancy_response?vacancyId=42",
+				"negotiations_url":    "/negotiations?vacancy_id=42", "suitable_resumes_url": "/resumes/suitable?vacancy_id=42",
 			})
 		case "/resumes/suitable":
 			writeHHAPIJSON(t, w, map[string]any{"items": []any{map[string]any{"id": "resume-provider-7"}}, "page": 0, "pages": 1, "found": 1})
