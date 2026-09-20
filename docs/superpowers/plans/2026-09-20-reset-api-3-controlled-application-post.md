@@ -13,8 +13,9 @@
 ## Global constraints
 
 - `HH_DRY_RUN=true HH_WRITE_ENABLED=false HH_TRANSPORT=api` is valid: it performs all eligibility, preflight, approval, and artifact validation, may emit `WOULD_APPLY`, and must not invoke the mutation adapter.
-- A real POST requires `HH_DRY_RUN=false` and `HH_WRITE_ENABLED=true`; the command always requires exact vacancy/resume IDs and an explicit `--approval-file`.
+- A real POST requires `HH_DRY_RUN=false` and `HH_WRITE_ENABLED=true`; the command always requires exact vacancy/resume IDs and an explicit `--approval-file`. The controlled command caps application mutations at exactly one per invocation/run while preserving existing global and daily gateway limits; it does not create a new permanent one-per-day policy.
 - Durable protection has both exact-attempt scope (`application + vacancy + resume`) and vacancy mutation-lock scope (`application + vacancy`); once a POST may have been dispatched, another resume cannot bypass the lock.
+- Protection distinguishes a pre-dispatch reservation from a durable `MAY_HAVE_BEEN_DISPATCHED` vacancy lock. Proven pre-dispatch failures may close/release the reservation; once dispatch may have begun, the vacancy lock survives restart until reconciliation resolves it.
 - `SUCCESS`, `ALREADY_APPLIED`, and `UNKNOWN_SEND_RESULT` each require one targeted reconciliation read before the final outcome is reported.
 - Ambiguous transport results are never retried automatically. No implementation or automated test may perform a real HH POST.
 
@@ -64,6 +65,7 @@ The implementation review must specifically verify:
 - [ ] Build the controlled application request from the validated artifact and preflight; reject provider resume mismatch and invalid cover-letter content.
 - [ ] In dry-run, perform all reads and validation, emit `WOULD_APPLY`, and stop before constructing/invoking the mutation adapter.
 - [ ] In live mode, require `HH_DRY_RUN=false` and `HH_WRITE_ENABLED=true`, configure a per-run/per-day cap of one, and compose the existing write gateway with `applicationattempt` and `applicationsubmission`.
+- [ ] Keep the cap scoped to this invocation/run; preserve existing global/daily limits without adding a permanent one-per-day policy.
 - [ ] Add tests for every approval/preflight gate, dry-run with `HH_WRITE_ENABLED=false`, real-mode configuration rejection, exact identity, and one-application caps.
 
 ## Task 4: Add mandatory targeted reconciliation and final outcomes
@@ -72,6 +74,7 @@ The implementation review must specifically verify:
 - [ ] Implement an API evidence reader using targeted vacancy/preflight and negotiation collection reads; do not depend on the currently unsupported generic `ReadApplications` method.
 - [ ] Route `SUCCESS`, `ALREADY_APPLIED`, and `UNKNOWN_SEND_RESULT` through exactly one targeted reconciliation read before final classification.
 - [ ] Persist attempt state/evidence so restart after an uncertain result cannot send another application or let another resume bypass the vacancy lock.
+- [ ] Test the pre-dispatch boundary: proven validation/request failures release or close the reservation, while any possible HTTP dispatch creates a durable vacancy lock that survives restart and blocks every other resume until reconciliation.
 - [ ] Test POST-then-GET ordering, all three reconciliation-triggering classes, confirmed/unconfirmed branches, and ambiguous no-retry behavior with `httptest.Server`.
 
 ## Task 5: Expose and document the command
@@ -84,9 +87,9 @@ The implementation review must specifically verify:
 ## Task 6: Verify and produce the requested evidence
 
 - [ ] Run an injected dry-run scenario with `HH_DRY_RUN=true HH_WRITE_ENABLED=false HH_TRANSPORT=api`; record eligibility/preflight/artifact checks, `WOULD_APPLY`, and zero POST requests.
-- [ ] Run `gofmt -w .`, `go test ./...`, `go vet ./...`, `go build ./...`, and `git diff --check`; resolve failures before claiming completion.
+- [ ] Run `gofmt -w .`, `go test ./...`, `go test -race ./...`, `go vet ./...`, `go build ./...`, and `git diff --check`; if race testing is blocked by infrastructure or disk space, report that explicitly and do not claim full verification.
 - [ ] Inspect the diff for secrets, cookies, personal raw chat data, accidental browser/bulk wiring, and any real HH endpoint invocation in tests.
-- [ ] Select and report a proposed live vacancy for manual review only (the planned candidate is vacancy `137112468`); do not execute it and do not use unrelated vacancies `137244538` or `137493556`.
+- [ ] Perform a fresh GET-only preflight for vacancy `137112468` before proposing it for manual review; do not execute it and do not use unrelated vacancies `137244538` or `137493556`.
 - [ ] Add a sanitized validation report under `docs/validation/` containing the dry-run evidence and the proposed-live-vacancy status.
 
 ## Plan self-review checklist
