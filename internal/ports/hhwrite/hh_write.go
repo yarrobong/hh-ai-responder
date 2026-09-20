@@ -18,6 +18,20 @@ const (
 	OutcomeAmbiguous Outcome = "ambiguous"
 )
 
+// ApplicationResultClass is the stable classification of the one supported
+// vacancy-application mutation. A successful, duplicate, or ambiguous result
+// must be reconciled by the caller before it is treated as final.
+type ApplicationResultClass string
+
+const (
+	ApplicationResultSuccess           ApplicationResultClass = "SUCCESS"
+	ApplicationResultAlreadyApplied    ApplicationResultClass = "ALREADY_APPLIED"
+	ApplicationResultBusinessRejected  ApplicationResultClass = "BUSINESS_REJECTED"
+	ApplicationResultAuthRequired      ApplicationResultClass = "AUTH_REQUIRED"
+	ApplicationResultRateLimited       ApplicationResultClass = "RATE_LIMITED"
+	ApplicationResultUnknownSendResult ApplicationResultClass = "UNKNOWN_SEND_RESULT"
+)
+
 // ErrorCategory is intentionally small: callers need to distinguish local
 // failures, concrete HH responses, and uncertain delivery.
 type ErrorCategory string
@@ -77,6 +91,7 @@ func IsAmbiguous(err error) bool {
 // gateway. It never exposes *http.Response or raw response JSON.
 type WriteResult struct {
 	Outcome        Outcome
+	Class          ApplicationResultClass
 	ProviderStatus int
 	ProviderID     string
 	Timestamp      time.Time
@@ -97,12 +112,13 @@ type ChatLeaveRequest struct {
 // answers are part of the same request when present; there is no separate
 // test-submission capability because HH does not use a separate write here.
 type VacancyResponseRequest struct {
-	VacancyID       int
-	ResumeHash      string
-	Letter          string
-	RefererURL      string
-	IgnorePostponed string
-	Test            *VacancyTestSubmission
+	VacancyID        int
+	ProviderResumeID string
+	ResumeHash       string
+	Letter           string
+	RefererURL       string
+	IgnorePostponed  string
+	Test             *VacancyTestSubmission
 }
 
 type VacancyTestSubmission struct {
