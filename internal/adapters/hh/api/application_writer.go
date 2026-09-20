@@ -201,6 +201,8 @@ type structuredApplicationError struct {
 }
 
 type structuredApplicationErrorResponse struct {
+	Type   string                       `json:"type"`
+	Value  string                       `json:"value"`
 	Errors []structuredApplicationError `json:"errors"`
 }
 
@@ -227,6 +229,11 @@ func classifyStructuredApplicationError(status int, body []byte) (hhwrite.WriteR
 	var response structuredApplicationErrorResponse
 	if err := json.Unmarshal(body, &response); err != nil {
 		return applicationBusinessRejected(status, errors.New("HH API application was rejected"))
+	}
+	topLevelType := boundedField(response.Type)
+	topLevelValue := boundedField(response.Value)
+	if topLevelType == "captcha_required" && topLevelValue == "captcha_required" {
+		return applicationManualChallengeWithFields(status, map[string]string{"type": topLevelType, "value": topLevelValue})
 	}
 	for _, providerError := range response.Errors {
 		providerType := boundedField(providerError.Type)

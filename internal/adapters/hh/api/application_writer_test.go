@@ -157,6 +157,45 @@ func TestAPIApplicationWriterCaptchaRequiresManualReviewWithoutRetry(t *testing.
 	}
 }
 
+func TestAPIApplicationWriterRecognizesDocumentedTopLevelCaptchaWithoutLeakOrRetry(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, `{"type":"captcha_required","value":"captcha_required","fallback_url":"https://hh.example/fallback-secret","captcha_url":"https://hh.example/captcha-secret"}`)
+	}))
+	defer server.Close()
+
+	client := newAPIClient(t, server.URL, &memoryTokenStore{loaded: validTokens()})
+	result, err := NewAPIApplicationWriter(client).SubmitVacancyResponse(context.Background(), hhwrite.VacancyResponseRequest{VacancyID: 42, ProviderResumeID: "resume-7"})
+	if err == nil || result.Class != hhwrite.ApplicationResultManualChallenge || result.Outcome != hhwrite.OutcomeRejected || calls.Load() != 1 {
+		t.Fatalf("result=%+v err=%v calls=%d, want manual challenge, rejected outcome, and one POST", result, err, calls.Load())
+	}
+	if strings.Contains(err.Error(), "fallback-secret") || strings.Contains(err.Error(), "captcha-secret") || strings.Contains(err.Error(), "fallback_url") || strings.Contains(err.Error(), "captcha_url") {
+		t.Fatalf("challenge details leaked in error: %v", err)
+	}
+	if strings.Contains(result.ProviderID, "fallback-secret") || strings.Contains(result.ProviderID, "captcha-secret") {
+		t.Fatalf("challenge details leaked in result provider ID: %q", result.ProviderID)
+	}
+	for key, value := range result.Metadata {
+		if strings.Contains(key, "url") || strings.Contains(value, "fallback-secret") || strings.Contains(value, "captcha-secret") {
+			t.Fatalf("challenge details leaked in result metadata %q=%q", key, value)
+		}
+	}
+	var transportErr *hhwrite.TransportError
+	if !errors.As(err, &transportErr) || transportErr == nil {
+		t.Fatalf("err=%T %v, want transport error", err, err)
+	}
+	if strings.Contains(transportErr.ResponseBody, "fallback-secret") || strings.Contains(transportErr.ResponseBody, "captcha-secret") {
+		t.Fatalf("challenge details leaked in response body: %q", transportErr.ResponseBody)
+	}
+	for key, value := range transportErr.ErrorFields {
+		if strings.Contains(key, "url") || strings.Contains(value, "fallback-secret") || strings.Contains(value, "captcha-secret") {
+			t.Fatalf("challenge details leaked in safe error field %q=%q", key, value)
+		}
+	}
+}
+
 func TestAPIApplicationWriterMapsAmbiguousTransportWithoutRetry(t *testing.T) {
 	var calls atomic.Int32
 	connectionErr := errors.New("connection reset after dispatch")
