@@ -128,6 +128,38 @@ HH_DRY_RUN=true HH_WRITE_ENABLED=false STORAGE_BACKEND=json \
 Уже подтверждённые отклики пропускаются до detail и AI; при готовом результате
 команда останавливается на `PILOT: READY_FOR_EXPLICIT_SEND` и не выполняет POST.
 
+### Controlled API application POST (RESET-API-3)
+
+Для одного явно выбранного vacancy/resume доступен отдельный API-only путь:
+
+```sh
+HH_TRANSPORT=api HH_DRY_RUN=true HH_WRITE_ENABLED=false \
+  ./hh-ai-responder hh-api apply 137112468 \
+  --resume-id <provider-resume-id> --approval-file ./approval.json
+```
+
+Dry-run выполняет approval validation и свежий GET-only preflight и может
+вывести `WOULD_APPLY`, но не создаёт mutation adapter и не отправляет POST.
+`--approval-file` обязателен: default/stale artifact автоматически не
+подбирается. Артефакт должен точно соответствовать vacancy и provider resume,
+содержать непустое проверенное письмо, `READY_FOR_EXPLICIT_SEND`, решение
+`MATCH`, nonce, content hash и свежий `preview_fresh_at`.
+
+Единственный live-вызов имеет тот же точный синтаксис и требует одновременно
+`HH_TRANSPORT=api HH_DRY_RUN=false HH_WRITE_ENABLED=true`. За один invocation
+разрешена ровно одна application mutation; существующие глобальные и дневные
+лимиты Write Gateway сохраняются, но этот путь не добавляет отдельную
+постоянную политику «один отклик в день». Команда не подключена к поиску,
+bulk career-agent или переключению резюме.
+
+После `SUCCESS`, `ALREADY_APPLIED` или `UNKNOWN_SEND_RESULT` команда делает
+обязательный targeted GET reconciliation. Итогом могут быть
+`POST_SUCCESS_RECONCILED`, `POST_SUCCESS_UNCONFIRMED`,
+`ALREADY_APPLIED_RECONCILED`, `UNKNOWN_SEND_RECONCILED_SUCCESS` или
+`UNKNOWN_SEND_UNRESOLVED`. Timeout/reset/EOF и неопределённый 5xx не повторяются;
+durable vacancy lock сохраняется до reconciliation. Валидация и тесты этого
+пути не выполняют реальный HH POST.
+
 Перед Shadow или любым другим HH read-path проверьте доступ без discovery:
 
 ```sh
