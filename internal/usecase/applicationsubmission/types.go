@@ -9,6 +9,8 @@ import (
 // Applicability is the typed, read-only vacancy state needed immediately
 // before an automatic response. Known bits are distinct from false values.
 type Applicability struct {
+	Available             bool
+	AvailableKnown        bool
 	Archived              bool
 	ArchivedKnown         bool
 	AlreadyResponded      bool
@@ -150,8 +152,9 @@ type Dependencies struct {
 }
 
 type Options struct {
-	WriteEnabled bool
-	DryRun       bool
+	WriteEnabled                bool
+	DryRun                      bool
+	RequireAvailabilityEvidence bool
 }
 
 type Status string

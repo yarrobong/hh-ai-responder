@@ -76,6 +76,23 @@ func (s *Service) Submit(ctx context.Context, input Input) (Result, error) {
 		return result, fmt.Errorf("%w: %v", ErrFreshStateUnavailable, err)
 	}
 	result.Applicability = fresh
+	if s.opts.RequireAvailabilityEvidence {
+		if !fresh.AvailableKnown {
+			result.Status = StatusBlockedStale
+			result.Reason = "application availability is unknown"
+			return result, fmt.Errorf("%w: %s", ErrFreshStateBlocked, result.Reason)
+		}
+		if !fresh.Available {
+			result.Status = StatusBlockedUnavailable
+			result.Reason = "vacancy is unavailable"
+			return result, fmt.Errorf("%w: %s", ErrFreshStateBlocked, result.Reason)
+		}
+	}
+	if fresh.LetterRequiredKnown && fresh.LetterRequired && strings.TrimSpace(input.Prepared.CoverLetter) == "" {
+		result.Status = StatusBlockedUnavailable
+		result.Reason = "cover letter is required"
+		return result, fmt.Errorf("%w: %s", ErrFreshStateBlocked, result.Reason)
+	}
 	preflight := hhwritepreflight.NewService(hhwritepreflight.Dependencies{
 		Vacancies: applicabilityReader{value: fresh},
 	}).PreflightVacancyResponse(ctx, hhwritepreflight.VacancyInput{

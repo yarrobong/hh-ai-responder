@@ -116,6 +116,46 @@ func TestSubmitAlreadyRespondedAndUnavailableDoNotExecute(t *testing.T) {
 	}
 }
 
+func TestControlledApplicabilityFailsClosedForUnknownOrUnavailableState(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		state Applicability
+		want  string
+	}{
+		{name: "availability unknown", state: validApplicability(false), want: "application availability is unknown"},
+		{name: "availability false", state: func() Applicability {
+			value := validApplicability(false)
+			value.AvailableKnown, value.Available = true, false
+			return value
+		}(), want: "vacancy is unavailable"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			vacancies := &fakeVacancyReader{state: test.state}
+			executor := &fakeExecutor{result: ExecutionResult{Outcome: ExecutionAccepted}}
+			service := NewService(Dependencies{Vacancies: vacancies, Executor: executor}, Options{WriteEnabled: true, RequireAvailabilityEvidence: true})
+			result, err := service.Submit(context.Background(), Input{Prepared: preparedApplication(false)})
+			if err == nil || executor.calls != 0 || !containsString(result.Reason, test.want) {
+				t.Fatalf("unsafe availability reached executor: %+v err=%v calls=%d", result, err, executor.calls)
+			}
+		})
+	}
+}
+
+func TestControlledApplicabilityBlocksRequiredEmptyLetter(t *testing.T) {
+	state := validApplicability(false)
+	state.Available, state.AvailableKnown = true, true
+	state.LetterRequired = true
+	vacancies := &fakeVacancyReader{state: state}
+	executor := &fakeExecutor{result: ExecutionResult{Outcome: ExecutionAccepted}}
+	service := NewService(Dependencies{Vacancies: vacancies, Executor: executor}, Options{WriteEnabled: true, RequireAvailabilityEvidence: true})
+	prepared := preparedApplication(false)
+	prepared.CoverLetter = ""
+	result, err := service.Submit(context.Background(), Input{Prepared: prepared})
+	if err == nil || executor.calls != 0 || !containsString(result.Reason, "cover letter is required") {
+		t.Fatalf("empty required letter reached executor: %+v err=%v calls=%d", result, err, executor.calls)
+	}
+}
+
 func TestSubmitTestMetadataChangeBlocksWithoutExecution(t *testing.T) {
 	service, vacancies, tests, executor := newSubmissionFixture(true, ExecutionAccepted)
 	tests.snapshot.Tasks[0].ChoiceIDs = []string{"999"}
