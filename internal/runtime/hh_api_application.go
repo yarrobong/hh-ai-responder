@@ -24,6 +24,7 @@ import (
 const (
 	apiApplicationApprovalVersion = 1
 	apiApplicationApprovalMaxAge  = 30 * time.Minute
+	manualApprovalBasis           = "OPERATOR_MANUAL_REVIEW"
 )
 
 var (
@@ -38,17 +39,25 @@ var (
 // API application command. It deliberately contains no cookies, tokens, or
 // candidate-private context.
 type APIApplicationApproval struct {
-	Version          int        `json:"version"`
-	VacancyID        int        `json:"vacancy_id"`
-	ProviderResumeID string     `json:"provider_resume_id,omitempty"`
-	SelectedResumeID string     `json:"selected_resume_id,omitempty"`
-	CoverLetter      string     `json:"cover_letter"`
-	ContentHash      string     `json:"content_hash"`
-	Nonce            string     `json:"nonce"`
-	NonceUsedAt      *time.Time `json:"nonce_used_at,omitempty"`
-	Status           string     `json:"status"`
-	FinalDecision    string     `json:"final_decision"`
-	PreviewFreshAt   time.Time  `json:"preview_fresh_at"`
+	Version                         int        `json:"version"`
+	VacancyID                       int        `json:"vacancy_id"`
+	ProviderResumeID                string     `json:"provider_resume_id,omitempty"`
+	SelectedResumeID                string     `json:"selected_resume_id,omitempty"`
+	CoverLetter                     string     `json:"cover_letter"`
+	ContentHash                     string     `json:"content_hash"`
+	Nonce                           string     `json:"nonce"`
+	NonceUsedAt                     *time.Time `json:"nonce_used_at,omitempty"`
+	Status                          string     `json:"status"`
+	FinalDecision                   string     `json:"final_decision"`
+	PreviewFreshAt                  time.Time  `json:"preview_fresh_at"`
+	ApprovalBasis                   string     `json:"approval_basis,omitempty"`
+	OperatorApproved                bool       `json:"operator_approved,omitempty"`
+	OperatorApprovalTimestamp       time.Time  `json:"operator_approval_timestamp,omitempty"`
+	OriginalAIScore                 *int       `json:"original_ai_score,omitempty"`
+	OriginalAIRecommendation        string     `json:"original_ai_recommendation,omitempty"`
+	OriginalAIRecommendationReasons []string   `json:"original_ai_recommendation_reasons,omitempty"`
+	OriginalFinalDecision           string     `json:"original_final_decision,omitempty"`
+	PilotArtifactHash               string     `json:"pilot_artifact_hash,omitempty"`
 }
 
 func loadAPIApplicationApproval(path string) (APIApplicationApproval, error) {

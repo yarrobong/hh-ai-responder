@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +30,145 @@ func exportPilotFixture(now time.Time) PilotArtifact {
 		ContentHash:      contentHash(letter),
 		Nonce:            "pilot-nonce-7",
 		PreviewFreshAt:   now,
+	}
+}
+
+func manualPilotFixture(now time.Time) PilotArtifact {
+	falseValue := false
+	trueValue := true
+	score := 82
+	letter := "Здравствуйте! Готов обсудить интеграции и поддержку API.\n"
+	return PilotArtifact{
+		Version:          pilotArtifactVersion,
+		Status:           pilotManualReviewStatus,
+		VacancyID:        42,
+		SelectedResumeID: "hh-resume-provider-id-resume-provider-7",
+		AIScore:          &score,
+		AIRecommendation: "UNCERTAIN",
+		AIReasons:        []string{"provider eligibility needs operator review"},
+		FinalDecision:    "REVIEW_REQUIRED",
+		HardMissing:      []string{},
+		HardUnknown:      []string{},
+		Preflight: PilotPreflightSnapshot{
+			ObservedAt: now, Active: &trueValue, AlreadyResponded: &falseValue,
+			AlreadyRespondedValue: "NO", CanApply: &trueValue,
+			TestRequired: &falseValue, CoverLetterRequired: &falseValue,
+		},
+		CoverLetter:    letter,
+		ContentHash:    contentHash(letter),
+		PreviewFreshAt: now,
+	}
+}
+
+func TestValidateManualPilotArtifactRequiresExplicitAIUncertainReview(t *testing.T) {
+	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	base := manualPilotFixture(now)
+	tests := []struct {
+		name   string
+		mutate func(*PilotArtifact)
+	}{
+		{name: "blocked", mutate: func(value *PilotArtifact) { value.Status = "BLOCKED" }},
+		{name: "reject", mutate: func(value *PilotArtifact) { value.Status = "REJECT" }},
+		{name: "match", mutate: func(value *PilotArtifact) { value.FinalDecision = "MATCH" }},
+		{name: "hard missing", mutate: func(value *PilotArtifact) { value.HardMissing = []string{"FastAPI"} }},
+		{name: "hard unknown", mutate: func(value *PilotArtifact) { value.HardUnknown = []string{"experience"} }},
+		{name: "do not apply", mutate: func(value *PilotArtifact) { value.AIRecommendation = "DO_NOT_APPLY" }},
+		{name: "missing AI score", mutate: func(value *PilotArtifact) { value.AIScore = nil }},
+		{name: "missing AI recommendation", mutate: func(value *PilotArtifact) { value.AIRecommendation = "" }},
+		{name: "test required", mutate: func(value *PilotArtifact) { required := true; value.Preflight.TestRequired = &required }},
+		{name: "test unknown", mutate: func(value *PilotArtifact) { value.Preflight.TestRequired = nil }},
+		{name: "duplicate", mutate: func(value *PilotArtifact) {
+			responded := true
+			value.Preflight.AlreadyResponded = &responded
+			value.Preflight.AlreadyRespondedValue = "YES"
+		}},
+		{name: "duplicate unknown", mutate: func(value *PilotArtifact) {
+			value.Preflight.AlreadyResponded = nil
+			value.Preflight.AlreadyRespondedValue = "UNKNOWN"
+		}},
+		{name: "inactive", mutate: func(value *PilotArtifact) { active := false; value.Preflight.Active = &active }},
+		{name: "can apply unknown", mutate: func(value *PilotArtifact) { value.Preflight.CanApply = nil }},
+		{name: "can apply false", mutate: func(value *PilotArtifact) { canApply := false; value.Preflight.CanApply = &canApply }},
+		{name: "missing provider resume", mutate: func(value *PilotArtifact) { value.SelectedResumeID = "" }},
+		{name: "conflicting provider resume", mutate: func(value *PilotArtifact) { value.SelectedResumeHHID = 99 }},
+		{name: "stale preview", mutate: func(value *PilotArtifact) {
+			value.PreviewFreshAt = now.Add(-apiApplicationApprovalMaxAge - time.Nanosecond)
+		}},
+		{name: "stale preflight", mutate: func(value *PilotArtifact) {
+			value.Preflight.ObservedAt = now.Add(-apiApplicationApprovalMaxAge - time.Nanosecond)
+		}},
+		{name: "empty source content hash", mutate: func(value *PilotArtifact) { value.ContentHash = "" }},
+		{name: "mismatched source content hash", mutate: func(value *PilotArtifact) { value.ContentHash = strings.Repeat("0", 64) }},
+		{name: "unexpected source nonce", mutate: func(value *PilotArtifact) { value.Nonce = "pilot-nonce-must-not-exist" }},
+		{name: "used source nonce", mutate: func(value *PilotArtifact) { used := now; value.NonceUsedAt = &used }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			value := base
+			test.mutate(&value)
+			if _, err := validateManualPilotArtifact(value, value.CoverLetter, now); err == nil {
+				t.Fatal("manual pilot validation unexpectedly succeeded")
+			}
+		})
+	}
+
+	withoutProviderFacts := base
+	if _, err := validateManualPilotArtifact(withoutProviderFacts, withoutProviderFacts.CoverLetter, now); err != nil {
+		t.Fatalf("manual pilot validation required API-only facts: %v", err)
+	}
+
+	emptyLetter := base
+	emptyLetter.CoverLetter = ""
+	emptyLetter.ContentHash = contentHash("")
+	if _, err := validateManualPilotArtifact(emptyLetter, "", now); err != nil {
+		t.Fatalf("known-not-required empty letter was rejected: %v", err)
+	}
+	for _, required := range []*bool{nil, func() *bool { value := true; return &value }()} {
+		value := emptyLetter
+		value.Preflight.CoverLetterRequired = required
+		if _, err := validateManualPilotArtifact(value, "", now); err == nil {
+			t.Fatalf("empty letter accepted with cover-letter requirement=%v", required)
+		}
+	}
+}
+
+func TestBuildManualAPIApplicationApprovalPreservesProvenanceAndIssuesPassedFreshNonce(t *testing.T) {
+	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	pilot := manualPilotFixture(now)
+	providerResumeID, err := validateManualPilotArtifact(pilot, pilot.CoverLetter, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval := buildManualAPIApplicationApproval(pilot, providerResumeID, pilot.CoverLetter, "pilot-hash", "fresh-approval-nonce", now)
+	if approval.Status != pilotManualReviewStatus || approval.FinalDecision != "REVIEW_REQUIRED" || approval.OriginalFinalDecision != "REVIEW_REQUIRED" || approval.ApprovalBasis != manualApprovalBasis || !approval.OperatorApproved {
+		t.Fatalf("approval decision/provenance = %+v", approval)
+	}
+	if approval.Nonce != "fresh-approval-nonce" || approval.Nonce == pilot.Nonce || approval.OperatorApprovalTimestamp != now || approval.PilotArtifactHash != "pilot-hash" {
+		t.Fatalf("approval nonce/timestamp/hash = %+v", approval)
+	}
+	if approval.OriginalAIScore == nil || *approval.OriginalAIScore != *pilot.AIScore || approval.OriginalAIRecommendation != pilot.AIRecommendation || !reflect.DeepEqual(approval.OriginalAIRecommendationReasons, pilot.AIReasons) {
+		t.Fatalf("approval AI provenance = %+v", approval)
+	}
+	if approval.CoverLetter != pilot.CoverLetter || approval.ContentHash != contentHash(pilot.CoverLetter) {
+		t.Fatalf("approval letter binding = %+v", approval)
+	}
+}
+
+func TestPilotArtifactLoaderKeepsAutomaticNonceRequirementSeparateFromManualReview(t *testing.T) {
+	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	path := filepath.Join(t.TempDir(), "manual-pilot.json")
+	raw, err := json.Marshal(manualPilotFixture(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, source, err := loadPilotArtifactForManualApproval(path); err != nil || len(source) != len(raw) {
+		t.Fatalf("manual loader artifact/source = err=%v bytes=%d, want accepted exact source", err, len(source))
+	}
+	if _, err := loadPilotArtifact(path); err == nil {
+		t.Fatal("automatic loader accepted a manual pilot without a nonce")
 	}
 }
 

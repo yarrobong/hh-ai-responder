@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -782,23 +783,35 @@ func savePilotArtifact(path string, artifact PilotArtifact) error {
 }
 
 func loadPilotArtifact(path string) (PilotArtifact, error) {
+	artifact, _, err := loadPilotArtifactRaw(path, true)
+	return artifact, err
+}
+
+func loadPilotArtifactForManualApproval(path string) (PilotArtifact, []byte, error) {
+	return loadPilotArtifactRaw(path, false)
+}
+
+func loadPilotArtifactRaw(path string, requireNonce bool) (PilotArtifact, []byte, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return PilotArtifact{}, err
+		return PilotArtifact{}, nil, err
+	}
+	if len(raw) > 1<<20 {
+		return PilotArtifact{}, nil, errors.New("pilot artifact is too large")
 	}
 	var artifact PilotArtifact
-	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&artifact); err != nil {
-		return PilotArtifact{}, fmt.Errorf("invalid pilot artifact: %w", err)
+		return PilotArtifact{}, nil, fmt.Errorf("invalid pilot artifact: %w", err)
 	}
-	if artifact.Version != pilotArtifactVersion || artifact.VacancyID <= 0 || strings.TrimSpace(artifact.ContentHash) == "" || strings.TrimSpace(artifact.Nonce) == "" {
-		return PilotArtifact{}, errors.New("pilot artifact is incomplete")
+	if artifact.Version != pilotArtifactVersion || artifact.VacancyID <= 0 || strings.TrimSpace(artifact.ContentHash) == "" || (requireNonce && strings.TrimSpace(artifact.Nonce) == "") {
+		return PilotArtifact{}, nil, errors.New("pilot artifact is incomplete")
 	}
 	if artifact.CoverLetter == "" && (artifact.Preflight.CoverLetterRequired == nil || *artifact.Preflight.CoverLetterRequired) {
-		return PilotArtifact{}, errors.New("pilot artifact is incomplete")
+		return PilotArtifact{}, nil, errors.New("pilot artifact is incomplete")
 	}
-	return artifact, nil
+	return artifact, raw, nil
 }
 
 func renderCareerAgentPilotPreview(preview PilotPreview) string {
