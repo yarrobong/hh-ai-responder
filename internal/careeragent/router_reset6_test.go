@@ -177,6 +177,34 @@ func TestRouteResumeSelectsSupportWithoutGenericCollision(t *testing.T) {
 	}
 }
 
+func TestRouteResumeKeepsEducationRequirementUnknownInsteadOfSkillMatch(t *testing.T) {
+	decision := RouteResume(VacancyInput{
+		ID:             607,
+		Title:          "Специалист технической поддержки (офис)",
+		RequiredSkills: []string{"СПО/высшее/магистратура", "Linux"},
+		Description:    "Поддержка пользователей и диагностика рабочих мест",
+	}, []ResumeProfile{{
+		ID:          "support",
+		Title:       "Технический специалист",
+		DesiredRole: "Technical support",
+		Skills:      []string{"support", "diagnostics", "СПО", "Linux"},
+		Enabled:     true,
+	}})
+	if decision.Status != RouteSelected {
+		t.Fatalf("support resume was not selected: %+v", decision)
+	}
+	states := map[string]string{}
+	for _, requirement := range decision.HardRequirements {
+		states[requirement.Requirement] = requirement.Status
+	}
+	if states["СПО/высшее/магистратура"] != "unknown" {
+		t.Fatalf("education-like requirement was matched as a resume skill: %+v", decision.HardRequirements)
+	}
+	if states["Linux"] != "met" {
+		t.Fatalf("technical skill requirement changed unexpectedly: %+v", decision.HardRequirements)
+	}
+}
+
 func TestRouteResumeSelectsSysadminWhenMatchingResumeIsEnabled(t *testing.T) {
 	resumes := []ResumeProfile{
 		{ID: "sysadmin", Title: "Linux administrator", Skills: []string{"Linux", "DNS", "Network"}, Enabled: true},

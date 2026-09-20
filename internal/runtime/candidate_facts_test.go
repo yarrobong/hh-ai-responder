@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"hh-ai-responder/internal/usecase/vacancyanalysis"
 )
 
 func TestGenericHHExperienceIsSoftContext(t *testing.T) {
@@ -101,7 +103,15 @@ func TestEducationRequirementsUseTrustedLevel(t *testing.T) {
 		{name: "higher meets higher", level: educationLevelHigher, requirement: "высшее образование", wantStatus: hardRequirementStatusMet},
 		{name: "secondary professional misses higher", level: educationLevelSecondaryProfessional, requirement: "высшее образование", wantStatus: hardRequirementStatusMissing},
 		{name: "secondary professional meets alternative", level: educationLevelSecondaryProfessional, requirement: "высшее или среднее профессиональное", wantStatus: hardRequirementStatusMet},
+		{name: "Russian secondary professional meets slash alternatives", level: "среднее профессиональное", requirement: "СПО/высшее/магистратура", wantStatus: hardRequirementStatusMet},
+		{name: "canonical secondary professional meets slash alternatives", level: educationLevelSecondaryProfessional, requirement: "СПО/высшее/магистратура", wantStatus: hardRequirementStatusMet},
+		{name: "secondary professional meets comma alternatives", level: "среднее специальное образование", requirement: "СПО, высшее", wantStatus: hardRequirementStatusMet},
+		{name: "Russian secondary professional misses higher", level: "среднее профессиональное", requirement: "высшее образование", wantStatus: hardRequirementStatusMissing},
+		{name: "higher meets slash alternatives", level: educationLevelHigher, requirement: "СПО/высшее/магистратура", wantStatus: hardRequirementStatusMet},
+		{name: "higher meets degree alternatives", level: educationLevelHigher, requirement: "бакалавриат/специалитет/магистратура", wantStatus: hardRequirementStatusMet},
+		{name: "secondary misses slash alternatives", level: educationLevelSecondary, requirement: "СПО/высшее/магистратура", wantStatus: hardRequirementStatusMissing},
 		{name: "incomplete higher meets explicit alternative", level: educationLevelIncompleteHigher, requirement: "высшее или незаконченное высшее", wantStatus: hardRequirementStatusMet},
+		{name: "unknown trusted level remains unknown", level: "doctoral", requirement: "СПО/высшее/магистратура", wantStatus: hardRequirementStatusUnknown},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -111,7 +121,7 @@ func TestEducationRequirementsUseTrustedLevel(t *testing.T) {
 				test.requirement,
 				[]HardRequirementCandidate{{Requirement: test.requirement, Category: hardRequirementCategoryEducation, VacancyEvidence: test.requirement}},
 			)
-			if len(got) != 1 || got[0].Status != test.wantStatus || !strings.HasPrefix(got[0].CandidateEvidence, "Candidate education:") {
+			if len(got) != 1 || got[0].Status != test.wantStatus || test.wantStatus != hardRequirementStatusUnknown && !strings.HasPrefix(got[0].CandidateEvidence, "Candidate education:") {
 				t.Fatalf("got requirements=%+v, want status=%s", got, test.wantStatus)
 			}
 		})
@@ -127,6 +137,48 @@ func TestEducationSpecializationWithoutStructuredProfileIsUnknown(t *testing.T) 
 	)
 	if len(got) != 1 || got[0].Status != hardRequirementStatusUnknown {
 		t.Fatalf("specialization was inferred from level: %+v", got)
+	}
+}
+
+func TestCanonicalPostgresEducationProjectionMatchesAlternativeRequirement(t *testing.T) {
+	at := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	persisted := Candidate{
+		Version: 1,
+		ID:      "candidate-reset-6a",
+		Education: []CanonicalCandidateEducation{{
+			ID:          "education-reset-6a",
+			Level:       "среднее профессиональное",
+			Institution: "Екатеринбургский монтажный колледж",
+			Specialty:   "Информационные системы и программирование",
+			Metadata:    canonicalTestMetadata(KnowledgeSourceUserConfirmed, TruthStatusConfirmed, at, "user confirmed education"),
+		}},
+	}
+
+	safe, err := CanonicalEmployerSafeProjection(persisted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(safe.Profile.Education) != 1 {
+		t.Fatalf("confirmed canonical education was not projected: %+v", safe.Profile.Education)
+	}
+	projected := safe.Profile.Education[0]
+	facts := vacancyanalysis.CandidateFacts{
+		EducationKnown:   true,
+		EducationLevel:   projected.Level,
+		EducationDetails: strings.Join([]string{projected.Institution, projected.Specialty, projected.Details}, ", "),
+	}
+	status, evidence := vacancyanalysis.DeriveHardRequirementStatus(facts, vacancyanalysis.HardRequirementCandidate{
+		Requirement:     "СПО/высшее/магистратура",
+		Category:        vacancyanalysis.HardRequirementCategoryEducation,
+		VacancyEvidence: "Требуется СПО/высшее/магистратура",
+	})
+	if status != vacancyanalysis.HardRequirementStatusMet || !strings.HasPrefix(evidence, "Candidate education: среднее профессиональное") {
+		t.Fatalf("canonical persisted education did not satisfy alternatives: status=%s evidence=%q", status, evidence)
+	}
+
+	original := persisted.Education[0]
+	if original.Level != "среднее профессиональное" || original.Institution != "Екатеринбургский монтажный колледж" || original.Specialty != "Информационные системы и программирование" || original.Metadata.TruthStatus != TruthStatusConfirmed || len(original.Metadata.Sources) != 1 || original.Metadata.Sources[0].Type != KnowledgeSourceUserConfirmed {
+		t.Fatalf("canonical candidate was changed by projection/matching: %+v", original)
 	}
 }
 

@@ -642,21 +642,65 @@ func genericWorkExperienceMinimumMonths(value string) (int, bool, bool) {
 }
 
 func educationRequirementMatches(candidateLevel, requirement string) (bool, bool) {
-	text := strings.ToLower(strings.ReplaceAll(strings.Join(strings.Fields(strings.TrimSpace(requirement)), " "), "ё", "е"))
-	if text == "" || containsEducationSpecialization(text) {
+	level, known := normalizeEducationLevel(candidateLevel)
+	if !known {
 		return false, false
 	}
-	acceptsHigher := strings.Contains(text, "высш")
-	acceptsIncompleteHigher := acceptsHigher && (strings.Contains(text, "незакончен") || strings.Contains(text, "неполное"))
-	acceptsSecondaryProfessional := strings.Contains(text, "средн") && (strings.Contains(text, "профессион") || strings.Contains(text, "специальн"))
-	acceptsSecondary := strings.Contains(text, "среднее") && !acceptsSecondaryProfessional
-	if !acceptsHigher && !acceptsSecondaryProfessional && !acceptsSecondary {
+	alternatives, supported := educationRequirementAlternatives(requirement)
+	if !supported {
 		return false, false
 	}
-	if candidateLevel == "higher" && acceptsHigher || candidateLevel == "incomplete_higher" && acceptsIncompleteHigher || candidateLevel == "secondary_professional" && acceptsSecondaryProfessional || candidateLevel == "secondary" && acceptsSecondary {
-		return true, true
+	for _, alternative := range alternatives {
+		if level == alternative {
+			return true, true
+		}
 	}
 	return false, true
+}
+
+func normalizeEducationLevel(value string) (string, bool) {
+	text := normalizeEducationText(value)
+	if text == "" {
+		return "", false
+	}
+	compact := strings.ReplaceAll(strings.ReplaceAll(text, "_", ""), "-", "")
+	switch {
+	case text == "incomplete higher", compact == "incompletehigher", strings.Contains(text, "незакончен") || strings.Contains(text, "неполное"):
+		if strings.Contains(text, "высш") || strings.Contains(text, "higher") || text == "неполное" || text == "незаконченное" {
+			return "incomplete_higher", true
+		}
+	case text == "higher", strings.Contains(text, "высш"), strings.Contains(text, "бакалавр"), strings.Contains(text, "магистр"), strings.Contains(text, "специалитет"):
+		return "higher", true
+	case compact == "secondaryprofessional", strings.Contains(text, "secondary professional"), text == "спо", strings.Contains(text, "средн") && (strings.Contains(text, "профессион") || strings.Contains(text, "специальн")):
+		return "secondary_professional", true
+	case text == "secondary", strings.Contains(text, "среднее общее"), text == "среднее", text == "среднее образование":
+		return "secondary", true
+	}
+	return "", false
+}
+
+func educationRequirementAlternatives(requirement string) ([]string, bool) {
+	text := normalizeEducationText(requirement)
+	if text == "" || containsEducationSpecialization(text) {
+		return nil, false
+	}
+	text = strings.ReplaceAll(text, " или ", "/")
+	parts := strings.FieldsFunc(text, func(r rune) bool { return r == '/' || r == ',' })
+	result := make([]string, 0, len(parts))
+	seen := map[string]bool{}
+	for _, part := range parts {
+		level, ok := normalizeEducationLevel(part)
+		if !ok || seen[level] {
+			continue
+		}
+		seen[level] = true
+		result = append(result, level)
+	}
+	return result, len(result) > 0
+}
+
+func normalizeEducationText(value string) string {
+	return strings.ToLower(strings.ReplaceAll(strings.Join(strings.Fields(strings.TrimSpace(value)), " "), "ё", "е"))
 }
 
 func containsEducationSpecialization(text string) bool {

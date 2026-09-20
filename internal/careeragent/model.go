@@ -1314,12 +1314,32 @@ func requirementStates(v VacancyInput, selected ResumeScore, resumes []ResumePro
 		}
 		seen[key] = true
 		status := "unknown"
-		if hasTokenOverlap(tokens(requirement), skills) {
+		if !isEducationLikeRequirement(requirement) && hasTokenOverlap(tokens(requirement), skills) {
 			status = "met"
 		}
 		result = append(result, RequirementState{Requirement: requirement, Status: status})
 	}
 	return result
+}
+
+func isEducationLikeRequirement(value string) bool {
+	text := strings.ToLower(strings.ReplaceAll(strings.Join(strings.Fields(strings.TrimSpace(value)), " "), "ё", "е"))
+	if text == "" {
+		return false
+	}
+	if tokens(text)["спо"] {
+		return true
+	}
+	for _, marker := range []string{
+		"образован", "высш", "higher", "secondary professional", "secondary special",
+		"бакалавр", "bachelor", "специалитет", "магистр", "master",
+		"неполное высшее", "незаконченное высшее", "incomplete higher",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func sortedTokenNames(values map[string]bool) []string {
