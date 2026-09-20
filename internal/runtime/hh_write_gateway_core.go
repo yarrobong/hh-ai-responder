@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	hhwriteport "hh-ai-responder/internal/ports/hhwrite"
@@ -99,8 +100,16 @@ func (s hhGatewayAuditSink) Append(_ context.Context, event hhwritegateway.Audit
 	if s.audit == nil {
 		return nil
 	}
+	actionID := event.ActionID
+	if strings.TrimSpace(actionID) == "" {
+		actionID = "gateway:" + firstNonEmpty(event.Operation, "write")
+	}
+	conversationID := event.ConversationID
+	if strings.TrimSpace(conversationID) == "" {
+		conversationID = firstNonEmpty(event.Operation, "write")
+	}
 	return s.audit.Append(HHWriteEvent{
-		ActionID: event.ActionID, Type: event.Type, ConversationID: event.ConversationID, Result: event.Result,
+		ActionID: actionID, Type: event.Type, ConversationID: conversationID, Result: event.Result,
 		ExternalMessageID: event.ProviderID, Error: event.Error, HTTPStatus: event.ProviderStatus,
 		ResponseContentType: event.ResponseContentType, ResponseBody: event.ResponseBody,
 		HHErrorFields: copyStringMap(event.ErrorFields), CorrelationIDs: copyStringMap(event.CorrelationIDs), CreatedAt: event.CreatedAt,

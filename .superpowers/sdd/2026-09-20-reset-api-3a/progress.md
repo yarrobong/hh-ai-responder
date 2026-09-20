@@ -13,7 +13,8 @@
 
 - Task 1: complete — RED: `go test ./internal/adapters/hh/api -run 'TestAPIApplicationWriter(ClassifiesDeterministicResponses|BoundsStructuredErrorEvidence)' -count=1` failed on undocumented 403/OAuth/captcha cases; GREEN: same focused tests and `go test ./internal/adapters/hh/api -count=1` passed; structured evidence is bounded/sanitized and duplicate substring text is not classified as already-applied.
 - Task 2: complete — RED: new `307`/`308` redirect-count and Location-identity tests failed because the current client followed redirects and ignored Location; GREEN: `go test ./internal/adapters/hh/api -count=1` passed after scoped redirect disabling, 3xx ambiguity mapping, and sanitized Location identity extraction.
-- Task 3: pending
+- Task 3: complete — RED: daily-limit tests showed a configured limit without `AttemptCounter` still reached the writer; GREEN: `go test ./internal/usecase/hhwritegateway ./internal/runtime -run 'Test(ServiceDailyLimit|ControlledApplicationGatewayCapsMutationsAtOnePerInvocation)' -count=1` and full package runs passed. `MaxWritesPerDay=0` remains unlimited; positive limits require the counter, and controlled `invoke` records durable `send_started` evidence.
+- Ruling: Record `send_started` for the gateway's non-action mutation path and synthesize safe audit identifiers when no approved action ID exists, so controlled API applications participate in the existing durable daily counter — cost if wrong: maintenance writes now add audit events, but they are already state-changing HH writes and the event contains no private request text.
 - Task 4: pending
 - Task 5: pending
 - Ruling: The installed executing-plans package references `task-start`/`task-done` scripts that are absent; use the available `task-brief` plus manual test-output/ledger evidence instead — cost if wrong: no automated ledger helper, but the required RED/GREEN and final verification evidence remains recorded.

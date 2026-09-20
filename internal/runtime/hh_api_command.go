@@ -19,6 +19,7 @@ import (
 	hhapi "hh-ai-responder/internal/adapters/hh/api"
 	"hh-ai-responder/internal/hhread"
 	attemptport "hh-ai-responder/internal/ports/applicationattempt"
+	hhwritegateway "hh-ai-responder/internal/usecase/hhwritegateway"
 )
 
 const (
@@ -34,6 +35,7 @@ type HHAPICommandDeps struct {
 	HTTPClient               *http.Client
 	Now                      func() time.Time
 	ApplicationAttempts      attemptport.Store
+	ApplicationAudit         hhwritegateway.AuditSink
 }
 
 func runHHAPICommand(ctx context.Context, args []string, cfg Config, stdin io.Reader, stdout, stderr io.Writer) error {

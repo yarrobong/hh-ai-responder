@@ -3,6 +3,7 @@ package hhwritegateway
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -90,6 +91,16 @@ type testAudit struct {
 	mu      sync.Mutex
 	events  []AuditEvent
 	failure error
+}
+
+type testCountingAudit struct {
+	*testAudit
+	count int
+	err   error
+}
+
+func (a *testCountingAudit) AttemptsSince(context.Context, time.Time) (int, error) {
+	return a.count, a.err
 }
 
 func (a *testAudit) Append(_ context.Context, event AuditEvent) error {
@@ -228,5 +239,39 @@ func TestServiceMaintenanceOperationsUseLighterPolicyWithoutActionState(t *testi
 	}
 	if got := writers.calls.Load(); got != 4 {
 		t.Fatalf("maintenance operations did not use their own explicit calls: %d", got)
+	}
+}
+
+func TestServiceDailyLimitFailsClosedWithoutAttemptCounter(t *testing.T) {
+	writers := &testMutationWriters{}
+	service := NewService(Dependencies{VacancyResponseWriter: writers, Audit: &testAudit{}}, Options{WriteEnabled: true, MaxWritesPerDay: 1})
+	_, err := service.SubmitVacancyResponse(context.Background(), VacancyResponseRequest{VacancyID: 42, ProviderResumeID: "resume-1"})
+	if err == nil || !strings.Contains(err.Error(), "daily limit unavailable") || writers.calls.Load() != 0 {
+		t.Fatalf("missing daily counter did not fail closed: err=%v calls=%d", err, writers.calls.Load())
+	}
+}
+
+func TestServiceDailyLimitUsesCounterAndZeroIsUnlimited(t *testing.T) {
+	tests := []struct {
+		name      string
+		maxPerDay int
+		count     int
+		wantError bool
+		wantCalls int32
+		audit     AuditSink
+	}{
+		{name: "at limit blocks", maxPerDay: 1, count: 1, wantError: true, wantCalls: 0, audit: &testCountingAudit{testAudit: &testAudit{}, count: 1}},
+		{name: "below limit permits", maxPerDay: 1, count: 0, wantCalls: 1, audit: &testCountingAudit{testAudit: &testAudit{}, count: 0}},
+		{name: "zero is unlimited", maxPerDay: 0, wantCalls: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			writers := &testMutationWriters{}
+			service := NewService(Dependencies{VacancyResponseWriter: writers, Audit: tt.audit}, Options{WriteEnabled: true, MaxWritesPerDay: tt.maxPerDay})
+			_, err := service.SubmitVacancyResponse(context.Background(), VacancyResponseRequest{VacancyID: 42, ProviderResumeID: "resume-1"})
+			if (err != nil) != tt.wantError || writers.calls.Load() != tt.wantCalls {
+				t.Fatalf("err=%v calls=%d, want error=%t calls=%d", err, writers.calls.Load(), tt.wantError, tt.wantCalls)
+			}
+		})
 	}
 }

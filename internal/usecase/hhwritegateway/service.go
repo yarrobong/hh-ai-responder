@@ -180,6 +180,10 @@ func (s *Service) invoke(ctx context.Context, operation string, call func(contex
 		result.Outcome, result.Error = OutcomeBlocked, err.Error()
 		return result, err
 	}
+	if err := s.audit(ctx, AuditEvent{Operation: operation, Type: "send_started", Result: string(ActionSending), CreatedAt: s.now()}); err != nil {
+		result.Outcome, result.Error = OutcomeBlocked, err.Error()
+		return result, fmt.Errorf("%w: %v", ErrPreTransportPersistence, err)
+	}
 	s.countAttempt()
 	result.TransportAttempted = true
 	writeResult, err := call(ctx)
@@ -256,14 +260,16 @@ func (s *Service) checkLimits(ctx context.Context) error {
 		return errors.New("HH write run limit reached")
 	}
 	if s.opts.MaxWritesPerDay > 0 {
-		if counter, ok := s.deps.Audit.(AttemptCounter); ok {
-			count, err := counter.AttemptsSince(ctx, s.now().UTC().Truncate(24*time.Hour))
-			if err != nil {
-				return fmt.Errorf("HH write daily limit unavailable: %w", err)
-			}
-			if count >= s.opts.MaxWritesPerDay {
-				return errors.New("HH write daily limit reached")
-			}
+		counter, ok := s.deps.Audit.(AttemptCounter)
+		if !ok {
+			return errors.New("HH write daily limit unavailable: attempt counter is not configured")
+		}
+		count, err := counter.AttemptsSince(ctx, s.now().UTC().Truncate(24*time.Hour))
+		if err != nil {
+			return fmt.Errorf("HH write daily limit unavailable: %w", err)
+		}
+		if count >= s.opts.MaxWritesPerDay {
+			return errors.New("HH write daily limit reached")
 		}
 	}
 	return nil

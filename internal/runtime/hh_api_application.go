@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -167,9 +168,16 @@ func runHHAPIApply(ctx context.Context, args []string, cfg Config, stdout, stder
 			return fmt.Errorf("HH API application attempt store is unavailable: %w", err)
 		}
 	}
+	audit := deps.ApplicationAudit
+	if cfg.HHMaxWritesPerDay > 0 && audit == nil {
+		audit, err = loadHHAPIApplicationAudit()
+		if err != nil {
+			return err
+		}
+	}
 	writer := hhapi.NewAPIApplicationWriter(client)
-	gateway := hhwritegateway.NewService(hhwritegateway.Dependencies{VacancyResponseWriter: writer}, hhwritegateway.Options{
-		WriteEnabled: true, DryRun: false, MaxWritesPerRun: 1, MaxWritesPerDay: 0, Now: func() time.Time { return now },
+	gateway := hhwritegateway.NewService(hhwritegateway.Dependencies{VacancyResponseWriter: writer, Audit: audit}, hhwritegateway.Options{
+		WriteEnabled: true, DryRun: false, MaxWritesPerRun: 1, MaxWritesPerDay: cfg.HHMaxWritesPerDay, Now: func() time.Time { return now },
 	})
 	executor := attemptusecase.NewExecutor(store, apiApplicationExecutor{gateway: gateway}, func() time.Time { return now })
 	service := applicationsubmission.NewService(applicationsubmission.Dependencies{
@@ -189,6 +197,18 @@ func runHHAPIApply(ctx context.Context, args []string, cfg Config, stdout, stder
 		}
 	}
 	return submitErr
+}
+
+func loadHHAPIApplicationAudit() (hhwritegateway.AuditSink, error) {
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		return nil, errors.New("HH API application daily audit location is unavailable")
+	}
+	audit := NewHHWriteAuditStore(filepath.Join(workingDirectory, HHWriteEventsFilename))
+	if err := audit.Load(); err != nil {
+		return nil, fmt.Errorf("HH API application daily audit is unavailable: %w", err)
+	}
+	return hhGatewayAuditSink{audit: audit}, nil
 }
 
 func parseHHAPIApplyArgs(args []string) (int, string, string, error) {
