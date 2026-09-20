@@ -93,7 +93,7 @@ func (c *APIHHClient) postNegotiation(ctx context.Context, request hhwrite.Vacan
 		return applicationUnknownSendResult(0, nil, err)
 	}
 	defer response.Body.Close()
-	body, _, readErr := readBounded(response.Body, maxAPIErrorBody)
+	body, bodyTooLarge, readErr := readBounded(response.Body, maxAPIErrorBody)
 	metadata := applicationMetadata(response.Header)
 	if response.StatusCode >= 500 {
 		return applicationUnknownSendResult(response.StatusCode, metadata, errors.New("HH API application server response is uncertain"))
@@ -105,10 +105,10 @@ func (c *APIHHClient) postNegotiation(ctx context.Context, request hhwrite.Vacan
 		return applicationRateLimited(response.StatusCode, errors.New("HH API application rate limit was reached"))
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		if response.StatusCode == http.StatusConflict && applicationBodyIndicatesAlreadyApplied(body) {
-			return applicationAlreadyApplied(response.StatusCode, errors.New("HH API application already exists"))
+		if readErr != nil || bodyTooLarge {
+			return applicationBusinessRejected(response.StatusCode, errors.New("HH API application response could not be classified"))
 		}
-		return applicationBusinessRejected(response.StatusCode, errors.New("HH API application was rejected"))
+		return classifyStructuredApplicationError(response.StatusCode, body)
 	}
 	if readErr != nil {
 		return applicationUnknownSendResult(response.StatusCode, metadata, errors.New("HH API application response could not be read"))
@@ -150,14 +150,65 @@ func applicationProviderID(body []byte) string {
 	return ""
 }
 
-func applicationBodyIndicatesAlreadyApplied(body []byte) bool {
-	evidence := strings.ToLower(string(body))
-	for _, marker := range []string{"already_applied", "already applied", "already_responded", "already responded", "duplicate", "negotiation_exists"} {
-		if strings.Contains(evidence, marker) {
-			return true
+type structuredApplicationError struct {
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
+
+type structuredApplicationErrorResponse struct {
+	Errors []structuredApplicationError `json:"errors"`
+}
+
+var structuredApplicationBusinessValues = map[string]struct{}{
+	"invalid_vacancy":            {},
+	"resume_not_found":           {},
+	"test_required":              {},
+	"resume_visibility_conflict": {},
+	"application_denied":         {},
+	"wrong_state":                {},
+	"empty_message":              {},
+	"too_long_message":           {},
+}
+
+var structuredApplicationOAuthValues = map[string]struct{}{
+	"bad_authorization":     {},
+	"token_expired":         {},
+	"token_revoked":         {},
+	"application_not_found": {},
+	"user_auth_expected":    {},
+}
+
+func classifyStructuredApplicationError(status int, body []byte) (hhwrite.WriteResult, error) {
+	var response structuredApplicationErrorResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return applicationBusinessRejected(status, errors.New("HH API application was rejected"))
+	}
+	for _, providerError := range response.Errors {
+		providerType := boundedField(providerError.Type)
+		providerValue := boundedField(providerError.Value)
+		fields := map[string]string{}
+		if providerType != "" {
+			fields["type"] = providerType
+		}
+		if providerValue != "" {
+			fields["value"] = providerValue
+		}
+		switch {
+		case providerType == "negotiations" && providerValue == "already_applied":
+			return applicationAlreadyAppliedWithFields(status, fields)
+		case providerValue == "captcha_required":
+			return applicationManualChallengeWithFields(status, fields)
+		case providerType == "oauth":
+			if _, ok := structuredApplicationOAuthValues[providerValue]; ok {
+				return applicationAuthRequiredWithFields(status, fields)
+			}
+		case providerType == "negotiations":
+			if _, ok := structuredApplicationBusinessValues[providerValue]; ok {
+				return applicationBusinessRejectedWithFields(status, fields)
+			}
 		}
 	}
-	return false
+	return applicationBusinessRejected(status, errors.New("HH API application was rejected"))
 }
 
 func applicationMetadata(header http.Header) map[string]string {
@@ -173,7 +224,11 @@ func applicationNotSent(category hhwrite.ErrorCategory, err error) (hhwrite.Writ
 }
 
 func applicationAuthRequired(status int, err error) (hhwrite.WriteResult, error) {
-	return hhwrite.WriteResult{Outcome: hhwrite.OutcomeNotSent, Class: hhwrite.ApplicationResultAuthRequired, ProviderStatus: status}, &hhwrite.TransportError{Category: hhwrite.ErrorAuthentication, Outcome: hhwrite.OutcomeNotSent, Status: status, Err: err}
+	return applicationAuthRequiredWithFields(status, nil, err)
+}
+
+func applicationAuthRequiredWithFields(status int, fields map[string]string, causes ...error) (hhwrite.WriteResult, error) {
+	return hhwrite.WriteResult{Outcome: hhwrite.OutcomeNotSent, Class: hhwrite.ApplicationResultAuthRequired, ProviderStatus: status}, &hhwrite.TransportError{Category: hhwrite.ErrorAuthentication, Outcome: hhwrite.OutcomeNotSent, Status: status, ErrorFields: fields, Err: firstApplicationError(causes, errors.New("HH API application authentication is required"))}
 }
 
 func applicationRateLimited(status int, err error) (hhwrite.WriteResult, error) {
@@ -181,11 +236,30 @@ func applicationRateLimited(status int, err error) (hhwrite.WriteResult, error) 
 }
 
 func applicationBusinessRejected(status int, err error) (hhwrite.WriteResult, error) {
-	return hhwrite.WriteResult{Outcome: hhwrite.OutcomeRejected, Class: hhwrite.ApplicationResultBusinessRejected, ProviderStatus: status}, &hhwrite.TransportError{Category: hhwrite.ErrorProvider, Outcome: hhwrite.OutcomeRejected, Status: status, Err: err}
+	return applicationBusinessRejectedWithFields(status, nil, err)
+}
+
+func applicationBusinessRejectedWithFields(status int, fields map[string]string, causes ...error) (hhwrite.WriteResult, error) {
+	return hhwrite.WriteResult{Outcome: hhwrite.OutcomeRejected, Class: hhwrite.ApplicationResultBusinessRejected, ProviderStatus: status}, &hhwrite.TransportError{Category: hhwrite.ErrorProvider, Outcome: hhwrite.OutcomeRejected, Status: status, ErrorFields: fields, Err: firstApplicationError(causes, errors.New("HH API application was rejected"))}
 }
 
 func applicationAlreadyApplied(status int, err error) (hhwrite.WriteResult, error) {
-	return hhwrite.WriteResult{Outcome: hhwrite.OutcomeRejected, Class: hhwrite.ApplicationResultAlreadyApplied, ProviderStatus: status}, &hhwrite.TransportError{Category: hhwrite.ErrorProvider, Outcome: hhwrite.OutcomeRejected, Status: status, Err: err}
+	return applicationAlreadyAppliedWithFields(status, nil, err)
+}
+
+func applicationAlreadyAppliedWithFields(status int, fields map[string]string, causes ...error) (hhwrite.WriteResult, error) {
+	return hhwrite.WriteResult{Outcome: hhwrite.OutcomeRejected, Class: hhwrite.ApplicationResultAlreadyApplied, ProviderStatus: status}, &hhwrite.TransportError{Category: hhwrite.ErrorProvider, Outcome: hhwrite.OutcomeRejected, Status: status, ErrorFields: fields, Err: firstApplicationError(causes, errors.New("HH API application already exists"))}
+}
+
+func applicationManualChallengeWithFields(status int, fields map[string]string) (hhwrite.WriteResult, error) {
+	return hhwrite.WriteResult{Outcome: hhwrite.OutcomeRejected, Class: hhwrite.ApplicationResultManualChallenge, ProviderStatus: status}, &hhwrite.TransportError{Category: hhwrite.ErrorPermission, Outcome: hhwrite.OutcomeRejected, Status: status, ErrorFields: fields, Err: errors.New("HH API application requires manual challenge")}
+}
+
+func firstApplicationError(causes []error, fallback error) error {
+	if len(causes) > 0 && causes[0] != nil {
+		return causes[0]
+	}
+	return fallback
 }
 
 func applicationUnknownSendResult(status int, metadata map[string]string, err error) (hhwrite.WriteResult, error) {

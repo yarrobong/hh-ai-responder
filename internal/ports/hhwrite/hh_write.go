@@ -29,6 +29,7 @@ const (
 	ApplicationResultBusinessRejected  ApplicationResultClass = "BUSINESS_REJECTED"
 	ApplicationResultAuthRequired      ApplicationResultClass = "AUTH_REQUIRED"
 	ApplicationResultRateLimited       ApplicationResultClass = "RATE_LIMITED"
+	ApplicationResultManualChallenge   ApplicationResultClass = "MANUAL_CHALLENGE_REQUIRED"
 	ApplicationResultUnknownSendResult ApplicationResultClass = "UNKNOWN_SEND_RESULT"
 )
 
