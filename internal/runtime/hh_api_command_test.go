@@ -611,6 +611,73 @@ func TestHHAPIApplyManualReviewFreshDuplicateStillBlocks(t *testing.T) {
 	}
 }
 
+func TestHHAPIManualApprovalRoundTrip(t *testing.T) {
+	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	var methods []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		methods = append(methods, r.Method+" "+r.URL.Path)
+		switch r.URL.Path {
+		case "/vacancies/42":
+			writeHHAPIJSON(t, w, map[string]any{"id": "42", "type": map[string]any{"id": "open"}, "archived": false, "has_test": false, "response_letter_required": false, "apply_alternate_url": "https://hh.example/applicant/vacancy_response?vacancyId=42", "negotiations_url": "/negotiations?vacancy_id=42", "suitable_resumes_url": "/resumes/suitable?vacancy_id=42"})
+		case "/resumes/suitable":
+			writeHHAPIJSON(t, w, map[string]any{"items": []any{map[string]any{"id": "resume-provider-7"}}, "page": 0, "pages": 1, "found": 1})
+		case "/negotiations":
+			writeHHAPIJSON(t, w, map[string]any{"items": []any{}, "page": 0, "pages": 1, "found": 0})
+		default:
+			if r.Method == http.MethodPost {
+				t.Fatalf("manual approval round-trip issued POST %s", r.URL.Path)
+			}
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	pilotPath := filepath.Join(dir, "pilot.json")
+	approvalPath := filepath.Join(dir, "approval.json")
+	pilot := manualPilotFixture(now)
+	raw, err := json.Marshal(pilot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pilotPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var reviewOutput bytes.Buffer
+	if err := runHHAPICommandWithDeps(context.Background(), []string{"approval", "review", "--pilot", pilotPath, "--out", approvalPath}, Config{}, nil, &reviewOutput, nil, HHAPICommandDeps{Now: func() time.Time { return now }}); err != nil {
+		t.Fatal(err)
+	}
+	approval, err := loadAPIApplicationApproval(approvalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approval.FinalDecision != "REVIEW_REQUIRED" || approval.ApprovalBasis != manualApprovalBasis || approval.OriginalAIRecommendation != "UNCERTAIN" || approval.CoverLetter != pilot.CoverLetter || approval.ContentHash != contentHash(pilot.CoverLetter) || approval.Nonce == "" {
+		t.Fatalf("round-trip approval=%+v", approval)
+	}
+	tokenPath := filepath.Join(dir, "token.json")
+	if err := hhapi.NewFileTokenStore(tokenPath).Save(context.Background(), hhapi.OAuthTokens{AccessToken: hhAPIAccessTokenSentinel, TokenType: "bearer", ExpiresAt: now.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testHHAPIConfig(t, server.URL, server.URL+"/token", tokenPath, "https://operator.example/callback")
+	cfg.HHTransport = "api"
+	var applyOutput bytes.Buffer
+	if err := runHHAPICommandWithDeps(context.Background(), []string{"apply", "42", "--resume-id", "resume-provider-7", "--approval-file", approvalPath}, cfg, strings.NewReader(""), &applyOutput, io.Discard, HHAPICommandDeps{HTTPClient: server.Client(), Now: func() time.Time { return now }}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(applyOutput.String(), "WOULD_APPLY") {
+		t.Fatalf("apply output=%q, want WOULD_APPLY", applyOutput.String())
+	}
+	unchanged, err := loadAPIApplicationApproval(approvalPath)
+	if err != nil || unchanged.NonceUsedAt != nil {
+		t.Fatalf("round-trip dry-run consumed nonce: approval=%+v err=%v", unchanged, err)
+	}
+	for _, method := range methods {
+		if strings.HasPrefix(method, http.MethodPost+" ") {
+			t.Fatalf("round-trip methods=%v", methods)
+		}
+	}
+}
+
 func TestHHAPIApplyRejectsLiveConfigurationWithoutWriteEnabled(t *testing.T) {
 	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 	approvalPath := filepath.Join(t.TempDir(), "approval.json")
