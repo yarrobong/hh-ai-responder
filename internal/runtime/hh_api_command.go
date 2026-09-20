@@ -18,6 +18,7 @@ import (
 
 	hhapi "hh-ai-responder/internal/adapters/hh/api"
 	"hh-ai-responder/internal/hhread"
+	attemptport "hh-ai-responder/internal/ports/applicationattempt"
 )
 
 const (
@@ -32,6 +33,7 @@ type HHAPICommandDeps struct {
 	ReceiveLocalhostCallback func(context.Context, string) (string, error)
 	HTTPClient               *http.Client
 	Now                      func() time.Time
+	ApplicationAttempts      attemptport.Store
 }
 
 func runHHAPICommand(ctx context.Context, args []string, cfg Config, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -49,7 +51,7 @@ func runHHAPICommandWithDeps(ctx context.Context, args []string, cfg Config, std
 		stderr = io.Discard
 	}
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
-		return errors.New("hh-api command requires a subcommand: auth, doctor, logout, or preflight")
+		return errors.New("hh-api command requires a subcommand: auth, doctor, logout, preflight, or apply")
 	}
 	switch args[0] {
 	case "auth":
@@ -63,6 +65,8 @@ func runHHAPICommandWithDeps(ctx context.Context, args []string, cfg Config, std
 		return runHHAPILogout(ctx, cfg, stdout)
 	case "preflight":
 		return runHHAPIPreflight(ctx, args[1:], cfg, stdout, stderr, deps)
+	case "apply":
+		return runHHAPIApply(ctx, args[1:], cfg, stdout, stderr, deps)
 	default:
 		return errors.New("unknown hh-api subcommand")
 	}

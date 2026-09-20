@@ -99,13 +99,13 @@ func firstSubcommand(args []string) string {
 func validateCommandArgs(command CommandKind, args []string) error {
 	if len(args) == 0 {
 		if command == CommandHHAPI {
-			return errors.New("hh-api requires a subcommand: auth, doctor, logout, or preflight")
+			return errors.New("hh-api requires a subcommand: auth, doctor, logout, preflight, or apply")
 		}
 		return nil
 	}
 	if strings.HasPrefix(args[0], "-") {
 		if command == CommandHHAPI && !IsHelpFlag(args[0]) {
-			return errors.New("hh-api requires a subcommand: auth, doctor, logout, or preflight")
+			return errors.New("hh-api requires a subcommand: auth, doctor, logout, preflight, or apply")
 		}
 		return nil
 	}
@@ -139,8 +139,11 @@ func validateCommandArgs(command CommandKind, args []string) error {
 			return fmt.Errorf("unknown hh reliability action %q", args[2])
 		}
 	case CommandHHAPI:
-		if !known(args[0], "auth", "doctor", "logout", "preflight") {
+		if !known(args[0], "auth", "doctor", "logout", "preflight", "apply") {
 			return errors.New("unknown hh-api subcommand")
+		}
+		if args[0] == "apply" {
+			return validateHHAPIApplyArgs(args[1:])
 		}
 		if args[0] == "preflight" {
 			if len(args) > 1 && IsHelpFlag(args[1]) {
@@ -214,6 +217,51 @@ func validateCommandArgs(command CommandKind, args []string) error {
 		if args[0] == "pilot" && len(args) > 1 && !strings.HasPrefix(args[1], "-") && args[1] != "send" {
 			return fmt.Errorf("unknown career-agent pilot action %q", args[1])
 		}
+	}
+	return nil
+}
+
+func validateHHAPIApplyArgs(args []string) error {
+	if len(args) > 0 && IsHelpFlag(args[0]) {
+		return nil
+	}
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		return errors.New("hh-api apply requires a vacancy ID")
+	}
+	resumeID, approvalFile := false, false
+	for index := 1; index < len(args); index++ {
+		arg := args[index]
+		switch {
+		case arg == "--resume-id":
+			if resumeID || index+1 >= len(args) || strings.HasPrefix(args[index+1], "-") || strings.TrimSpace(args[index+1]) == "" {
+				return errors.New("hh-api apply requires exactly one --resume-id value")
+			}
+			resumeID = true
+			index++
+		case strings.HasPrefix(arg, "--resume-id="):
+			if resumeID || strings.TrimSpace(strings.TrimPrefix(arg, "--resume-id=")) == "" {
+				return errors.New("hh-api apply requires exactly one --resume-id value")
+			}
+			resumeID = true
+		case arg == "--approval-file":
+			if approvalFile || index+1 >= len(args) || strings.HasPrefix(args[index+1], "-") || strings.TrimSpace(args[index+1]) == "" {
+				return errors.New("hh-api apply requires exactly one explicit --approval-file value")
+			}
+			approvalFile = true
+			index++
+		case strings.HasPrefix(arg, "--approval-file="):
+			if approvalFile || strings.TrimSpace(strings.TrimPrefix(arg, "--approval-file=")) == "" {
+				return errors.New("hh-api apply requires exactly one explicit --approval-file value")
+			}
+			approvalFile = true
+		case IsHelpFlag(arg):
+			return nil
+		default:
+			return errors.New("hh-api apply accepts one vacancy ID, --resume-id, and --approval-file only")
+		}
+	}
+	if !resumeID || !approvalFile {
+		return errors.New("hh-api apply requires --resume-id and explicit --approval-file")
 	}
 	return nil
 }

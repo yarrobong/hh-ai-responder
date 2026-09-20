@@ -1,0 +1,256 @@
+package runtime
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	hhapi "hh-ai-responder/internal/adapters/hh/api"
+	attemptusecase "hh-ai-responder/internal/usecase/applicationattempt"
+	applicationsubmission "hh-ai-responder/internal/usecase/applicationsubmission"
+	hhwritegateway "hh-ai-responder/internal/usecase/hhwritegateway"
+	"hh-ai-responder/internal/vacancy"
+)
+
+const (
+	apiApplicationApprovalVersion = 1
+	apiApplicationApprovalMaxAge  = 30 * time.Minute
+)
+
+var (
+	errAPIApplicationApprovalStale    = errors.New("API application approval is stale")
+	errAPIApplicationApprovalIdentity = errors.New("API application approval identity does not match the command")
+	errAPIApplicationApprovalState    = errors.New("API application approval is not ready for explicit send")
+	errAPIApplicationApprovalContent  = errors.New("API application approval content is invalid")
+	errAPIApplicationApprovalNonce    = errors.New("API application approval nonce is invalid or already used")
+)
+
+// APIApplicationApproval is the minimal artifact accepted by the controlled
+// API application command. It deliberately contains no cookies, tokens, or
+// candidate-private context.
+type APIApplicationApproval struct {
+	Version          int        `json:"version"`
+	VacancyID        int        `json:"vacancy_id"`
+	ProviderResumeID string     `json:"provider_resume_id,omitempty"`
+	SelectedResumeID string     `json:"selected_resume_id,omitempty"`
+	CoverLetter      string     `json:"cover_letter"`
+	ContentHash      string     `json:"content_hash"`
+	Nonce            string     `json:"nonce"`
+	NonceUsedAt      *time.Time `json:"nonce_used_at,omitempty"`
+	Status           string     `json:"status"`
+	FinalDecision    string     `json:"final_decision"`
+	PreviewFreshAt   time.Time  `json:"preview_fresh_at"`
+}
+
+func loadAPIApplicationApproval(path string) (APIApplicationApproval, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return APIApplicationApproval{}, errors.New("explicit --approval-file is required")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return APIApplicationApproval{}, errors.New("API application approval file could not be opened")
+	}
+	defer file.Close()
+	decoder := json.NewDecoder(io.LimitReader(file, 1<<20))
+	decoder.DisallowUnknownFields()
+	var approval APIApplicationApproval
+	if err := decoder.Decode(&approval); err != nil {
+		return APIApplicationApproval{}, fmt.Errorf("invalid API application approval: %w", err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return APIApplicationApproval{}, errors.New("invalid API application approval: multiple JSON values")
+	}
+	return approval, nil
+}
+
+func validateAPIApplicationApproval(approval APIApplicationApproval, vacancyID int, providerResumeID string, now time.Time) error {
+	if approval.Version != apiApplicationApprovalVersion || approval.VacancyID <= 0 || approval.VacancyID != vacancyID {
+		return errAPIApplicationApprovalIdentity
+	}
+	approvedResumeID := strings.TrimSpace(approval.ProviderResumeID)
+	if approvedResumeID == "" {
+		approvedResumeID = strings.TrimSpace(approval.SelectedResumeID)
+	}
+	if approvedResumeID == "" || strings.TrimSpace(providerResumeID) == "" || approvedResumeID != strings.TrimSpace(providerResumeID) {
+		return errAPIApplicationApprovalIdentity
+	}
+	if approval.Status != "READY_FOR_EXPLICIT_SEND" || approval.FinalDecision != "MATCH" {
+		return errAPIApplicationApprovalState
+	}
+	if approval.NonceUsedAt != nil || strings.TrimSpace(approval.Nonce) == "" {
+		return errAPIApplicationApprovalNonce
+	}
+	if err := validatePilotCoverLetter(approval.CoverLetter); err != nil {
+		return fmt.Errorf("%w: %v", errAPIApplicationApprovalContent, err)
+	}
+	if strings.TrimSpace(approval.ContentHash) == "" || contentHash(approval.CoverLetter) != strings.TrimSpace(approval.ContentHash) {
+		return errAPIApplicationApprovalContent
+	}
+	if now.IsZero() || approval.PreviewFreshAt.IsZero() || approval.PreviewFreshAt.After(now) || now.Sub(approval.PreviewFreshAt) > apiApplicationApprovalMaxAge {
+		return errAPIApplicationApprovalStale
+	}
+	return nil
+}
+
+func runHHAPIApply(ctx context.Context, args []string, cfg Config, stdout, stderr io.Writer, deps HHAPICommandDeps) error {
+	_ = stderr
+	vacancyID, providerResumeID, approvalPath, err := parseHHAPIApplyArgs(args)
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(strings.TrimSpace(cfg.HHTransport), "api") {
+		return errors.New("hh-api apply requires HH_TRANSPORT=api")
+	}
+	if !cfg.DryRun && !cfg.HHWriteEnabled {
+		return errors.New("hh-api apply requires HH_WRITE_ENABLED=true when HH_DRY_RUN=false")
+	}
+	now := time.Now().UTC()
+	if deps.Now != nil {
+		now = deps.Now().UTC()
+	}
+	approval, err := loadAPIApplicationApproval(approvalPath)
+	if err != nil {
+		return err
+	}
+	if err := validateAPIApplicationApproval(approval, vacancyID, providerResumeID, now); err != nil {
+		return err
+	}
+	oauthConfig := hhAPIReadOAuthConfig(cfg)
+	_, client, err := newHHAPIClient(cfg, oauthConfig, deps)
+	if err != nil {
+		return err
+	}
+	preflight, err := apiVacancyPreflightWithSource(ctx, client, vacancyID, providerResumeID)
+	if err != nil {
+		return fmt.Errorf("HH API apply GET-only preflight failed: %w", err)
+	}
+	if !preflight.Available {
+		return fmt.Errorf("HH API apply blocked by preflight: %s", hhAPIAvailabilityReason(preflight))
+	}
+	if preflight.TestPresentKnown && preflight.TestPresent {
+		return errors.New("HH API apply does not support a vacancy with a required test")
+	}
+	if preflight.ResponseIdentifierPresent || preflight.ApplyAlternateURLPresent {
+		return errors.New("HH API apply does not support a direct or external response path")
+	}
+	prepared := applicationsubmission.PreparedApplication{
+		VacancyID: vacancyID,
+		Vacancy:   vacancy.Vacancy{ID: vacancyID},
+		ResumeID:  providerResumeID, CoverLetter: approval.CoverLetter,
+	}
+	input := applicationsubmission.Input{Prepared: prepared, CurrentResumeID: providerResumeID, RequireCurrentResumeID: true}
+	if cfg.DryRun {
+		_, _ = fmt.Fprintf(stdout, "WOULD_APPLY vacancy_id=%d resume_id=%s approval_file=explicit preflight=AVAILABLE\n", vacancyID, safeHHAPIResumeID(providerResumeID))
+		return nil
+	}
+	store := deps.ApplicationAttempts
+	if store == nil {
+		backend, backendErr := normalizeStorageBackend(cfg.StorageBackend)
+		if backendErr != nil {
+			return backendErr
+		}
+		store, err = buildAutomaticApplicationAttemptStore(ctx, cfg, backend, nil)
+		if err != nil {
+			return fmt.Errorf("HH API application attempt store is unavailable: %w", err)
+		}
+	}
+	writer := hhapi.NewAPIApplicationWriter(client)
+	gateway := hhwritegateway.NewService(hhwritegateway.Dependencies{VacancyResponseWriter: writer}, hhwritegateway.Options{
+		WriteEnabled: true, DryRun: false, MaxWritesPerRun: 1, MaxWritesPerDay: 0, Now: func() time.Time { return now },
+	})
+	executor := attemptusecase.NewExecutor(store, apiApplicationExecutor{gateway: gateway}, func() time.Time { return now })
+	service := applicationsubmission.NewService(applicationsubmission.Dependencies{
+		Vacancies: apiApplicationApplicabilityReader{preflight: preflight}, Executor: executor,
+	}, applicationsubmission.Options{WriteEnabled: true, DryRun: false, RequireAvailabilityEvidence: true})
+	result, submitErr := service.Submit(ctx, input)
+	_, _ = fmt.Fprintf(stdout, "APPLICATION_RESULT vacancy_id=%d resume_id=%s status=%s\n", vacancyID, safeHHAPIResumeID(providerResumeID), result.Status)
+	return submitErr
+}
+
+func parseHHAPIApplyArgs(args []string) (int, string, string, error) {
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		return 0, "", "", errors.New("usage: hh-api apply <vacancy-id> --resume-id <provider-id> --approval-file <path>")
+	}
+	vacancyID, err := strconv.Atoi(strings.TrimSpace(args[0]))
+	if err != nil || vacancyID <= 0 {
+		return 0, "", "", errors.New("HH API apply vacancy ID is invalid")
+	}
+	resumeID, approvalPath := "", ""
+	for index := 1; index < len(args); index++ {
+		arg := args[index]
+		switch {
+		case arg == "--resume-id":
+			if resumeID != "" || index+1 >= len(args) || strings.HasPrefix(args[index+1], "-") || strings.TrimSpace(args[index+1]) == "" {
+				return 0, "", "", errors.New("hh-api apply requires exactly one --resume-id value")
+			}
+			resumeID = strings.TrimSpace(args[index+1])
+			index++
+		case strings.HasPrefix(arg, "--resume-id="):
+			if resumeID != "" || strings.TrimSpace(strings.TrimPrefix(arg, "--resume-id=")) == "" {
+				return 0, "", "", errors.New("hh-api apply requires exactly one --resume-id value")
+			}
+			resumeID = strings.TrimSpace(strings.TrimPrefix(arg, "--resume-id="))
+		case arg == "--approval-file":
+			if approvalPath != "" || index+1 >= len(args) || strings.HasPrefix(args[index+1], "-") || strings.TrimSpace(args[index+1]) == "" {
+				return 0, "", "", errors.New("hh-api apply requires exactly one explicit --approval-file value")
+			}
+			approvalPath = strings.TrimSpace(args[index+1])
+			index++
+		case strings.HasPrefix(arg, "--approval-file="):
+			if approvalPath != "" || strings.TrimSpace(strings.TrimPrefix(arg, "--approval-file=")) == "" {
+				return 0, "", "", errors.New("hh-api apply requires exactly one explicit --approval-file value")
+			}
+			approvalPath = strings.TrimSpace(strings.TrimPrefix(arg, "--approval-file="))
+		default:
+			return 0, "", "", errors.New("hh-api apply accepts only one vacancy ID, --resume-id, and --approval-file")
+		}
+	}
+	if resumeID == "" || approvalPath == "" {
+		return 0, "", "", errors.New("hh-api apply requires --resume-id and explicit --approval-file")
+	}
+	return vacancyID, resumeID, approvalPath, nil
+}
+
+type apiApplicationApplicabilityReader struct{ preflight VacancyPreflight }
+
+func (r apiApplicationApplicabilityReader) ReadApplicability(context.Context, vacancy.Vacancy) (applicationsubmission.Applicability, error) {
+	availableKnown := r.preflight.Available || (r.preflight.CanApplyKnown && !r.preflight.CanApply) || (r.preflight.SelectedResumeSuitableKnown && !r.preflight.SelectedResumeSuitable)
+	return applicationsubmission.Applicability{
+		Available: r.preflight.Available, AvailableKnown: availableKnown,
+		Archived: r.preflight.Archived, ArchivedKnown: r.preflight.ArchivedKnown,
+		AlreadyResponded: r.preflight.AlreadyResponded, AlreadyRespondedKnown: r.preflight.AlreadyRespondedKnown,
+		TestPresent: r.preflight.TestPresent, TestPresentKnown: r.preflight.TestPresentKnown,
+		LetterRequired: r.preflight.LetterRequired, LetterRequiredKnown: r.preflight.LetterRequiredKnown,
+		CanApply: r.preflight.CanApply, CanApplyKnown: r.preflight.CanApplyKnown,
+		ResponseURL: r.preflight.ResponseURL,
+	}, nil
+}
+
+type apiApplicationExecutor struct{ gateway *hhwritegateway.Service }
+
+func (e apiApplicationExecutor) SubmitApplication(ctx context.Context, request applicationsubmission.ApplicationRequest) (applicationsubmission.ExecutionResult, error) {
+	if e.gateway == nil {
+		return applicationsubmission.ExecutionResult{Outcome: applicationsubmission.ExecutionNotSent}, errors.New("HH API application write gateway is unavailable")
+	}
+	result, err := e.gateway.SubmitVacancyResponse(ctx, hhwritegateway.VacancyResponseRequest{VacancyID: request.VacancyID, ProviderResumeID: request.ResumeID, Letter: request.Letter})
+	execution := applicationsubmission.ExecutionResult{ProviderID: result.ProviderID, ProviderStatus: result.ProviderStatus, Metadata: result.Metadata, TransportTried: result.TransportAttempted}
+	switch result.Outcome {
+	case hhwritegateway.OutcomeAccepted:
+		execution.Outcome = applicationsubmission.ExecutionAccepted
+	case hhwritegateway.OutcomeDeliveryUncertain, hhwritegateway.OutcomePersistenceUncertain:
+		execution.Outcome = applicationsubmission.ExecutionDeliveryUncertain
+	case hhwritegateway.OutcomeRejected:
+		execution.Outcome = applicationsubmission.ExecutionRejected
+	default:
+		execution.Outcome = applicationsubmission.ExecutionNotSent
+	}
+	return execution, err
+}
