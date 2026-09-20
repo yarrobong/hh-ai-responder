@@ -2,12 +2,17 @@ package runtime
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	hhapi "hh-ai-responder/internal/adapters/hh/api"
 )
 
 func exportPilotFixture(now time.Time) PilotArtifact {
@@ -123,4 +128,62 @@ func TestHHAPIApprovalExportRejectsInvalidPilotFile(t *testing.T) {
 	if err == nil {
 		t.Fatalf("invalid pilot export error=%v", err)
 	}
+}
+
+func TestHHAPIApprovalExportRoundTripDryRunNeverPosts(t *testing.T) {
+	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	var postCount int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			postCount++
+			t.Fatalf("round-trip dry-run issued POST %s", r.URL.Path)
+		}
+		switch r.URL.Path {
+		case "/vacancies/42":
+			writeHHAPIJSON(t, w, map[string]any{"id": "42", "type": map[string]any{"id": "open"}, "archived": false, "has_test": false, "response_letter_required": false, "negotiations_url": "/negotiations?vacancy_id=42", "suitable_resumes_url": "/resumes/suitable?vacancy_id=42"})
+		case "/resumes/suitable":
+			writeHHAPIJSON(t, w, map[string]any{"items": []any{map[string]any{"id": "resume-provider-7"}}, "page": 0, "pages": 1, "found": 1})
+		case "/negotiations":
+			writeHHAPIJSON(t, w, map[string]any{"items": []any{}, "page": 0, "pages": 1, "found": 0})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	pilotPath := filepath.Join(dir, "career-agent-pilot.json")
+	approvalPath := filepath.Join(dir, "api-approval.json")
+	pilot := exportPilotFixture(now)
+	pilot.CoverLetter = ""
+	pilot.ContentHash = contentHash("")
+	raw, err := json.Marshal(pilot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pilotPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var exportOutput bytes.Buffer
+	if err := runHHAPICommandWithDeps(context.Background(), []string{"approval", "export", "--pilot", pilotPath, "--out", approvalPath}, Config{}, nil, &exportOutput, nil, HHAPICommandDeps{}); err != nil {
+		t.Fatal(err)
+	}
+	approval, err := loadAPIApplicationApproval(approvalPath)
+	if err != nil || approval.CoverLetter != "" || approval.ProviderResumeID != "resume-provider-7" {
+		t.Fatalf("exported approval=%+v err=%v", approval, err)
+	}
+	tokenPath := filepath.Join(dir, "token.json")
+	if err := hhapi.NewFileTokenStore(tokenPath).Save(context.Background(), hhapi.OAuthTokens{AccessToken: hhAPIAccessTokenSentinel, TokenType: "bearer", ExpiresAt: now.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testHHAPIConfig(t, server.URL, server.URL+"/token", tokenPath, "https://operator.example/callback")
+	cfg.HHTransport = "api"
+	var applyOutput bytes.Buffer
+	if err := runHHAPICommandWithDeps(context.Background(), []string{"apply", "42", "--resume-id", "resume-provider-7", "--approval-file", approvalPath}, cfg, nil, &applyOutput, nil, HHAPICommandDeps{HTTPClient: server.Client(), Now: func() time.Time { return now }}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(applyOutput.String(), "WOULD_APPLY") || postCount != 0 {
+		t.Fatalf("apply output=%q postCount=%d, want WOULD_APPLY and zero POSTs", applyOutput.String(), postCount)
+	}
+	t.Logf("dry-run output: %s", strings.TrimSpace(applyOutput.String()))
 }

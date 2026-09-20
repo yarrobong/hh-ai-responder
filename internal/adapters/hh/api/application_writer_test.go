@@ -139,6 +139,24 @@ func TestAPIApplicationWriterBoundsStructuredErrorEvidence(t *testing.T) {
 	}
 }
 
+func TestAPIApplicationWriterCaptchaRequiresManualReviewWithoutRetry(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, `{"errors":[{"type":"negotiations","value":"captcha_required","captcha_url":"https://challenge.example"}]}`)
+	}))
+	defer server.Close()
+	client := newAPIClient(t, server.URL, &memoryTokenStore{loaded: validTokens()})
+	result, err := NewAPIApplicationWriter(client).SubmitVacancyResponse(context.Background(), hhwrite.VacancyResponseRequest{VacancyID: 42, ProviderResumeID: "resume-7"})
+	if err == nil || result.Class != hhwrite.ApplicationResultManualChallenge || calls.Load() != 1 {
+		t.Fatalf("result=%+v err=%v calls=%d, want manual challenge and one POST", result, err, calls.Load())
+	}
+	if strings.Contains(err.Error(), "challenge.example") || strings.Contains(err.Error(), "captcha_url") {
+		t.Fatalf("challenge details leaked: %v", err)
+	}
+}
+
 func TestAPIApplicationWriterMapsAmbiguousTransportWithoutRetry(t *testing.T) {
 	var calls atomic.Int32
 	connectionErr := errors.New("connection reset after dispatch")

@@ -99,13 +99,13 @@ func firstSubcommand(args []string) string {
 func validateCommandArgs(command CommandKind, args []string) error {
 	if len(args) == 0 {
 		if command == CommandHHAPI {
-			return errors.New("hh-api requires a subcommand: auth, doctor, logout, preflight, or apply")
+			return errors.New("hh-api requires a subcommand: auth, doctor, logout, preflight, approval, or apply")
 		}
 		return nil
 	}
 	if strings.HasPrefix(args[0], "-") {
 		if command == CommandHHAPI && !IsHelpFlag(args[0]) {
-			return errors.New("hh-api requires a subcommand: auth, doctor, logout, preflight, or apply")
+			return errors.New("hh-api requires a subcommand: auth, doctor, logout, preflight, approval, or apply")
 		}
 		return nil
 	}
@@ -139,7 +139,7 @@ func validateCommandArgs(command CommandKind, args []string) error {
 			return fmt.Errorf("unknown hh reliability action %q", args[2])
 		}
 	case CommandHHAPI:
-		if !known(args[0], "auth", "doctor", "logout", "preflight", "apply") {
+		if !known(args[0], "auth", "doctor", "logout", "preflight", "approval", "apply") {
 			return errors.New("unknown hh-api subcommand")
 		}
 		if args[0] == "apply" {
@@ -184,6 +184,9 @@ func validateCommandArgs(command CommandKind, args []string) error {
 			}
 			return nil
 		}
+		if args[0] == "approval" {
+			return validateHHAPIApprovalArgs(args[1:])
+		}
 		for _, arg := range args[1:] {
 			if !strings.HasPrefix(arg, "-") {
 				return fmt.Errorf("hh-api %s does not accept positional arguments", args[0])
@@ -217,6 +220,50 @@ func validateCommandArgs(command CommandKind, args []string) error {
 		if args[0] == "pilot" && len(args) > 1 && !strings.HasPrefix(args[1], "-") && args[1] != "send" {
 			return fmt.Errorf("unknown career-agent pilot action %q", args[1])
 		}
+	}
+	return nil
+}
+
+func validateHHAPIApprovalArgs(args []string) error {
+	if len(args) == 0 || args[0] != "export" {
+		return errors.New("hh-api approval requires the export action")
+	}
+	pilot, output := false, false
+	for index := 1; index < len(args); index++ {
+		arg := args[index]
+		switch {
+		case arg == "--pilot", arg == "--out":
+			if index+1 >= len(args) || strings.HasPrefix(args[index+1], "-") || strings.TrimSpace(args[index+1]) == "" {
+				return fmt.Errorf("hh-api approval export %s requires a value", arg)
+			}
+			if arg == "--pilot" {
+				if pilot {
+					return errors.New("hh-api approval export accepts exactly one --pilot")
+				}
+				pilot = true
+			} else {
+				if output {
+					return errors.New("hh-api approval export accepts exactly one --out")
+				}
+				output = true
+			}
+			index++
+		case strings.HasPrefix(arg, "--pilot="):
+			if pilot || strings.TrimSpace(strings.TrimPrefix(arg, "--pilot=")) == "" {
+				return errors.New("hh-api approval export requires exactly one --pilot")
+			}
+			pilot = true
+		case strings.HasPrefix(arg, "--out="):
+			if output || strings.TrimSpace(strings.TrimPrefix(arg, "--out=")) == "" {
+				return errors.New("hh-api approval export requires exactly one --out")
+			}
+			output = true
+		default:
+			return errors.New("hh-api approval export accepts only --pilot and --out")
+		}
+	}
+	if !pilot || !output {
+		return errors.New("hh-api approval export requires --pilot and --out")
 	}
 	return nil
 }

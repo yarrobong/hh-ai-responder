@@ -70,6 +70,15 @@ func TestAPIApplicationExecutorKeepsAlreadyAppliedVacancyBlocking(t *testing.T) 
 	}
 }
 
+func TestAPIApplicationExecutorSurfacesManualChallengeClass(t *testing.T) {
+	writer := &controlledApplicationWriter{result: hhwrite.WriteResult{Outcome: hhwrite.OutcomeRejected, Class: hhwrite.ApplicationResultManualChallenge}}
+	gateway := hhwritegateway.NewService(hhwritegateway.Dependencies{VacancyResponseWriter: writer}, hhwritegateway.Options{WriteEnabled: true, MaxWritesPerRun: 1})
+	execution, err := (apiApplicationExecutor{gateway: gateway}).SubmitApplication(context.Background(), applicationsubmission.ApplicationRequest{VacancyID: 42, ResumeID: "resume-1"})
+	if execution.Outcome != applicationsubmission.ExecutionRejected || execution.ApplicationClass != hhwrite.ApplicationResultManualChallenge || err == nil {
+		t.Fatalf("execution=%+v err=%v, want rejected manual-challenge result", execution, err)
+	}
+}
+
 type apiReconciliationStore struct {
 	attempt domain.Attempt
 }

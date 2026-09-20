@@ -6,8 +6,9 @@ Date: 2026-09-20
 
 No real HH mutation was performed. The controlled command remains explicit,
 single-vacancy, single-resume, and requires `--approval-file`. Its live
-gateway is capped at one application mutation per invocation; no permanent
-one-per-day policy was added.
+gateway is capped at one application mutation per invocation. When
+`MaxWritesPerDay > 0`, it requires an `AttemptCounter` before reaching the
+mutation writer; `MaxWritesPerDay == 0` remains unlimited.
 
 The attempt executor preserves both protection scopes:
 
@@ -35,6 +36,18 @@ application-path eligibility; it asserted `WOULD_APPLY` and failed the test
 if any POST request was observed. The mutation adapter is not constructed on
 this path.
 
+The export path was exercised with a real-shaped pilot fixture. The exported
+artifact preserved the exact cover letter, normalized provider resume
+identity, nonce, freshness timestamp, and content hash, and was written
+through the private atomic-file path. The export-to-`hh-api apply` dry-run
+round-trip emitted `WOULD_APPLY` and observed zero application POSTs.
+
+Daily-limit tests cover both fail-closed behavior when a positive daily limit
+has no `AttemptCounter` and unlimited behavior when the limit is zero.
+Structured `captcha_required` responses produce a sanitized
+`MANUAL_CHALLENGE_REQUIRED` result; challenge URLs are ignored and neither
+challenge solving nor automatic POST retry is performed.
+
 Targeted reconciliation tests passed for `SUCCESS`, `ALREADY_APPLIED`, and
 `UNKNOWN_SEND_RESULT`; the API evidence reader uses targeted vacancy,
 suitable-resume, and negotiation GETs only.
@@ -45,7 +58,7 @@ Command used:
 
 ```text
 HH_TRANSPORT=api HH_DRY_RUN=true HH_WRITE_ENABLED=false
-go run ./cmd/hh-ai-responder hh-api preflight 137112468 --resume-id <sanitized-provider-resume-id>
+go run ./cmd/hh-ai-responder hh-api preflight 137112468 --all-resumes
 ```
 
 Fresh result, with identifiers sanitized:

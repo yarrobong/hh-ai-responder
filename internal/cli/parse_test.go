@@ -38,6 +38,7 @@ func TestParseSupportedInvocations(t *testing.T) {
 		{name: "hh api preflight", args: []string{"hh-api", "preflight", "42", "--resume-id", "resume-1"}, command: CommandHHAPI, subcommand: "preflight", commandArgs: []string{"preflight", "42", "--resume-id", "resume-1"}},
 		{name: "hh api preflight all resumes", args: []string{"hh-api", "preflight", "42", "--all-resumes"}, command: CommandHHAPI, subcommand: "preflight", commandArgs: []string{"preflight", "42", "--all-resumes"}},
 		{name: "hh api apply", args: []string{"hh-api", "apply", "42", "--resume-id", "resume-1", "--approval-file", "approval.json"}, command: CommandHHAPI, subcommand: "apply", commandArgs: []string{"apply", "42", "--resume-id", "resume-1", "--approval-file", "approval.json"}},
+		{name: "hh api approval export", args: []string{"hh-api", "approval", "export", "--pilot", "pilot.json", "--out", "approval.json"}, command: CommandHHAPI, subcommand: "approval", commandArgs: []string{"approval", "export", "--pilot", "pilot.json", "--out", "approval.json"}},
 		{name: "career agent shadow", args: []string{"career-agent", "--shadow"}, command: CommandCareerAgent, commandArgs: []string{"--shadow"}},
 		{name: "career agent subcommand shadow", args: []string{"career-agent", "shadow"}, command: CommandCareerAgent, subcommand: "shadow", commandArgs: []string{"shadow"}},
 		{name: "career agent feedback", args: []string{"career-agent", "feedback", "--vacancy", "1"}, command: CommandCareerAgent, subcommand: "feedback", commandArgs: []string{"feedback", "--vacancy", "1"}},

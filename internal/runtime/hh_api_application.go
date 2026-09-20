@@ -189,7 +189,7 @@ func runHHAPIApply(ctx context.Context, args []string, cfg Config, stdout, stder
 		Vacancies: apiApplicationApplicabilityReader{preflight: preflight}, Executor: executor,
 	}, applicationsubmission.Options{WriteEnabled: true, DryRun: false, RequireAvailabilityEvidence: true})
 	result, submitErr := service.Submit(ctx, input)
-	_, _ = fmt.Fprintf(stdout, "APPLICATION_RESULT vacancy_id=%d resume_id=%s status=%s\n", vacancyID, safeHHAPIResumeID(providerResumeID), result.Status)
+	_, _ = fmt.Fprintf(stdout, "APPLICATION_RESULT vacancy_id=%d resume_id=%s status=%s class=%s\n", vacancyID, safeHHAPIResumeID(providerResumeID), result.Status, result.Execution.ApplicationClass)
 	if result.Execution.AttemptID != "" && (result.Execution.ApplicationClass == hhwrite.ApplicationResultSuccess || result.Execution.ApplicationClass == hhwrite.ApplicationResultAlreadyApplied || result.Execution.ApplicationClass == hhwrite.ApplicationResultUnknownSendResult) {
 		reconciliationStore, ok := store.(applicationreconciliation.AttemptStore)
 		if !ok {
