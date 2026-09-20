@@ -1,7 +1,7 @@
 # RESET-API-3 — controlled HH API application POST
 
 Date: 2026-09-20
-Status: design approved in conversation; implementation pending written-spec review
+Status: amended design approved in conversation; implementation pending written-spec review
 
 ## Purpose
 
@@ -15,7 +15,10 @@ read-only. The existing browser writer remains available and unchanged.
 An API application POST is permitted only when all of these are proven in the
 same invocation:
 
-- `HH_TRANSPORT=api`, `HH_DRY_RUN=false`, and `HH_WRITE_ENABLED=true`;
+- `HH_TRANSPORT=api`;
+- for a real POST, `HH_DRY_RUN=false` and `HH_WRITE_ENABLED=true`;
+- for dry-run evaluation, `HH_DRY_RUN=true` and `HH_WRITE_ENABLED=false` are
+  valid and must execute validation without reaching the mutation adapter;
 - exactly one positive vacancy ID and one provider resume ID were supplied;
 - the approved application artifact matches both IDs and confirms the
   existing business decision (`MATCH_CONFIRMED`/equivalent);
@@ -42,10 +45,13 @@ Add:
 hh-api apply <vacancy-id> --resume-id <provider-resume-id> [--approval-file PATH]
 ```
 
-Both IDs are mandatory. The command accepts no search expression, vacancy list,
-bulk mode, or implicit resume fallback. The approval file defaults to the
-existing configured career-agent pilot artifact path, with an explicit path
-available for controlled tests and operation.
+Both IDs and `--approval-file` are mandatory for the controlled command. The
+command accepts no search expression, vacancy list, bulk mode, or implicit
+resume fallback. There is no silent default approval artifact for the first
+controlled live POST; the operator must explicitly provide `--approval-file`.
+Dry-run uses the
+same explicit artifact requirement so its eligibility evidence is tied to the
+exact material that would be approved for a live attempt.
 
 The artifact is the bridge to existing business logic. It must prove the exact
 vacancy, selected provider resume, confirmed match, and already-produced cover
@@ -104,12 +110,18 @@ The command composes this ordered workflow:
 
 This service is not called by career-agent search or bulk loops in RESET-API-3.
 
-Reuse the existing durable application-attempt store/executor. Reserve before
-POST and retain blocking states across restart or interruption. The reservation
-identity must include vacancy provider ID, provider resume ID, and application
-operation semantics. The local attempt ID is correlation only and is not sent
-as a provider idempotency key. A reservation or persistence failure must not
-produce a retryable “not sent” result when delivery may be uncertain.
+Reuse the existing durable application-attempt store/executor and make both
+protection scopes explicit:
+
+- exact attempt identity: `application + vacancy_id + resume_id`;
+- vacancy-level mutation lock: `application + vacancy_id`.
+
+Reserve before POST and retain both protections across restart or interruption.
+Once a POST may have been dispatched, another resume must not bypass the
+vacancy-level lock for the same vacancy. The local attempt ID is correlation
+only and is not sent as a provider idempotency key. A reservation or
+persistence failure must not produce a retryable “not sent” result when
+delivery may be uncertain.
 
 Configure the existing gateway for one write per run and one application per
 run; do not raise or bypass global limits.
@@ -150,8 +162,9 @@ Sensitive fields are excluded from logs.
 
 ## Targeted reconciliation
 
-After any successful or ambiguous attempt, use existing GET-only evidence for
-the exact vacancy and selected resume:
+After every `SUCCESS`, `ALREADY_APPLIED`, or `UNKNOWN_SEND_RESULT`, use
+mandatory existing GET-only evidence for the exact vacancy and selected
+resume:
 
 - `got_response` relation;
 - matching negotiation/application record; and
@@ -170,9 +183,12 @@ Reconciliation may update local evidence but cannot authorize another POST.
 
 ## Dry-run and compatibility
 
-`HH_DRY_RUN=true` blocks before the adapter. `HH_WRITE_ENABLED` must be true,
-and this command requires exactly `HH_TRANSPORT=api`; `auto` and `browser` are
-blocked. Existing browser protections are not weakened.
+This command requires exactly `HH_TRANSPORT=api`; `auto` and `browser` are
+blocked. With `HH_DRY_RUN=true HH_WRITE_ENABLED=false`, it must perform all
+artifact, eligibility, and preflight validation, may emit `WOULD_APPLY`, and
+must stop before the mutation adapter. `HH_DRY_RUN=false HH_WRITE_ENABLED=true`
+is required only for a real POST. Existing browser protections are not
+weakened.
 
 Blocked and dry-run paths may perform reads, artifact validation, local audit
 writes, and GET reconciliation, but must issue zero state-changing HH
@@ -198,9 +214,11 @@ go build ./...
 git diff --check
 ```
 
-Live validation, if later authorized, must use one explicitly approved
-`AVAILABLE` vacancy and must not use known duplicate `137244538` or known test
-vacancy `137493556`.
+Live validation is not performed in this implementation. The final report
+must include dry-run evidence and a proposed, not executed, live vacancy. If
+the operator later authorizes one live attempt, it must use one explicitly
+approved `AVAILABLE` vacancy and must not use known duplicate `137244538` or
+known test vacancy `137493556`.
 
 ## Non-goals
 
