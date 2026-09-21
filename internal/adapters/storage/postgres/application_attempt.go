@@ -37,7 +37,7 @@ func (r *ApplicationAttemptRepository) Reserve(ctx context.Context, value domain
 		return attemptport.ReserveResult{}, errors.New("application attempt repository is not configured")
 	}
 	stored, err := scanAttempt(r.pool.QueryRow(ctx, `INSERT INTO automatic_application_attempts (`+applicationAttemptColumns+`)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
 		ON CONFLICT DO NOTHING
 		RETURNING `+applicationAttemptColumns,
 		value.AttemptID, value.VacancyID, value.ResumeID, string(value.State), value.CreatedAt, value.UpdatedAt, value.ProviderStatus, value.ErrorClass,
