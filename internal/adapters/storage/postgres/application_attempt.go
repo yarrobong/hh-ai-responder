@@ -311,13 +311,10 @@ func stringValue(value *string) string {
 
 func valueString(value *domain.ReconciliationEvidence, getter func(*domain.ReconciliationEvidence) string) any {
 	if value == nil {
-		return nil
+		return ""
 	}
-	result := getter(value)
-	if result == "" {
-		return nil
-	}
-	return result
+
+	return getter(value)
 }
 
 var _ attemptport.Store = (*ApplicationAttemptRepository)(nil)
