@@ -14,6 +14,7 @@ type Options struct {
 	Attempts           int
 	MaxTokens          int
 	Temperature        float64
+	TemperatureSet     bool
 	SemanticRetryDelay time.Duration
 }
 
@@ -40,8 +41,10 @@ func NewService(dependencies Dependencies, options Options) *Service {
 		maxTokens = 1024
 	}
 	temperature := options.Temperature
-	if temperature == 0 {
+	temperatureSet := options.TemperatureSet || temperature != 0
+	if !temperatureSet {
 		temperature = 0.1
+		temperatureSet = true
 	}
 	return &Service{
 		completion:  dependencies.Completion,
@@ -72,6 +75,7 @@ func (s *Service) Analyze(ctx context.Context, input Input) (Assessment, error) 
 		},
 		MaxTokens:      s.maxTokens,
 		Temperature:    s.temperature,
+		TemperatureSet: true,
 		ResponseFormat: JSONResponseFormat(),
 	}
 

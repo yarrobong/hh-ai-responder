@@ -116,6 +116,34 @@ func TestServicePreservesTransportOptionsAndPromptFacts(t *testing.T) {
 	}
 }
 
+func TestServiceDistinguishesUnsetAndExplicitZeroTemperature(t *testing.T) {
+	tests := []struct {
+		name     string
+		temp     float64
+		set      bool
+		wantTemp float64
+	}{
+		{name: "unset defaults to point one", wantTemp: 0.1},
+		{name: "explicit nonzero is preserved", temp: 0.7, set: true, wantTemp: 0.7},
+		{name: "explicit zero is preserved", set: true, wantTemp: 0},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			provider := &fakeCompletion{responses: []string{validResponse(80, "[]", "Python")}}
+			service := NewService(Dependencies{Completion: provider}, Options{
+				Model: "test-model", Attempts: 1, Temperature: test.temp, TemperatureSet: test.set,
+			})
+			if _, err := service.Analyze(context.Background(), Input{}); err != nil {
+				t.Fatal(err)
+			}
+			request := provider.requests[0]
+			if request.Temperature != test.wantTemp || !request.TemperatureSet {
+				t.Fatalf("request temperature=%v set=%v, want %v and set=true", request.Temperature, request.TemperatureSet, test.wantTemp)
+			}
+		})
+	}
+}
+
 func TestServiceDoesNotPromoteUnknownSkillOrHallucinatedRequirement(t *testing.T) {
 	provider := &fakeCompletion{responses: []string{validResponse(99, `[{"requirement":"Kubernetes","category":"skill","vacancy_evidence":"Kubernetes обязателен"}]`, "Kubernetes")}}
 	assessment, err := newTestService(provider, 1).Analyze(context.Background(), Input{Candidate: CandidateFacts{Skills: "Docker"}, Vacancy: vacancy.Vacancy{Name: "Backend"}, Description: "Kubernetes обязателен"})

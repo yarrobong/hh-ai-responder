@@ -61,9 +61,24 @@ type providerRequest struct {
 	Stream           bool                    `json:"stream"`
 	MaxTokens        int                     `json:"max_tokens,omitempty"`
 	Temperature      float64                 `json:"temperature,omitempty"`
+	TemperatureSet   bool                    `json:"-"`
 	ResponseFormat   *providerResponseFormat `json:"response_format,omitempty"`
 	ReasoningEffort  string                  `json:"reasoning_effort,omitempty"`
 	IncludeReasoning *bool                   `json:"include_reasoning,omitempty"`
+}
+
+func (p providerRequest) MarshalJSON() ([]byte, error) {
+	type requestAlias providerRequest
+	raw, err := json.Marshal(requestAlias(p))
+	if err != nil || !p.TemperatureSet {
+		return raw, err
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil, err
+	}
+	fields["temperature"] = p.Temperature
+	return json.Marshal(fields)
 }
 
 type providerResponseFormat struct {
@@ -197,6 +212,7 @@ func (p *Provider) buildRequest(request llmvalue.CompletionRequest) (providerReq
 		Stream:           false,
 		MaxTokens:        request.MaxTokens,
 		Temperature:      request.Temperature,
+		TemperatureSet:   request.TemperatureSet || request.Temperature != 0,
 		ReasoningEffort:  request.ReasoningEffort,
 		IncludeReasoning: request.IncludeReasoning,
 	}

@@ -76,6 +76,27 @@ func TestProviderOmitsZeroOptionsLikeTheLegacyTransport(t *testing.T) {
 	}
 }
 
+func TestProviderSendsExplicitZeroTemperature(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var fields map[string]json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&fields); err != nil {
+			t.Fatal(err)
+		}
+		raw, ok := fields["temperature"]
+		if !ok || string(raw) != "0" {
+			t.Fatalf("explicit zero temperature=%s, want JSON number 0", raw)
+		}
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"ok"}}]}`)
+	}))
+	defer server.Close()
+	provider := New(Options{BaseURL: server.URL, Attempts: 1, HTTPClient: server.Client()})
+	if _, err := provider.Complete(context.Background(), llmvalue.CompletionRequest{
+		Messages: []llmvalue.Message{{Role: llmvalue.RoleUser, Content: "x"}}, TemperatureSet: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestProviderRejectsMalformedEmptyAndZeroChoiceResponses(t *testing.T) {
 	for _, testCase := range []struct {
 		name string

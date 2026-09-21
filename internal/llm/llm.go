@@ -41,13 +41,13 @@ type ResponseFormat struct {
 }
 
 // CompletionRequest is the narrow request understood by the completion port.
-// Zero-valued numeric fields preserve the existing provider JSON behavior:
-// the adapter omits them when the current protocol uses omitempty.
+// TemperatureSet distinguishes an explicit zero from an omitted value.
 type CompletionRequest struct {
 	Model            string
 	Messages         []Message
 	MaxTokens        int
 	Temperature      float64
+	TemperatureSet   bool
 	ResponseFormat   *ResponseFormat
 	ReasoningEffort  string
 	IncludeReasoning *bool
