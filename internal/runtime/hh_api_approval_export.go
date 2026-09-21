@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -116,31 +115,29 @@ func pilotArtifactToAPIApplicationApproval(artifact PilotArtifact) (APIApplicati
 }
 
 func pilotProviderResumeID(artifact PilotArtifact) (string, error) {
-	fromHHID := ""
-	if artifact.SelectedResumeHHID > 0 {
-		fromHHID = strconv.FormatInt(artifact.SelectedResumeHHID, 10)
-	}
-	fromKnownInternal := ""
 	selectedID := strings.TrimSpace(artifact.SelectedResumeID)
-	if selectedID != "" {
-		if !strings.HasPrefix(selectedID, pilotProviderResumePrefix) {
-			if fromHHID == "" {
-				return "", errors.New("pilot artifact selected resume ID is not a provider identity")
-			}
-		} else {
-			candidate, ok := normalizeProviderResumeID(selectedID)
-			if !ok {
-				return "", errors.New("pilot artifact provider resume ID is invalid")
-			}
-			fromKnownInternal = candidate
+	selectedHash := strings.TrimSpace(artifact.SelectedResumeHash)
+	if strings.HasPrefix(selectedID, pilotProviderResumePrefix) {
+		providerID, ok := normalizeProviderResumeID(selectedID)
+		if !ok {
+			return "", errors.New("pilot artifact provider resume ID is invalid")
 		}
+		if selectedHash != "" {
+			hashProviderID, hashOK := normalizeProviderResumeID(selectedHash)
+			if !hashOK || hashProviderID != providerID {
+				return "", errors.New("pilot artifact selected resume identities conflict")
+			}
+		}
+		return providerID, nil
 	}
-	if fromHHID != "" && fromKnownInternal != "" && fromHHID != fromKnownInternal {
-		return "", errors.New("pilot artifact selected resume identities conflict")
+
+	const browserResumePrefix = "hh-resume-"
+	if selectedHash == "" || selectedID != browserResumePrefix+selectedHash {
+		return "", errors.New("pilot artifact browser resume ID and hash are missing or inconsistent")
 	}
-	providerID := firstNonEmpty(fromHHID, fromKnownInternal)
-	if providerID == "" {
-		return "", errors.New("pilot artifact has no trusted provider resume ID")
+	providerID, ok := normalizeProviderResumeID(selectedHash)
+	if !ok {
+		return "", errors.New("pilot artifact browser resume hash is invalid")
 	}
 	return providerID, nil
 }

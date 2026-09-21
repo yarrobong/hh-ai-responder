@@ -678,6 +678,121 @@ func TestHHAPIManualApprovalRoundTrip(t *testing.T) {
 	}
 }
 
+func TestHHAPIBrowserHashManualApprovalDryRunUsesHashAndNeverPosts(t *testing.T) {
+	const resumeHash = "b29ec17dff103a8bc60039ed1f356c62486c37"
+	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	postCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			postCount++
+			http.Error(w, "unexpected POST", http.StatusMethodNotAllowed)
+			return
+		}
+		switch r.URL.Path {
+		case "/vacancies/42":
+			writeHHAPIJSON(t, w, map[string]any{"id": "42", "type": map[string]any{"id": "open"}, "archived": false, "has_test": false, "response_letter_required": false, "apply_alternate_url": "https://hh.example/applicant/vacancy_response?vacancyId=42", "negotiations_url": "/negotiations?vacancy_id=42", "suitable_resumes_url": "/resumes/suitable?vacancy_id=42"})
+		case "/resumes/suitable":
+			writeHHAPIJSON(t, w, map[string]any{"items": []any{map[string]any{"id": resumeHash}}, "page": 0, "pages": 1, "found": 1})
+		case "/negotiations":
+			writeHHAPIJSON(t, w, map[string]any{"items": []any{}, "page": 0, "pages": 1, "found": 0})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	pilotPath := filepath.Join(dir, "browser-pilot.json")
+	approvalPath := filepath.Join(dir, "browser-approval.json")
+	pilot := manualPilotFixture(now)
+	pilot.SelectedResumeID = "hh-resume-" + resumeHash
+	pilot.SelectedResumeHash = resumeHash
+	pilot.SelectedResumeHHID = 272272326
+	raw, err := json.Marshal(pilot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pilotPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runHHAPICommandWithDeps(context.Background(), []string{"approval", "review", "--pilot", pilotPath, "--out", approvalPath}, Config{}, nil, io.Discard, nil, HHAPICommandDeps{Now: func() time.Time { return now }}); err != nil {
+		t.Fatal(err)
+	}
+	approval, err := loadAPIApplicationApproval(approvalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approval.ProviderResumeID != resumeHash || approval.ProviderResumeID == "272272326" {
+		t.Fatalf("generated provider resume ID=%q, want %q", approval.ProviderResumeID, resumeHash)
+	}
+
+	tokenPath := filepath.Join(dir, "token.json")
+	if err := hhapi.NewFileTokenStore(tokenPath).Save(context.Background(), hhapi.OAuthTokens{AccessToken: hhAPIAccessTokenSentinel, TokenType: "bearer", ExpiresAt: now.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testHHAPIConfig(t, server.URL, server.URL+"/token", tokenPath, "https://operator.example/callback")
+	cfg.HHTransport = "api"
+	var applyOutput bytes.Buffer
+	if err := runHHAPICommandWithDeps(context.Background(), []string{"apply", "42", "--resume-id", resumeHash, "--approval-file", approvalPath}, cfg, nil, &applyOutput, nil, HHAPICommandDeps{HTTPClient: server.Client(), Now: func() time.Time { return now }}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(applyOutput.String(), "WOULD_APPLY") || !strings.Contains(applyOutput.String(), "preflight=AVAILABLE") || postCount != 0 {
+		t.Fatalf("apply output=%q postCount=%d, want WOULD_APPLY, preflight=AVAILABLE, and zero POSTs", applyOutput.String(), postCount)
+	}
+}
+
+func TestHHAPIBrowserHashManualApprovalBlocksWhenHashIsNotSuitable(t *testing.T) {
+	const resumeHash = "b29ec17dff103a8bc60039ed1f356c62486c37"
+	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	postCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			postCount++
+			http.Error(w, "unexpected POST", http.StatusMethodNotAllowed)
+			return
+		}
+		switch r.URL.Path {
+		case "/vacancies/42":
+			writeHHAPIJSON(t, w, map[string]any{"id": "42", "type": map[string]any{"id": "open"}, "archived": false, "has_test": false, "response_letter_required": false, "negotiations_url": "/negotiations?vacancy_id=42", "suitable_resumes_url": "/resumes/suitable?vacancy_id=42"})
+		case "/resumes/suitable":
+			writeHHAPIJSON(t, w, map[string]any{"items": []any{map[string]any{"id": "other-provider"}}, "page": 0, "pages": 1, "found": 1})
+		case "/negotiations":
+			writeHHAPIJSON(t, w, map[string]any{"items": []any{}, "page": 0, "pages": 1, "found": 0})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	pilotPath := filepath.Join(dir, "browser-pilot.json")
+	approvalPath := filepath.Join(dir, "browser-approval.json")
+	pilot := manualPilotFixture(now)
+	pilot.SelectedResumeID = "hh-resume-" + resumeHash
+	pilot.SelectedResumeHash = resumeHash
+	pilot.SelectedResumeHHID = 272272326
+	raw, err := json.Marshal(pilot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pilotPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runHHAPICommandWithDeps(context.Background(), []string{"approval", "review", "--pilot", pilotPath, "--out", approvalPath}, Config{}, nil, io.Discard, nil, HHAPICommandDeps{Now: func() time.Time { return now }}); err != nil {
+		t.Fatal(err)
+	}
+	tokenPath := filepath.Join(dir, "token.json")
+	if err := hhapi.NewFileTokenStore(tokenPath).Save(context.Background(), hhapi.OAuthTokens{AccessToken: hhAPIAccessTokenSentinel, TokenType: "bearer", ExpiresAt: now.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testHHAPIConfig(t, server.URL, server.URL+"/token", tokenPath, "https://operator.example/callback")
+	cfg.HHTransport = "api"
+	err = runHHAPICommandWithDeps(context.Background(), []string{"apply", "42", "--resume-id", resumeHash, "--approval-file", approvalPath}, cfg, nil, io.Discard, io.Discard, HHAPICommandDeps{HTTPClient: server.Client(), Now: func() time.Time { return now }})
+	if err == nil || !strings.Contains(err.Error(), "preflight") || postCount != 0 {
+		t.Fatalf("apply error=%v postCount=%d, want preflight block and zero POSTs", err, postCount)
+	}
+}
+
 func TestHHAPIApplyRejectsLiveConfigurationWithoutWriteEnabled(t *testing.T) {
 	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 	approvalPath := filepath.Join(t.TempDir(), "approval.json")
