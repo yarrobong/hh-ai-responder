@@ -39,7 +39,33 @@ type HHAPICommandDeps struct {
 }
 
 func runHHAPICommand(ctx context.Context, args []string, cfg Config, stdin io.Reader, stdout, stderr io.Writer) error {
-	return runHHAPICommandWithDeps(ctx, args, cfg, stdin, stdout, stderr, HHAPICommandDeps{})
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	deps, closePersistence, err := buildProductionHHAPICommandDeps(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer closePersistence()
+	return runHHAPICommandWithDeps(ctx, args, cfg, stdin, stdout, stderr, deps)
+}
+
+func buildProductionHHAPICommandDeps(ctx context.Context, cfg Config) (HHAPICommandDeps, func(), error) {
+	backend, err := normalizeStorageBackend(cfg.StorageBackend)
+	if err != nil {
+		return HHAPICommandDeps{}, func() {}, err
+	}
+	cfg.StorageBackend = backend
+	candidatePersistence, closePersistence, err := BuildCandidatePersistence(ctx, cfg)
+	if err != nil {
+		return HHAPICommandDeps{}, func() {}, err
+	}
+	applicationAttempts, err := buildApplicationAttemptReconciliationStore(cfg, cfg.StorageBackend, candidatePersistence.Pool)
+	if err != nil {
+		closePersistence()
+		return HHAPICommandDeps{}, func() {}, err
+	}
+	return HHAPICommandDeps{ApplicationAttempts: applicationAttempts}, closePersistence, nil
 }
 
 func runHHAPICommandWithDeps(ctx context.Context, args []string, cfg Config, stdin io.Reader, stdout, stderr io.Writer, deps HHAPICommandDeps) error {
