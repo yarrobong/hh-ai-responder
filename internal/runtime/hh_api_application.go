@@ -101,7 +101,7 @@ func validateAPIApplicationApproval(approval APIApplicationApproval, vacancyID i
 		return errAPIApplicationApprovalState
 	}
 	if manual {
-		if approval.OperatorApprovalTimestamp.IsZero() || approval.OperatorApprovalTimestamp.After(now) || approval.OriginalAIScore == nil || approval.OriginalAIRecommendation != "UNCERTAIN" || approval.OriginalFinalDecision != "REVIEW_REQUIRED" || strings.TrimSpace(approval.PilotArtifactHash) == "" {
+		if approval.OperatorApprovalTimestamp.IsZero() || approval.OperatorApprovalTimestamp.After(now) || approval.OriginalAIScore == nil || *approval.OriginalAIScore < 0 || *approval.OriginalAIScore > 100 || !isSupportedAIRecommendation(approval.OriginalAIRecommendation) || approval.OriginalFinalDecision != "REVIEW_REQUIRED" || strings.TrimSpace(approval.PilotArtifactHash) == "" {
 			return errAPIApplicationApprovalState
 		}
 	}

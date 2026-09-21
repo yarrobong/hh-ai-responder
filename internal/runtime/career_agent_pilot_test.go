@@ -237,3 +237,47 @@ func TestPilotAIEligibilityAllowsOnlyCleanAdvisoryReview(t *testing.T) {
 		t.Fatal("do-not-apply review must be blocked")
 	}
 }
+
+func TestPilotManualReviewEligibilityIsIndependentOfAIAdvisory(t *testing.T) {
+	tests := []struct {
+		name           string
+		score          int
+		recommendation string
+	}{
+		{name: "low score uncertain", score: 45, recommendation: vacancyanalysis.RecommendationUncertain},
+		{name: "below threshold do not apply", score: 55, recommendation: vacancyanalysis.RecommendationDoNotApply},
+		{name: "threshold apply", score: 65, recommendation: vacancyanalysis.RecommendationApply},
+		{name: "high score apply", score: 75, recommendation: vacancyanalysis.RecommendationApply},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assessment := VacancyEvaluation{Score: test.score, Recommendation: test.recommendation}
+			if !pilotManualReviewEligible(assessment, applicationprocessing.DecisionReject, 65) {
+				t.Fatalf("manual review blocked advisory score=%d recommendation=%s", test.score, test.recommendation)
+			}
+		})
+	}
+}
+
+func TestPilotManualReviewEligibilityKeepsHardRequirementBlockers(t *testing.T) {
+	for _, status := range []string{hardRequirementStatusMissing, hardRequirementStatusUnknown} {
+		t.Run(status, func(t *testing.T) {
+			assessment := VacancyEvaluation{Score: 75, Recommendation: vacancyanalysis.RecommendationApply, HardRequirements: []HardRequirementEvaluation{{Requirement: "Kafka", Status: status}}}
+			if pilotManualReviewEligible(assessment, applicationprocessing.DecisionReject, 65) {
+				t.Fatalf("manual review ignored hard requirement status %q", status)
+			}
+		})
+	}
+}
+
+func TestPilotAutomaticReadinessKeepsItsAIGates(t *testing.T) {
+	if pilotReadyForExplicitSend(VacancyEvaluation{Score: 45, Recommendation: vacancyanalysis.RecommendationUncertain}, applicationprocessing.DecisionReject, 65) {
+		t.Fatal("low-score advisory unexpectedly became automatically sendable")
+	}
+	if pilotReadyForExplicitSend(VacancyEvaluation{Score: 75, Recommendation: vacancyanalysis.RecommendationDoNotApply}, applicationprocessing.DecisionReviewRequired, 65) {
+		t.Fatal("do-not-apply advisory unexpectedly became automatically sendable")
+	}
+	if !pilotReadyForExplicitSend(VacancyEvaluation{Score: 75, Recommendation: vacancyanalysis.RecommendationApply}, applicationprocessing.DecisionMatch, 65) {
+		t.Fatal("existing strong APPLY automatic path was changed")
+	}
+}

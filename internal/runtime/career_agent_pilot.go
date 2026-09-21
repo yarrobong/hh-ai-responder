@@ -596,7 +596,8 @@ func (r *HHAIResponder) buildCareerAgentPilotPreviewFromState(value Vacancy, pre
 	artifact.HardRequirements = append([]HardRequirementEvaluation(nil), assessment.HardRequirements...)
 	artifact.FinalDecision, artifact.FinalReason = string(decision), reason
 	preview.Reasons = append(preview.Reasons, reason)
-	if !pilotAIEligibleForPreview(assessment, decision, r.minMatchScore) {
+	manualReviewEligible := pilotManualReviewEligible(assessment, decision, r.minMatchScore)
+	if !pilotAIEligibleForPreview(assessment, decision, r.minMatchScore) && !manualReviewEligible {
 		artifact.Status = applicationpilot.StatusBlocked
 		preview.Status = applicationpilot.StatusBlocked
 		return preview, nil
@@ -642,8 +643,9 @@ func (r *HHAIResponder) buildCareerAgentPilotPreviewFromState(value Vacancy, pre
 		}
 		artifact.Status = pilotReadyStatus
 		preview.Status = pilotReadyStatus
-	} else if pilotManualReviewEligible(assessment, decision, r.minMatchScore) && artifact.ContentHash != "" {
+	} else if manualReviewEligible && artifact.ContentHash != "" {
 		artifact.Status = pilotManualReviewStatus
+		artifact.FinalDecision = string(applicationprocessing.DecisionReviewRequired)
 		preview.Status = pilotManualReviewStatus
 		preview.Reasons = append(preview.Reasons, "AI advisory recommendation requires manual review before send")
 	} else {
@@ -669,7 +671,9 @@ func pilotReadyForExplicitSend(assessment VacancyEvaluation, decision applicatio
 }
 
 func pilotManualReviewEligible(assessment VacancyEvaluation, decision applicationprocessing.Decision, minScore int) bool {
-	return pilotAIEligibleForPreview(assessment, decision, minScore) && decision == applicationprocessing.DecisionReviewRequired && assessmentRecommendation(assessment) == vacancyanalysis.RecommendationUncertain
+	_ = decision
+	_ = minScore
+	return len(hardRequirementsMissing(assessment)) == 0 && len(hardRequirementsUnknown(assessment)) == 0
 }
 
 func pilotPreflightBlockReason(preflight VacancyPreflight) string {

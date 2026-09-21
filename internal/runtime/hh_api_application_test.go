@@ -254,6 +254,15 @@ func TestValidateAPIApplicationApprovalAcceptsManualReviewBasisAndRejectsMalform
 	if err := validateAPIApplicationApproval(manual, 42, "resume-provider-7", now); err != nil {
 		t.Fatalf("valid manual approval error=%v", err)
 	}
+	for _, recommendation := range []string{"APPLY", "UNCERTAIN", "DO_NOT_APPLY"} {
+		t.Run("manual approval preserves AI recommendation "+recommendation, func(t *testing.T) {
+			value := manual
+			value.OriginalAIRecommendation = recommendation
+			if err := validateAPIApplicationApproval(value, 42, "resume-provider-7", now); err != nil {
+				t.Fatalf("manual approval recommendation %q rejected: %v", recommendation, err)
+			}
+		})
+	}
 	if err := validateAPIApplicationApproval(validAPIApplicationApproval(now), 42, "resume-provider-7", now); err != nil {
 		t.Fatalf("automatic approval compatibility error=%v", err)
 	}
@@ -267,7 +276,7 @@ func TestValidateAPIApplicationApprovalAcceptsManualReviewBasisAndRejectsMalform
 		{name: "operator not approved", mutate: func(value *APIApplicationApproval) { value.OperatorApproved = false }},
 		{name: "missing approval timestamp", mutate: func(value *APIApplicationApproval) { value.OperatorApprovalTimestamp = time.Time{} }},
 		{name: "missing original score", mutate: func(value *APIApplicationApproval) { value.OriginalAIScore = nil }},
-		{name: "wrong original recommendation", mutate: func(value *APIApplicationApproval) { value.OriginalAIRecommendation = "DO_NOT_APPLY" }},
+		{name: "invalid original recommendation", mutate: func(value *APIApplicationApproval) { value.OriginalAIRecommendation = "INVALID" }},
 		{name: "missing pilot hash", mutate: func(value *APIApplicationApproval) { value.PilotArtifactHash = "" }},
 		{name: "missing nonce", mutate: func(value *APIApplicationApproval) { value.Nonce = "" }},
 		{name: "used nonce", mutate: func(value *APIApplicationApproval) { used := now; value.NonceUsedAt = &used }},

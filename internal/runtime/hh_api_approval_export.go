@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"hh-ai-responder/internal/platform"
+	"hh-ai-responder/internal/usecase/vacancyanalysis"
 )
 
 const (
@@ -47,8 +48,8 @@ func validateManualPilotArtifact(artifact PilotArtifact, reviewedLetter string, 
 	if artifact.Version != pilotArtifactVersion || artifact.VacancyID <= 0 || artifact.Status != pilotManualReviewStatus || artifact.FinalDecision != "REVIEW_REQUIRED" {
 		return "", errors.New("pilot artifact is not an eligible manual review")
 	}
-	if artifact.AIScore == nil || strings.TrimSpace(artifact.AIRecommendation) == "" || artifact.AIRecommendation != "UNCERTAIN" {
-		return "", errors.New("pilot artifact AI assessment is not uncertain and populated")
+	if artifact.AIScore == nil || *artifact.AIScore < 0 || *artifact.AIScore > 100 || !isSupportedAIRecommendation(artifact.AIRecommendation) {
+		return "", errors.New("pilot artifact AI assessment is missing or invalid")
 	}
 	if len(artifact.HardMissing) != 0 || len(artifact.HardUnknown) != 0 {
 		return "", errors.New("pilot artifact has hard requirement blockers")
@@ -86,6 +87,15 @@ func validateManualPilotArtifact(artifact PilotArtifact, reviewedLetter string, 
 		return "", fmt.Errorf("reviewed cover letter is invalid: %w", err)
 	}
 	return providerResumeID, nil
+}
+
+func isSupportedAIRecommendation(value string) bool {
+	switch strings.TrimSpace(value) {
+	case vacancyanalysis.RecommendationApply, vacancyanalysis.RecommendationUncertain, vacancyanalysis.RecommendationDoNotApply:
+		return true
+	default:
+		return false
+	}
 }
 
 func buildManualAPIApplicationApproval(artifact PilotArtifact, providerResumeID, reviewedLetter, pilotHash, nonce string, approvedAt time.Time) APIApplicationApproval {

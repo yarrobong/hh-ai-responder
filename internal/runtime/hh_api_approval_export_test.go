@@ -152,7 +152,7 @@ func TestPilotArtifactToAPIApplicationApprovalUsesBrowserHashProviderIdentity(t 
 	}
 }
 
-func TestValidateManualPilotArtifactRequiresExplicitAIUncertainReview(t *testing.T) {
+func TestValidateManualPilotArtifactAcceptsValidAIAdvisoryAndRejectsSafetyBlockers(t *testing.T) {
 	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 	base := manualPilotFixture(now)
 	tests := []struct {
@@ -164,7 +164,6 @@ func TestValidateManualPilotArtifactRequiresExplicitAIUncertainReview(t *testing
 		{name: "match", mutate: func(value *PilotArtifact) { value.FinalDecision = "MATCH" }},
 		{name: "hard missing", mutate: func(value *PilotArtifact) { value.HardMissing = []string{"FastAPI"} }},
 		{name: "hard unknown", mutate: func(value *PilotArtifact) { value.HardUnknown = []string{"experience"} }},
-		{name: "do not apply", mutate: func(value *PilotArtifact) { value.AIRecommendation = "DO_NOT_APPLY" }},
 		{name: "missing AI score", mutate: func(value *PilotArtifact) { value.AIScore = nil }},
 		{name: "missing AI recommendation", mutate: func(value *PilotArtifact) { value.AIRecommendation = "" }},
 		{name: "test required", mutate: func(value *PilotArtifact) { required := true; value.Preflight.TestRequired = &required }},
@@ -193,6 +192,15 @@ func TestValidateManualPilotArtifactRequiresExplicitAIUncertainReview(t *testing
 		{name: "mismatched source content hash", mutate: func(value *PilotArtifact) { value.ContentHash = strings.Repeat("0", 64) }},
 		{name: "unexpected source nonce", mutate: func(value *PilotArtifact) { value.Nonce = "pilot-nonce-must-not-exist" }},
 		{name: "used source nonce", mutate: func(value *PilotArtifact) { used := now; value.NonceUsedAt = &used }},
+	}
+	for _, recommendation := range []string{"APPLY", "UNCERTAIN", "DO_NOT_APPLY"} {
+		t.Run("accepts AI recommendation "+recommendation, func(t *testing.T) {
+			value := base
+			value.AIRecommendation = recommendation
+			if _, err := validateManualPilotArtifact(value, value.CoverLetter, now); err != nil {
+				t.Fatalf("manual pilot recommendation %q rejected: %v", recommendation, err)
+			}
+		})
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
