@@ -125,6 +125,15 @@ HH_DRY_RUN=true HH_WRITE_ENABLED=false STORAGE_BACKEND=json \
   ./hh-ai-responder career-agent pilot --search --max-scan 100 --max-candidates 20
 ```
 
+For manual review of one explicitly trusted enabled resume, use an exact resume
+registry/provider/hash identity with a specific vacancy. This never lets the
+router choose a different resume and never produces an automatic send state:
+
+```sh
+HH_DRY_RUN=true HH_WRITE_ENABLED=false STORAGE_BACKEND=json \
+  ./hh-ai-responder career-agent pilot --vacancy <id> --resume-id <identity>
+```
+
 Уже подтверждённые отклики пропускаются до detail и AI; при готовом результате
 команда останавливается на `PILOT: READY_FOR_EXPLICIT_SEND` и не выполняет POST.
 

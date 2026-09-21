@@ -154,6 +154,26 @@ func pilotArtifactToAPIApplicationApproval(artifact PilotArtifact) (APIApplicati
 func pilotProviderResumeID(artifact PilotArtifact) (string, error) {
 	selectedID := strings.TrimSpace(artifact.SelectedResumeID)
 	selectedHash := strings.TrimSpace(artifact.SelectedResumeHash)
+	selectedProvider := strings.TrimSpace(artifact.SelectedResumeProviderID)
+	if selectedProvider != "" && artifact.ResumeSelectionBasis == pilotResumeSelectionOperatorExplicit {
+		providerID, ok := normalizeProviderResumeID(selectedProvider)
+		if !ok {
+			return "", errors.New("pilot artifact provider resume ID is invalid")
+		}
+		if strings.HasPrefix(selectedID, pilotProviderResumePrefix) {
+			selectedIDProvider, idOK := normalizeProviderResumeID(selectedID)
+			if !idOK || selectedIDProvider != providerID {
+				return "", errors.New("pilot artifact selected resume identities conflict")
+			}
+		}
+		if selectedHash != "" {
+			hashProviderID, hashOK := normalizeProviderResumeID(selectedHash)
+			if !hashOK || hashProviderID != providerID {
+				return "", errors.New("pilot artifact selected resume identities conflict")
+			}
+		}
+		return providerID, nil
+	}
 	if strings.HasPrefix(selectedID, pilotProviderResumePrefix) {
 		providerID, ok := normalizeProviderResumeID(selectedID)
 		if !ok {
