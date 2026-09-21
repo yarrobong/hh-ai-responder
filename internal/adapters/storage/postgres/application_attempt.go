@@ -77,7 +77,11 @@ func (r *ApplicationAttemptRepository) RecordOutcome(ctx context.Context, attemp
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	var current domain.Attempt
-	current, err = scanAttempt(tx.QueryRow(ctx, `SELECT `+applicationAttemptColumns+` FROM automatic_application_attempts WHERE attempt_id=$1 FOR UPDATE`))
+	current, err = scanAttempt(tx.QueryRow(ctx,
+		`SELECT `+applicationAttemptColumns+` FROM automatic_application_attempts WHERE attempt_id=$1 FOR UPDATE`,
+		attemptID,
+	))
+
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.ErrAttemptNotFound
 	}
