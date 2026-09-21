@@ -71,6 +71,17 @@ func TestParseRejectsUnknownCommands(t *testing.T) {
 	}
 }
 
+func TestParseAcceptsAutomaticApprovalReplacementLetter(t *testing.T) {
+	for _, args := range [][]string{
+		{"hh-api", "approval", "export", "--pilot", "pilot.json", "--out", "approval.json", "--letter-file", "letter.txt"},
+		{"hh-api", "approval", "export", "--pilot=pilot.json", "--out=approval.json", "--letter-file=letter.txt"},
+	} {
+		if _, err := Parse(args); err != nil {
+			t.Fatalf("Parse(%#v) rejected automatic replacement letter: %v", args, err)
+		}
+	}
+}
+
 func TestParseHHAPIUnknownSubcommandRedactsRawArgument(t *testing.T) {
 	for _, code := range []string{"authorization-code-cli-sentinel", "unknown-hh-api-sentinel"} {
 		_, err := Parse([]string{"hh-api", code})

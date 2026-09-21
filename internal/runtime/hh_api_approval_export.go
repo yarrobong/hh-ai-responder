@@ -14,7 +14,34 @@ import (
 	"hh-ai-responder/internal/platform"
 )
 
-const pilotProviderResumePrefix = "hh-resume-provider-id-"
+const (
+	pilotProviderResumePrefix  = "hh-resume-provider-id-"
+	maxReviewedCoverLetterSize = 1 << 20
+)
+
+func readReviewedCoverLetter(path string) (string, error) {
+	letterBytes, err := os.ReadFile(path)
+	if err != nil {
+		return "", errors.New("reviewed cover-letter file could not be read")
+	}
+	if len(letterBytes) > maxReviewedCoverLetterSize {
+		return "", errors.New("reviewed cover-letter file is too large")
+	}
+	return string(letterBytes), nil
+}
+
+func validateReplacementCoverLetter(artifact PilotArtifact, replacement string) error {
+	if replacement == "" {
+		if artifact.Preflight.CoverLetterRequired == nil || *artifact.Preflight.CoverLetterRequired {
+			return errors.New("empty reviewed letter requires a known false cover-letter requirement")
+		}
+		return nil
+	}
+	if err := validatePilotCoverLetter(replacement); err != nil {
+		return fmt.Errorf("reviewed cover letter is invalid: %w", err)
+	}
+	return nil
+}
 
 func validateManualPilotArtifact(artifact PilotArtifact, reviewedLetter string, now time.Time) (string, error) {
 	if artifact.Version != pilotArtifactVersion || artifact.VacancyID <= 0 || artifact.Status != pilotManualReviewStatus || artifact.FinalDecision != "REVIEW_REQUIRED" {
@@ -149,7 +176,7 @@ func runHHAPIApprovalCommand(args []string, stdout io.Writer, deps HHAPICommandD
 	if args[0] == "review" {
 		return runHHAPIApprovalReview(args[1:], stdout, deps)
 	}
-	pilotPath, outputPath, err := parseHHAPIApprovalExportArgs(args[1:])
+	pilotPath, outputPath, letterPath, err := parseHHAPIApprovalExportArgs(args[1:])
 	if err != nil {
 		return err
 	}
@@ -160,6 +187,17 @@ func runHHAPIApprovalCommand(args []string, stdout io.Writer, deps HHAPICommandD
 	approval, err := pilotArtifactToAPIApplicationApproval(artifact)
 	if err != nil {
 		return err
+	}
+	if letterPath != "" {
+		replacement, readErr := readReviewedCoverLetter(letterPath)
+		if readErr != nil {
+			return readErr
+		}
+		if err := validateReplacementCoverLetter(artifact, replacement); err != nil {
+			return err
+		}
+		approval.CoverLetter = replacement
+		approval.ContentHash = contentHash(replacement)
 	}
 	raw, err := json.MarshalIndent(approval, "", "  ")
 	if err != nil {
@@ -193,14 +231,10 @@ func runHHAPIApprovalReview(args []string, stdout io.Writer, deps HHAPICommandDe
 	}
 	reviewedLetter := artifact.CoverLetter
 	if letterPath != "" {
-		letterBytes, readErr := os.ReadFile(letterPath)
-		if readErr != nil {
-			return errors.New("reviewed cover-letter file could not be read")
+		reviewedLetter, err = readReviewedCoverLetter(letterPath)
+		if err != nil {
+			return err
 		}
-		if len(letterBytes) > 1<<20 {
-			return errors.New("reviewed cover-letter file is too large")
-		}
-		reviewedLetter = string(letterBytes)
 		if _, err := validateManualPilotArtifact(artifact, reviewedLetter, now); err != nil {
 			return err
 		}
@@ -224,46 +258,57 @@ func runHHAPIApprovalReview(args []string, stdout io.Writer, deps HHAPICommandDe
 	return nil
 }
 
-func parseHHAPIApprovalExportArgs(args []string) (string, string, error) {
-	pilotPath, outputPath := "", ""
+func parseHHAPIApprovalExportArgs(args []string) (string, string, string, error) {
+	pilotPath, outputPath, letterPath := "", "", ""
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
 		switch {
-		case arg == "--pilot", arg == "--out":
+		case arg == "--pilot", arg == "--out", arg == "--letter-file":
 			if index+1 >= len(args) || strings.TrimSpace(args[index+1]) == "" || strings.HasPrefix(args[index+1], "-") {
-				return "", "", fmt.Errorf("%s requires a value", arg)
+				return "", "", "", fmt.Errorf("%s requires a value", arg)
 			}
 			value := strings.TrimSpace(args[index+1])
-			if arg == "--pilot" {
+			switch arg {
+			case "--pilot":
 				if pilotPath != "" {
-					return "", "", errors.New("hh-api approval export accepts exactly one --pilot")
+					return "", "", "", errors.New("hh-api approval export accepts exactly one --pilot")
 				}
 				pilotPath = value
-			} else {
+			case "--out":
 				if outputPath != "" {
-					return "", "", errors.New("hh-api approval export accepts exactly one --out")
+					return "", "", "", errors.New("hh-api approval export accepts exactly one --out")
 				}
 				outputPath = value
+			case "--letter-file":
+				if letterPath != "" {
+					return "", "", "", errors.New("hh-api approval export accepts exactly one --letter-file")
+				}
+				letterPath = value
 			}
 			index++
 		case strings.HasPrefix(arg, "--pilot="):
 			if pilotPath != "" || strings.TrimSpace(strings.TrimPrefix(arg, "--pilot=")) == "" {
-				return "", "", errors.New("hh-api approval export requires exactly one --pilot")
+				return "", "", "", errors.New("hh-api approval export requires exactly one --pilot")
 			}
 			pilotPath = strings.TrimSpace(strings.TrimPrefix(arg, "--pilot="))
 		case strings.HasPrefix(arg, "--out="):
 			if outputPath != "" || strings.TrimSpace(strings.TrimPrefix(arg, "--out=")) == "" {
-				return "", "", errors.New("hh-api approval export requires exactly one --out")
+				return "", "", "", errors.New("hh-api approval export requires exactly one --out")
 			}
 			outputPath = strings.TrimSpace(strings.TrimPrefix(arg, "--out="))
+		case strings.HasPrefix(arg, "--letter-file="):
+			if letterPath != "" || strings.TrimSpace(strings.TrimPrefix(arg, "--letter-file=")) == "" {
+				return "", "", "", errors.New("hh-api approval export requires exactly one --letter-file")
+			}
+			letterPath = strings.TrimSpace(strings.TrimPrefix(arg, "--letter-file="))
 		default:
-			return "", "", errors.New("hh-api approval export accepts only --pilot and --out")
+			return "", "", "", errors.New("hh-api approval export accepts only --pilot, --out, and optional --letter-file")
 		}
 	}
 	if pilotPath == "" || outputPath == "" {
-		return "", "", errors.New("usage: hh-api approval export --pilot <path> --out <path>")
+		return "", "", "", errors.New("usage: hh-api approval export --pilot <path> --out <path> [--letter-file <path>]")
 	}
-	return pilotPath, outputPath, nil
+	return pilotPath, outputPath, letterPath, nil
 }
 
 func parseHHAPIApprovalReviewArgs(args []string) (string, string, string, error) {

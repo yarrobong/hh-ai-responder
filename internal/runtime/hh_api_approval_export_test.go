@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -473,6 +474,197 @@ func TestHHAPIApprovalExportWritesPrivateAtomicArtifactAndSanitizedOutput(t *tes
 	}
 	if strings.Contains(out.String(), "resume-provider-7") || strings.Contains(out.String(), pilotPath) || strings.Contains(out.String(), outPath) {
 		t.Fatalf("output was not sanitized: %q", out.String())
+	}
+}
+
+func TestHHAPIApprovalExportBindsExactReplacementLetterForAutomaticMatch(t *testing.T) {
+	now := time.Date(2026, 9, 21, 9, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	pilotPath := filepath.Join(dir, "career-agent-pilot.json")
+	approvalPath := filepath.Join(dir, "api-approval.json")
+	letterPath := filepath.Join(dir, "reviewed-letter.txt")
+	pilot := exportPilotFixture(now)
+	raw, err := json.MarshalIndent(pilot, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = append(raw, '\n')
+	if err := os.WriteFile(pilotPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	replacement := []byte("Здравствуйте!\n\nТочная операторская версия.\n")
+	if err := os.WriteFile(letterPath, replacement, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runHHAPICommandWithDeps(nil, []string{"approval", "export", "--pilot", pilotPath, "--out", approvalPath, "--letter-file", letterPath}, Config{}, nil, io.Discard, nil, HHAPICommandDeps{}); err != nil {
+		t.Fatal(err)
+	}
+	approval, err := loadAPIApplicationApproval(approvalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approval.CoverLetter != string(replacement) || approval.ContentHash != contentHash(string(replacement)) {
+		t.Fatalf("replacement letter binding=%+v", approval)
+	}
+	if approval.Version != 1 || approval.VacancyID != pilot.VacancyID || approval.ProviderResumeID != "resume-provider-7" || approval.SelectedResumeID != "resume-provider-7" || approval.Nonce != pilot.Nonce || !approval.PreviewFreshAt.Equal(pilot.PreviewFreshAt) || approval.Status != "READY_FOR_EXPLICIT_SEND" || approval.FinalDecision != "MATCH" {
+		t.Fatalf("automatic approval identity/state changed: %+v", approval)
+	}
+	if approval.ApprovalBasis != "" || approval.OperatorApproved || !approval.OperatorApprovalTimestamp.IsZero() || approval.OriginalAIScore != nil || approval.OriginalAIRecommendation != "" || approval.OriginalFinalDecision != "" || approval.PilotArtifactHash != "" {
+		t.Fatalf("manual approval metadata was introduced: %+v", approval)
+	}
+	if after, err := os.ReadFile(pilotPath); err != nil || !bytes.Equal(after, raw) {
+		t.Fatalf("source pilot changed: err=%v equal=%t", err, bytes.Equal(after, raw))
+	}
+	if err := validateAPIApplicationApproval(approval, pilot.VacancyID, "resume-provider-7", now); err != nil {
+		t.Fatalf("replacement approval failed normal validation: %v", err)
+	}
+	changed := approval
+	changed.CoverLetter += " изменено"
+	if err := validateAPIApplicationApproval(changed, pilot.VacancyID, "resume-provider-7", now); !errors.Is(err, errAPIApplicationApprovalContent) {
+		t.Fatalf("changed replacement letter validation error=%v, want content error", err)
+	}
+}
+
+func TestHHAPIApprovalExportValidatesOriginalPilotBeforeReplacement(t *testing.T) {
+	now := time.Date(2026, 9, 21, 9, 0, 0, 0, time.UTC)
+	validReplacement := []byte("Здравствуйте! Операторская версия.\n")
+	tests := []struct {
+		name   string
+		mutate func(*PilotArtifact)
+		want   string
+	}{
+		{name: "source content hash mismatch", mutate: func(value *PilotArtifact) { value.ContentHash = strings.Repeat("0", 64) }, want: "content hash"},
+		{name: "source invalid cover letter", mutate: func(value *PilotArtifact) {
+			value.CoverLetter = "```json\n{}\n```"
+			value.ContentHash = contentHash(value.CoverLetter)
+		}, want: "cover letter"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			pilotPath := filepath.Join(dir, "career-agent-pilot.json")
+			approvalPath := filepath.Join(dir, "api-approval.json")
+			letterPath := filepath.Join(dir, "reviewed-letter.txt")
+			pilot := exportPilotFixture(now)
+			test.mutate(&pilot)
+			raw, err := json.Marshal(pilot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(pilotPath, raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(letterPath, validReplacement, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			err = runHHAPICommandWithDeps(nil, []string{"approval", "export", "--pilot", pilotPath, "--out", approvalPath, "--letter-file", letterPath}, Config{}, nil, io.Discard, nil, HHAPICommandDeps{})
+			if err == nil || !strings.Contains(strings.ToLower(err.Error()), test.want) {
+				t.Fatalf("export error=%v, want substring %q", err, test.want)
+			}
+			if _, statErr := os.Stat(approvalPath); !os.IsNotExist(statErr) {
+				t.Fatalf("approval artifact exists after rejected source pilot: statErr=%v", statErr)
+			}
+		})
+	}
+}
+
+func TestHHAPIApprovalExportReplacementLetterEmptyPolicy(t *testing.T) {
+	now := time.Date(2026, 9, 21, 9, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name     string
+		required *bool
+		wantErr  bool
+	}{
+		{name: "known not required", required: func() *bool { value := false; return &value }()},
+		{name: "required", required: func() *bool { value := true; return &value }(), wantErr: true},
+		{name: "unknown", required: nil, wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			pilotPath := filepath.Join(dir, "career-agent-pilot.json")
+			approvalPath := filepath.Join(dir, "api-approval.json")
+			letterPath := filepath.Join(dir, "reviewed-letter.txt")
+			pilot := exportPilotFixture(now)
+			pilot.Preflight.CoverLetterRequired = test.required
+			raw, err := json.Marshal(pilot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(pilotPath, raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(letterPath, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			err = runHHAPICommandWithDeps(nil, []string{"approval", "export", "--pilot", pilotPath, "--out", approvalPath, "--letter-file=" + letterPath}, Config{}, nil, io.Discard, nil, HHAPICommandDeps{})
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("empty replacement unexpectedly accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			approval, loadErr := loadAPIApplicationApproval(approvalPath)
+			if loadErr != nil || approval.CoverLetter != "" || approval.ContentHash != contentHash("") {
+				t.Fatalf("empty replacement approval=%+v err=%v", approval, loadErr)
+			}
+		})
+	}
+}
+
+func TestHHAPIApprovalExportRejectsInvalidReplacementArgumentsAndContent(t *testing.T) {
+	now := time.Date(2026, 9, 21, 9, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	pilotPath := filepath.Join(dir, "career-agent-pilot.json")
+	validLetterPath := filepath.Join(dir, "valid-letter.txt")
+	raw, err := json.Marshal(exportPilotFixture(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pilotPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(validLetterPath, []byte("Здравствуйте!\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	argumentTests := []struct {
+		name string
+		args []string
+	}{
+		{name: "duplicate letter file", args: []string{"--pilot", pilotPath, "--out", filepath.Join(dir, "duplicate.json"), "--letter-file", validLetterPath, "--letter-file", validLetterPath}},
+		{name: "empty letter file path", args: []string{"--pilot", pilotPath, "--out", filepath.Join(dir, "empty-path.json"), "--letter-file="}},
+		{name: "unknown option", args: []string{"--pilot", pilotPath, "--out", filepath.Join(dir, "unknown.json"), "--unexpected", "value"}},
+	}
+	for _, test := range argumentTests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := runHHAPICommandWithDeps(nil, append([]string{"approval", "export"}, test.args...), Config{}, nil, io.Discard, nil, HHAPICommandDeps{}); err == nil {
+				t.Fatal("invalid export arguments unexpectedly succeeded")
+			}
+		})
+	}
+
+	contentTests := []struct {
+		name    string
+		content []byte
+	}{
+		{name: "unsafe content", content: []byte("```json\n{}\n```")},
+		{name: "oversized content", content: []byte(strings.Repeat("a", maxReviewedCoverLetterSize+1))},
+	}
+	for _, test := range contentTests {
+		t.Run(test.name, func(t *testing.T) {
+			letterPath := filepath.Join(dir, test.name+".txt")
+			approvalPath := filepath.Join(dir, test.name+".json")
+			if err := os.WriteFile(letterPath, test.content, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := runHHAPICommandWithDeps(nil, []string{"approval", "export", "--pilot", pilotPath, "--out", approvalPath, "--letter-file", letterPath}, Config{}, nil, io.Discard, nil, HHAPICommandDeps{}); err == nil {
+				t.Fatal("invalid replacement content unexpectedly succeeded")
+			}
+		})
 	}
 }
 

@@ -251,11 +251,8 @@ func validateHHAPIApprovalArgs(args []string) error {
 				}
 				output = true
 			} else {
-				if action != "review" {
-					return errors.New("hh-api approval export accepts only --pilot and --out")
-				}
 				if letter {
-					return errors.New("hh-api approval review accepts exactly one --letter-file")
+					return fmt.Errorf("hh-api approval %s accepts exactly one --letter-file", action)
 				}
 				letter = true
 			}
@@ -271,8 +268,8 @@ func validateHHAPIApprovalArgs(args []string) error {
 			}
 			output = true
 		case strings.HasPrefix(arg, "--letter-file="):
-			if action != "review" || letter || strings.TrimSpace(strings.TrimPrefix(arg, "--letter-file=")) == "" {
-				return errors.New("hh-api approval review requires exactly one --letter-file value")
+			if letter || strings.TrimSpace(strings.TrimPrefix(arg, "--letter-file=")) == "" {
+				return fmt.Errorf("hh-api approval %s requires exactly one --letter-file value", action)
 			}
 			letter = true
 		default:
@@ -281,9 +278,6 @@ func validateHHAPIApprovalArgs(args []string) error {
 	}
 	if !pilot || !output {
 		return fmt.Errorf("hh-api approval %s requires --pilot and --out", action)
-	}
-	if action == "export" && letter {
-		return errors.New("hh-api approval export accepts only --pilot and --out")
 	}
 	return nil
 }

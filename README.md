@@ -135,7 +135,8 @@ HH_DRY_RUN=true HH_WRITE_ENABLED=false STORAGE_BACKEND=json \
 ```sh
 HH_TRANSPORT=api HH_DRY_RUN=true HH_WRITE_ENABLED=false \
   ./hh-ai-responder hh-api approval export \
-  --pilot ./career-agent-pilot.json --out ./api-approval.json
+  --pilot ./career-agent-pilot.json --out ./api-approval.json \
+  [--letter-file ./reviewed-letter.txt]
 
 HH_TRANSPORT=api HH_DRY_RUN=true HH_WRITE_ENABLED=false \
   ./hh-ai-responder hh-api approval review \
@@ -147,12 +148,17 @@ HH_TRANSPORT=api HH_DRY_RUN=true HH_WRITE_ENABLED=false \
   --resume-id <provider-resume-id> --approval-file ./api-approval.json
 ```
 
-Сначала read-only export принимает только `PILOT: READY_FOR_EXPLICIT_SEND` с
-решением `MATCH`, точно связывает vacancy и выбранное provider resume,
+Сначала automatic `approval export` принимает только `PILOT:
+READY_FOR_EXPLICIT_SEND` с решением `MATCH`, точно связывает vacancy и
+выбранное provider resume,
 нормализует только внутреннее представление
 `hh-resume-provider-id-...` и атомарно создаёт private approval-файл. Он не
 выполняет запросов к HH. Dry-run выполняет approval validation и свежий GET-only preflight и может
 вывести `WOULD_APPLY`, но не создаёт mutation adapter и не отправляет POST.
+При явном `--letter-file` automatic MATCH approval сохраняет точные байты
+операторской версии письма и вычисляет новый `ContentHash`; vacancy, resume,
+nonce, freshness, `READY_FOR_EXPLICIT_SEND` и `MATCH` остаются из уже
+проверенного pilot. Без `--letter-file` письмо pilot сохраняется без изменений.
 Команда `approval review` — отдельное явно вызванное локальное действие для
 `MANUAL_REVIEW_BEFORE_SEND`: она принимает только `REVIEW_REQUIRED` с
 AI-рекомендацией `UNCERTAIN`, без hard missing/unknown, выпускает новый nonce,
