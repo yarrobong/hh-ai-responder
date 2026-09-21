@@ -2,11 +2,15 @@ package runtime
 
 import (
 	"context"
+	"errors"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 
 	"hh-ai-responder/internal/careeragent"
+	"hh-ai-responder/internal/hhread"
+	hhreadport "hh-ai-responder/internal/ports/hhread"
 	applicationpilot "hh-ai-responder/internal/usecase/applicationpilot"
 	applicationprocessing "hh-ai-responder/internal/usecase/applicationprocessing"
 	"hh-ai-responder/internal/usecase/candidatecontext"
@@ -139,6 +143,391 @@ func TestCareerAgentPilotPreviewIsReadOnly(t *testing.T) {
 	configureCareerAgentPilotPreview(&cfg)
 	if !cfg.DryRun || cfg.HHWriteEnabled || !cfg.HHReadOnly || cfg.AutoApply || cfg.AutoChat || cfg.AutoTouch || cfg.AutoJobStatus || cfg.ChatMode != "off" || cfg.AutoApplyMode != "off" {
 		t.Fatalf("preview must disable every HH writer: %+v", cfg)
+	}
+}
+
+func TestResolveExplicitPilotResumeRequiresOneExactEnabledIdentity(t *testing.T) {
+	profiles := []careeragent.ResumeProfile{
+		{ID: "hh-resume-provider-id-provider-1", ProviderID: "provider-1", Hash: "hash-1", Title: "Support", Enabled: true},
+		{ID: "hh-resume-provider-id-provider-2", ProviderID: "provider-2", Hash: "hash-2", Title: "Backend", Enabled: false},
+	}
+
+	for _, test := range []struct {
+		name string
+		id   string
+		want string
+		err  string
+	}{
+		{name: "stable id", id: "hh-resume-provider-id-provider-1", want: "Support"},
+		{name: "provider id", id: "provider-1", want: "Support"},
+		{name: "hash", id: "hash-1", want: "Support"},
+		{name: "missing", id: "unknown", err: "not found"},
+		{name: "disabled", id: "provider-2", err: "disabled"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := resolveExplicitPilotResume(profiles, test.id)
+			if test.err != "" {
+				if err == nil || !strings.Contains(err.Error(), test.err) {
+					t.Fatalf("error=%v, want substring %q", err, test.err)
+				}
+				return
+			}
+			if err != nil || got.Title != test.want {
+				t.Fatalf("profile=%+v error=%v, want title %q", got, err, test.want)
+			}
+		})
+	}
+}
+
+func TestResolveExplicitPilotResumeRejectsAmbiguousExactIdentity(t *testing.T) {
+	profiles := []careeragent.ResumeProfile{
+		{ID: "resume-a", ProviderID: "provider-a", Hash: "shared", Title: "A", Enabled: true},
+		{ID: "resume-b", ProviderID: "provider-b", Hash: "shared", Title: "B", Enabled: true},
+	}
+	if _, err := resolveExplicitPilotResume(profiles, "shared"); err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("error=%v, want ambiguous identity error", err)
+	}
+}
+
+func TestParseCareerAgentPilotArgsRejectsSearchWithExplicitResume(t *testing.T) {
+	_, _, _, _, _, err := parseCareerAgentPilotArgs([]string{"--search", "--resume-id", "provider-1"})
+	if err == nil || !strings.Contains(err.Error(), "--resume-id") {
+		t.Fatalf("error=%v, want explicit resume/search rejection", err)
+	}
+}
+
+func TestParseCareerAgentPilotArgsRejectsDuplicateExplicitResume(t *testing.T) {
+	_, _, _, _, _, err := parseCareerAgentPilotArgs([]string{"--vacancy", "42", "--resume-id", "provider-1", "--resume-id=provider-1"})
+	if err == nil || !strings.Contains(err.Error(), "exactly one") {
+		t.Fatalf("error=%v, want duplicate identity rejection", err)
+	}
+}
+
+func TestVerifyExplicitPilotResumeIdentityRejectsProviderOrHashConflict(t *testing.T) {
+	profile := careeragent.ResumeProfile{ProviderID: "provider-1", Hash: "hash-1"}
+	for _, actual := range []ResumeItem{
+		{ProviderID: "provider-2", Hash: "hash-1"},
+		{ProviderID: "provider-1", Hash: "hash-2"},
+		{},
+	} {
+		if err := verifyExplicitPilotResumeIdentity(profile, actual); err == nil {
+			t.Fatalf("actual=%+v was accepted despite identity conflict", actual)
+		}
+	}
+}
+
+func TestExplicitPilotManualReviewGateNeverBecomesReadyForSend(t *testing.T) {
+	preflight := VacancyPreflight{
+		ArchivedKnown: true, CanApplyKnown: true, CanApply: true,
+		TestPresentKnown: true, TestPresent: false, LetterRequiredKnown: true,
+		SelectedResumeSuitableKnown: true, SelectedResumeSuitable: true,
+		SuitableResumesScanComplete: true,
+	}
+	if !pilotExplicitManualReviewReady(true, nil, nil, preflight, AlreadyRespondedNo, "hash") {
+		t.Fatal("safe explicit selection was not eligible for manual review")
+	}
+	if pilotExplicitManualReviewReady(false, nil, nil, preflight, AlreadyRespondedNo, "hash") {
+		t.Fatal("router-selected flow entered the explicit manual-review gate")
+	}
+	if pilotExplicitResumePreflightBlockReason(preflight) != "" {
+		t.Fatalf("valid explicit provider preflight was blocked: %s", pilotExplicitResumePreflightBlockReason(preflight))
+	}
+}
+
+func TestExplicitPilotAIAdvisoryCannotBlockManualReview(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		explicit   bool
+		assessment VacancyEvaluation
+		decision   applicationprocessing.Decision
+		blocked    bool
+	}{
+		{
+			name:       "explicit low score",
+			explicit:   true,
+			assessment: VacancyEvaluation{Score: 60, Recommendation: vacancyanalysis.RecommendationDoNotApply},
+			decision:   applicationprocessing.DecisionReject,
+			blocked:    false,
+		},
+		{
+			name:       "explicit unknown score",
+			explicit:   true,
+			assessment: VacancyEvaluation{Recommendation: vacancyanalysis.RecommendationUncertain},
+			decision:   applicationprocessing.DecisionReviewRequired,
+			blocked:    false,
+		},
+		{
+			name:       "automatic low score",
+			explicit:   false,
+			assessment: VacancyEvaluation{Score: 60, Recommendation: vacancyanalysis.RecommendationDoNotApply},
+			decision:   applicationprocessing.DecisionReject,
+			blocked:    true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := pilotAIBlocksPreview(test.explicit, test.assessment, test.decision, 65); got != test.blocked {
+				t.Fatalf("pilotAIBlocksPreview()=%v, want %v", got, test.blocked)
+			}
+		})
+	}
+}
+
+func TestExplicitPilotManualReviewKeepsHardBlockers(t *testing.T) {
+	preflight := VacancyPreflight{
+		ArchivedKnown: true, CanApplyKnown: true, CanApply: true,
+		TestPresentKnown: true, TestPresent: false, LetterRequiredKnown: true,
+		SelectedResumeSuitableKnown: true, SelectedResumeSuitable: true,
+		SuitableResumesScanComplete: true,
+	}
+	for _, test := range []struct {
+		name        string
+		hardMissing []string
+		hardUnknown []string
+	}{
+		{name: "hard missing", hardMissing: []string{"Python"}},
+		{name: "hard unknown", hardUnknown: []string{"SQL"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if pilotExplicitManualReviewReady(true, test.hardMissing, test.hardUnknown, preflight, AlreadyRespondedNo, "hash") {
+				t.Fatal("explicit manual review ignored a hard blocker")
+			}
+		})
+	}
+}
+
+func TestExplicitPilotRequiresExactProviderSuitabilityEvidence(t *testing.T) {
+	base := VacancyPreflight{}
+	for _, test := range []struct {
+		name string
+		edit func(*VacancyPreflight)
+	}{
+		{name: "scan incomplete", edit: func(value *VacancyPreflight) {
+			value.SelectedResumeSuitableKnown = true
+			value.SelectedResumeSuitable = true
+		}},
+		{name: "suitability unknown", edit: func(value *VacancyPreflight) { value.SuitableResumesScanComplete = true }},
+		{name: "not suitable", edit: func(value *VacancyPreflight) {
+			value.SuitableResumesScanComplete = true
+			value.SelectedResumeSuitableKnown = true
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value := base
+			test.edit(&value)
+			if pilotExplicitResumePreflightBlockReason(value) == "" {
+				t.Fatal("incomplete provider suitability evidence was accepted")
+			}
+		})
+	}
+	for _, value := range []VacancyPreflight{
+		{SuitableResumesScanComplete: true, SelectedResumeSuitableKnown: true, SelectedResumeSuitable: true, ResponseIdentifierPresent: true},
+		{SuitableResumesScanComplete: true, SelectedResumeSuitableKnown: true, SelectedResumeSuitable: true, VacancyTypeKnown: true, VacancyTypeID: "direct"},
+	} {
+		if reason := pilotExplicitResumePreflightBlockReason(value); reason == "" {
+			t.Fatalf("unsupported response path was accepted: %+v", value)
+		}
+	}
+}
+
+func TestExplicitPilotResponsePathClassification(t *testing.T) {
+	base := VacancyPreflight{
+		SuitableResumesScanComplete: true,
+		SelectedResumeSuitableKnown: true,
+		SelectedResumeSuitable:      true,
+		VacancyTypeKnown:            true,
+		VacancyTypeID:               "open",
+	}
+
+	tests := []struct {
+		name        string
+		mutate      func(*VacancyPreflight)
+		wantBlocked bool
+	}{
+		{
+			name: "standard applicant response URL is allowed",
+			mutate: func(value *VacancyPreflight) {
+				value.ResponseURL = "https://hh.ru/applicant/vacancy_response?vacancyId=123"
+				value.ResponseIdentifierPresent = true
+			},
+			wantBlocked: false,
+		},
+		{
+			name: "external response URL is blocked",
+			mutate: func(value *VacancyPreflight) {
+				value.ResponseURL = "https://external.example.com/apply"
+				value.ResponseIdentifierPresent = true
+			},
+			wantBlocked: true,
+		},
+		{
+			name:        "direct vacancy is blocked",
+			mutate:      func(value *VacancyPreflight) { value.VacancyTypeID = "direct" },
+			wantBlocked: true,
+		},
+		{
+			name:        "closed vacancy is blocked",
+			mutate:      func(value *VacancyPreflight) { value.VacancyTypeID = "closed" },
+			wantBlocked: true,
+		},
+		{
+			name: "API alternate URL remains diagnostic only",
+			mutate: func(value *VacancyPreflight) {
+				value.ApplyAlternateURL = "https://hh.ru/applicant/vacancy_response?vacancyId=123"
+				value.ApplyAlternateURLPresent = true
+			},
+			wantBlocked: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			value := base
+			test.mutate(&value)
+			blocked := pilotExplicitResumePreflightBlockReason(value) != ""
+			if blocked != test.wantBlocked {
+				t.Fatalf("blocked=%v, want %v; preflight=%+v", blocked, test.wantBlocked, value)
+			}
+		})
+	}
+}
+
+func TestExplicitPilotSuitabilityBridgeMergesOnlyFreshSuitabilityEvidence(t *testing.T) {
+	providerID := "b29ec17dff103a8bc60039ed1f356c62486c37"
+	source := &apiApplicationPreflightFake{
+		detail:       hhread.VacancyRecord{ID: 137532422, SuitableResumesURL: "https://api.example/suitable"},
+		suitableScan: &hhread.SuitableResumeScan{IDs: []string{providerID}, PagesChecked: 1, Complete: true},
+	}
+	responder := newBrowserExplicitSuitabilityResponder(source)
+	preflight := VacancyPreflight{
+		Archived: true, ArchivedKnown: true,
+		AlreadyResponded: true, AlreadyRespondedKnown: true,
+		CanApply: false, CanApplyKnown: true,
+		TestPresent: true, TestPresentKnown: true,
+		ResponseURL: "https://hh.ru/applicant/vacancy_response?vacancyId=137532422",
+	}
+	profile := careeragent.ResumeProfile{ProviderID: providerID, Hash: "browser-hash", Enabled: true}
+
+	if err := responder.bridgeExplicitPilotSuitability(context.Background(), 137532422, profile, &preflight); err != nil {
+		t.Fatal(err)
+	}
+	if !preflight.SuitableResumesScanComplete || !preflight.SelectedResumeSuitableKnown || !preflight.SelectedResumeSuitable || preflight.SuitableResumeIDsDiscovered != 1 {
+		t.Fatalf("suitability evidence=%+v", preflight)
+	}
+	if !preflight.Archived || !preflight.ArchivedKnown || !preflight.AlreadyResponded || !preflight.AlreadyRespondedKnown || preflight.CanApply || !preflight.CanApplyKnown || !preflight.TestPresent || !preflight.TestPresentKnown || preflight.ResponseURL == "" {
+		t.Fatalf("bridge changed browser evidence=%+v", preflight)
+	}
+}
+
+func TestExplicitPilotSuitabilityBridgeRequiresExactProviderID(t *testing.T) {
+	providerID := "b29ec17dff103a8bc60039ed1f356c62486c37"
+	profile := careeragent.ResumeProfile{ProviderID: providerID, Hash: "browser-hash", Enabled: true}
+
+	for _, test := range []struct {
+		name string
+		scan *hhread.SuitableResumeScan
+		want string
+	}{
+		{name: "selected provider is present", scan: &hhread.SuitableResumeScan{IDs: []string{providerID}, PagesChecked: 1, Complete: true}, want: ""},
+		{name: "selected provider is absent", scan: &hhread.SuitableResumeScan{IDs: []string{"other-provider"}, PagesChecked: 1, Complete: true}, want: "explicit resume provider suitability scan unavailable"},
+		{name: "scan is incomplete", scan: &hhread.SuitableResumeScan{IDs: []string{providerID}, PagesChecked: 1, Complete: false}, want: "explicit resume provider suitability scan unavailable"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source := &apiApplicationPreflightFake{
+				detail:       hhread.VacancyRecord{ID: 137532422, SuitableResumesURL: "https://api.example/suitable"},
+				suitableScan: test.scan,
+			}
+			responder := newBrowserExplicitSuitabilityResponder(source)
+			preflight := VacancyPreflight{}
+			err := responder.bridgeExplicitPilotSuitability(context.Background(), 137532422, profile, &preflight)
+			if test.want == "" {
+				if err != nil || !preflight.SelectedResumeSuitable {
+					t.Fatalf("err=%v preflight=%+v", err, preflight)
+				}
+				return
+			}
+			if err == nil || pilotExplicitResumePreflightBlockReason(preflight) != test.want {
+				t.Fatalf("err=%v preflight=%+v reason=%q", err, preflight, pilotExplicitResumePreflightBlockReason(preflight))
+			}
+		})
+	}
+}
+
+func TestExplicitPilotSuitabilityBridgeBlocksWithoutAPITransport(t *testing.T) {
+	profile := careeragent.ResumeProfile{ProviderID: "b29ec17dff103a8bc60039ed1f356c62486c37", Enabled: true}
+	preflight := VacancyPreflight{}
+	responder := &HHAIResponder{ctx: context.Background(), transport: transportBrowser}
+
+	if err := responder.bridgeExplicitPilotSuitability(context.Background(), 137532422, profile, &preflight); err == nil || pilotExplicitResumePreflightBlockReason(preflight) != "explicit resume provider suitability scan unavailable" {
+		t.Fatalf("err=%v preflight=%+v reason=%q", err, preflight, pilotExplicitResumePreflightBlockReason(preflight))
+	}
+}
+
+func TestExplicitPilotSuitabilityBridgeRejectsProviderIdentityResolutionFailure(t *testing.T) {
+	responder := newBrowserExplicitSuitabilityResponder(&apiApplicationPreflightFake{})
+	preflight := VacancyPreflight{}
+	profile := careeragent.ResumeProfile{HHID: 272272326, Title: "Технический специалист", Enabled: true}
+
+	if err := responder.bridgeExplicitPilotSuitability(context.Background(), 137532422, profile, &preflight); err == nil || pilotExplicitResumePreflightBlockReason(preflight) != "explicit resume provider suitability scan unavailable" {
+		t.Fatalf("err=%v preflight=%+v reason=%q", err, preflight, pilotExplicitResumePreflightBlockReason(preflight))
+	}
+}
+
+func TestExplicitPilotSuitabilityBridgeIsNotUsedByNonExplicitSelection(t *testing.T) {
+	calls := 0
+	responder := &HHAIResponder{
+		ctx:       context.Background(),
+		transport: transportBrowser,
+		apiReadFactory: func(url.Values) (hhreadport.HHReadSource, error) {
+			calls++
+			return nil, errors.New("unexpected suitability bridge call")
+		},
+	}
+	if err := responder.bridgeExplicitPilotSuitabilityForSelection(context.Background(), 137532422, nil, &VacancyPreflight{}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 {
+		t.Fatalf("non-explicit selection invoked API suitability bridge %d times", calls)
+	}
+}
+
+func newBrowserExplicitSuitabilityResponder(source *apiApplicationPreflightFake) *HHAIResponder {
+	return &HHAIResponder{
+		ctx:       context.Background(),
+		transport: transportBrowser,
+		apiReadFactory: func(url.Values) (hhreadport.HHReadSource, error) {
+			return source, nil
+		},
+	}
+}
+
+func TestExplicitPilotPreflightBindsTheSelectedProviderResume(t *testing.T) {
+	source := &apiApplicationPreflightFake{detail: hhread.VacancyRecord{
+		ID: 42, SuitableResumesURL: "https://api.example/suitable", TypeID: "open", TypeIDKnown: true,
+		ArchivedKnown: true, Archived: false, UserTestPresentKnown: true,
+	}, suitableIDs: []string{"provider-selected"}}
+	responder := newAPIApplicationPreflightResponder(source)
+	responder.resumeIdentifier = "default-provider"
+	responder.careerAgentResumes = []careeragent.ResumeProfile{{ID: "resume-selected", ProviderID: "provider-selected", Enabled: true}}
+	profile := responder.careerAgentResumes[0]
+	preflight, err := responder.getCareerAgentPilotPreflight(Vacancy{ID: 42}, &profile)
+	if err != nil || !preflight.SelectedResumeSuitableKnown || !preflight.SelectedResumeSuitable {
+		t.Fatalf("preflight=%+v error=%v, want selected provider suitable", preflight, err)
+	}
+	if responder.resumeIdentifier != "default-provider" {
+		t.Fatalf("resume identifier was not restored: %q", responder.resumeIdentifier)
+	}
+}
+
+func TestExplicitPilotArtifactAlwaysUsesManualReviewTelemetry(t *testing.T) {
+	artifact := PilotArtifact{
+		ResumeSelectionBasis:     pilotResumeSelectionOperatorExplicit,
+		SelectedResumeID:         "hh-resume-provider-id-provider-1",
+		SelectedResumeProviderID: "provider-1",
+		RouterStatus:             careeragent.RouteReviewRequired,
+		RouterReasonCode:         careeragent.RouteReasonOutOfScope,
+	}
+	if artifact.ResumeSelectionBasis != "OPERATOR_EXPLICIT" || artifact.RouterReasonCode != careeragent.RouteReasonOutOfScope {
+		t.Fatalf("artifact telemetry=%+v", artifact)
 	}
 }
 

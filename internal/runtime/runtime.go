@@ -1862,10 +1862,11 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 	responder.readSource = selectedSource
 	responder.transport = transportMetadata.Selected
 	responder.transportMetadata = transportMetadata
-	if responder.transport == transportAPI {
-		responder.apiReadFactory = func(params url.Values) (hhreadports.HHReadSource, error) {
-			return newRuntimeAPIClient(cfg, nil, params)
-		}
+	// Keep an API read factory available for the explicit-resume suitability
+	// bridge. Browser remains the selected transport; the factory is invoked
+	// only by that explicit read-only path.
+	responder.apiReadFactory = func(params url.Values) (hhreadports.HHReadSource, error) {
+		return newRuntimeAPIClient(cfg, nil, params)
 	}
 	NewHHAIResponderReadClient(responder)
 

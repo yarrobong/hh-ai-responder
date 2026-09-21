@@ -137,6 +137,31 @@ func TestPilotProviderResumeIDResolvesBrowserIdentityWithoutUsingHHID(t *testing
 	}
 }
 
+func TestPilotProviderResumeIDUsesExplicitProviderIdentity(t *testing.T) {
+	artifact := PilotArtifact{
+		SelectedResumeID:         "hh-resume-provider-id-provider-7",
+		SelectedResumeProviderID: "provider-7",
+		SelectedResumeHash:       "provider-7",
+	}
+	got, err := pilotProviderResumeID(artifact)
+	if err != nil || got != "provider-7" {
+		t.Fatalf("pilotProviderResumeID()=%q error=%v, want provider-7", got, err)
+	}
+}
+
+func TestPilotProviderResumeIDKeepsLegacyRouterHashResolution(t *testing.T) {
+	artifact := PilotArtifact{
+		SelectedResumeID:         "hh-resume-hash-7",
+		SelectedResumeHash:       "hash-7",
+		SelectedResumeProviderID: "provider-7",
+		ResumeSelectionBasis:     pilotResumeSelectionRouter,
+	}
+	got, err := pilotProviderResumeID(artifact)
+	if err != nil || got != "hash-7" {
+		t.Fatalf("pilotProviderResumeID()=%q error=%v, want legacy hash-7", got, err)
+	}
+}
+
 func TestPilotArtifactToAPIApplicationApprovalUsesBrowserHashProviderIdentity(t *testing.T) {
 	const resumeHash = "b29ec17dff103a8bc60039ed1f356c62486c37"
 	pilot := exportPilotFixture(time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC))
