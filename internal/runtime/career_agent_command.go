@@ -19,6 +19,7 @@ import (
 type CareerAgentRunReport struct {
 	Version         int                         `json:"version"`
 	RunID           string                      `json:"run_id"`
+	Run             careeragent.AgentRun        `json:"run"`
 	Mode            string                      `json:"mode"`
 	GeneratedAt     time.Time                   `json:"generated_at"`
 	ResumeProfiles  []careeragent.ResumeProfile `json:"resume_profiles"`
@@ -87,6 +88,8 @@ func runCareerAgentCommand(args []string, cfg Config, stdout, stderr io.Writer) 
 	if err := configureCareerAgentMode(&cfg, mode); err != nil {
 		return err
 	}
+	runStartedAt := time.Now().UTC()
+	runID := fmt.Sprintf("career-agent-%d", runStartedAt.UnixNano())
 	if logger == nil {
 		logger = NewLogger(stderr, parseLogLevel(cfg.LogLevel))
 	}
@@ -102,34 +105,34 @@ func runCareerAgentCommand(args []string, cfg Config, stdout, stderr io.Writer) 
 	}
 	var events bytes.Buffer
 	responder.eventWriter = &events
-	if err := responder.ApplyVacancies(); err != nil {
-		return err
-	}
-	report := CareerAgentRunReport{Version: 2, RunID: fmt.Sprintf("career-agent-%d", time.Now().UTC().UnixNano()), Mode: mode, GeneratedAt: time.Now().UTC(), ResumeProfiles: responder.careerAgentResumes, SearchProfiles: responder.careerAgentProfiles, Vacancies: []CareerAgentVacancyResult{}, Events: []json.RawMessage{}}
+	report := CareerAgentRunReport{Version: 2, RunID: runID, Run: careeragent.NewAgentRun(runID, careeragent.AgentRunStageCareerAgent, runStartedAt), Mode: mode, GeneratedAt: time.Now().UTC(), ResumeProfiles: responder.careerAgentResumes, SearchProfiles: responder.careerAgentProfiles, Vacancies: []CareerAgentVacancyResult{}, Events: []json.RawMessage{}}
 	if len(report.SearchProfiles) == 0 {
 		report.SearchProfiles = manualCareerAgentSearchProfiles(responder.searchProfiles)
 	}
-	for _, line := range strings.Split(strings.TrimSpace(events.String()), "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		raw := json.RawMessage(line)
-		report.Events = append(report.Events, raw)
-		var kind struct {
-			Type string `json:"type"`
-		}
-		if json.Unmarshal(raw, &kind) == nil && kind.Type == "run_summary" {
-			_ = json.Unmarshal(raw, &report.Summary)
-		}
-		if kind.Type == "career_agent_vacancy" {
-			var vacancy CareerAgentVacancyResult
-			if json.Unmarshal(raw, &vacancy) == nil {
-				report.Vacancies = append(report.Vacancies, vacancy)
-			}
-		}
+	process := func() error {
+		processErr := responder.ApplyVacancies()
+		collectCareerAgentEvents(&report, events.String())
+		return processErr
 	}
-	if report.Summary.Type == "" {
-		report.Summary = RunSummaryResult{Type: "run_summary", Errors: 1}
+	if responder.careerWorkflowStore != nil {
+		if err := executeCareerAgentWorkflow(context.Background(), responder.careerWorkflowStore, &report, process); err != nil {
+			return err
+		}
+	} else {
+		if err := process(); err != nil {
+			return err
+		}
+		if report.Summary.Type == "" {
+			report.Summary = RunSummaryResult{Type: "run_summary", Errors: 1}
+		}
+		runStatus := careeragent.AgentRunStatusCompleted
+		runResult := "completed"
+		if report.Summary.Errors > 0 {
+			runStatus, runResult = careeragent.AgentRunStatusPartial, "completed_with_errors"
+		}
+		if err := report.Run.Finish(runStatus, runResult, time.Now().UTC(), nil); err != nil {
+			return fmt.Errorf("finish Career Agent run telemetry: %w", err)
+		}
 	}
 	if cfg.CareerAgentResultPath != "" {
 		report.HumanReportPath = cfg.CareerAgentResultPath + ".md"
@@ -172,6 +175,37 @@ func renderCareerAgentStatus(report CareerAgentRunReport) string {
 		builder.WriteString("\nBest candidate: NONE\nStatus: NONE\n")
 	}
 	return builder.String()
+}
+
+func collectCareerAgentEvents(report *CareerAgentRunReport, output string) {
+	if report == nil {
+		return
+	}
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		raw := json.RawMessage(line)
+		report.Events = append(report.Events, raw)
+		var kind struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(raw, &kind) != nil {
+			continue
+		}
+		switch kind.Type {
+		case "run_summary":
+			_ = json.Unmarshal(raw, &report.Summary)
+		case "career_agent_vacancy":
+			var vacancy CareerAgentVacancyResult
+			if json.Unmarshal(raw, &vacancy) == nil {
+				report.Vacancies = append(report.Vacancies, vacancy)
+			}
+		}
+	}
+	if report.Summary.Type == "" {
+		report.Summary = RunSummaryResult{Type: "run_summary", Errors: 1}
+	}
 }
 
 func renderCareerAgentHumanReport(report CareerAgentRunReport) string {

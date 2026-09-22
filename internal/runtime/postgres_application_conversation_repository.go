@@ -26,6 +26,13 @@ func NewPostgresCareerStore(pool *pgxpool.Pool) *PostgresCareerStore {
 	return &PostgresCareerStore{pool: pool}
 }
 
+func (s *PostgresCareerStore) Pool() *pgxpool.Pool {
+	if s == nil {
+		return nil
+	}
+	return s.pool
+}
+
 func (s *PostgresCareerStore) WithTx(ctx context.Context, fn func(CareerTx) error) error {
 	ctx = postgresContext(ctx)
 	if s == nil || s.pool == nil {

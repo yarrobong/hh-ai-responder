@@ -425,6 +425,10 @@ func (r *HHAIResponder) ApplyVacancies() error {
 		trace.SelectedResume = firstNonEmpty(trace.SelectedResume, selectedResume.Hash)
 		trace.SelectedResumeTitle = firstNonEmpty(trace.SelectedResumeTitle, selectedResume.Title)
 		trace.CoverLetterGenerated = strings.TrimSpace(prep.Prepared.CoverLetter) != ""
+		if err := r.persistCareerAgentPreparation(value, selectedResume, trace, prep); err != nil {
+			summary.Errors++
+			logger.Warn("Could not persist Career Agent preparation for vacancy %d: %v", value.ID, err)
+		}
 		r.writeEvent(VacancyMatchResult{Type: "vacancy_match", VacancyID: value.ID, Name: value.Name, URL: vacancyURL, Score: evaluation.Score, Recommendation: assessmentRecommendation(evaluation), RecommendationReasons: append([]string(nil), evaluation.RecommendationReasons...), Reasons: evaluation.Reasons, Missing: evaluation.Missing, HardRequirementsMissing: hardRequirementsMissing(evaluation), HardRequirements: evaluation.HardRequirements, SearchProfiles: r.vacancySearchSources[value.ID]})
 		logger.Info("MATCH — vacancy %d: %d/100", value.ID, evaluation.Score)
 

@@ -29,6 +29,7 @@ import (
 	"hh-ai-responder/internal/browsersession"
 	"hh-ai-responder/internal/careeragent"
 	appconfig "hh-ai-responder/internal/config"
+	"hh-ai-responder/internal/ports"
 	attemptport "hh-ai-responder/internal/ports/applicationattempt"
 	autochatattemptport "hh-ai-responder/internal/ports/autochatattempt"
 	hhreadports "hh-ai-responder/internal/ports/hhread"
@@ -90,6 +91,7 @@ type Config struct {
 	MaxSearchPagesPerRun         int
 	CareerAgentResultPath        string
 	CareerAgentFeedbackPath      string
+	CareerAgentWorkflowPath      string
 	ResumeRegistryPath           string
 	CookiesPath                  string
 	BrowserProfilePath           string
@@ -1142,6 +1144,8 @@ type HHAIResponder struct {
 	candidateClose               func()
 	careerRepositories           CareerRepositories
 	careerClose                  func()
+	careerWorkflowStore          ports.CareerWorkflowStore
+	careerWorkflowClose          func()
 	applicationAttempts          attemptport.Store
 	attemptStoreInitErr          error
 	autoChatAttempts             autochatattemptport.Store
@@ -1191,6 +1195,9 @@ type HHAIResponder struct {
 	careerAgentSearchSources     map[int][]careeragent.SearchProfileEvidence
 	careerAgentDetailCache       map[int]Vacancy
 	careerAgentWriteCount        int
+	careerAgentCandidateID       string
+	careerAgentCandidateVersion  int
+	careerAgentCandidateHash     string
 	// Legacy field name; API entries are keyed by provider resume ID, while
 	// browser entries remain keyed by their resume hash.
 	resumeFactsByHash         map[string]ResumeFacts
@@ -1663,6 +1670,8 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 	var closeCandidate func()
 	var careerRepositories CareerRepositories
 	var closeCareer func()
+	var careerWorkflowStore ports.CareerWorkflowStore
+	var closeCareerWorkflow func()
 	var closeBrowser func() error
 	resourcesReady := false
 	defer func() {
@@ -1671,6 +1680,9 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 		}
 		if closeCareer != nil {
 			closeCareer()
+		}
+		if closeCareerWorkflow != nil {
+			closeCareerWorkflow()
 		}
 		if closeCandidate != nil {
 			closeCandidate()
@@ -1691,6 +1703,10 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 		if err != nil {
 			return nil, err
 		}
+	}
+	careerWorkflowStore, closeCareerWorkflow, err = buildCareerWorkflowStore(cfg, backend, careerRepositories)
+	if err != nil {
+		return nil, err
 	}
 	var baseURL *url.URL
 	var searchParams url.Values
@@ -1759,6 +1775,8 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 		candidateClose:               closeCandidate,
 		careerRepositories:           careerRepositories,
 		careerClose:                  closeCareer,
+		careerWorkflowStore:          careerWorkflowStore,
+		careerWorkflowClose:          closeCareerWorkflow,
 	}
 	if backend == storageBackendPostgres {
 		responder.candidateRepository = candidatePersistence.Repository
@@ -2204,6 +2222,9 @@ func (r *HHAIResponder) canonicalCandidateContextContext(ctx context.Context, re
 		if err != nil {
 			return LegacyCandidateContext{}, nil, err
 		}
+		if err := r.rememberCareerAgentCandidate(candidate); err != nil {
+			return LegacyCandidateContext{}, nil, err
+		}
 		resolver := NewCandidateContextResolverFromCandidate(candidate)
 		view, err := CanonicalEmployerSafeProjection(candidate)
 		if err != nil {
@@ -2267,6 +2288,9 @@ func (r *HHAIResponder) canonicalCandidateContextContext(ctx context.Context, re
 	}
 	if len(diagnostics.Conflicts) > 0 {
 		return LegacyCandidateContext{}, nil, errors.New("critical canonical candidate conflict")
+	}
+	if err := r.rememberCareerAgentCandidate(candidate); err != nil {
+		return LegacyCandidateContext{}, nil, err
 	}
 	safeKnowledge, _ := CanonicalEmployerSafeProjection(candidate)
 	fullName := r.GetFullName()
@@ -3506,6 +3530,7 @@ func legacyConfigFromPackage(value appconfig.Config) Config {
 		MaxSearchPagesPerRun:         value.MaxSearchPagesPerRun,
 		CareerAgentResultPath:        value.CareerAgentResultPath,
 		CareerAgentFeedbackPath:      value.CareerAgentFeedbackPath,
+		CareerAgentWorkflowPath:      value.CareerAgentWorkflowPath,
 		ResumeRegistryPath:           value.ResumeRegistryPath,
 		CookiesPath:                  value.CookiesPath,
 		BrowserProfilePath:           value.BrowserProfilePath,
@@ -3715,6 +3740,10 @@ func (r *HHAIResponder) closeResources() {
 	if r.careerClose != nil {
 		r.careerClose()
 		r.careerClose = nil
+	}
+	if r.careerWorkflowClose != nil {
+		r.careerWorkflowClose()
+		r.careerWorkflowClose = nil
 	}
 	if r.candidateClose != nil {
 		r.candidateClose()
