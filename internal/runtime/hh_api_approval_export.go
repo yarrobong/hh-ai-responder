@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -109,6 +110,7 @@ func buildManualAPIApplicationApproval(artifact PilotArtifact, providerResumeID,
 		OriginalAIScore: &score, OriginalAIRecommendation: artifact.AIRecommendation,
 		OriginalAIRecommendationReasons: append([]string(nil), artifact.AIReasons...),
 		OriginalFinalDecision:           artifact.FinalDecision, PilotArtifactHash: pilotHash,
+		PreparationID: artifact.PreparationID, PreparationHash: artifact.PreparationHash,
 	}
 }
 
@@ -137,6 +139,9 @@ func pilotArtifactToAPIApplicationApproval(artifact PilotArtifact) (APIApplicati
 	if strings.TrimSpace(artifact.ContentHash) != "" && strings.TrimSpace(artifact.ContentHash) != focusedHash {
 		return APIApplicationApproval{}, errors.New("pilot artifact content hash does not match the exact cover letter")
 	}
+	if err := validatePreparationReferenceShape(artifact.PreparationID, artifact.PreparationHash); err != nil {
+		return APIApplicationApproval{}, err
+	}
 	return APIApplicationApproval{
 		Version:          apiApplicationApprovalVersion,
 		VacancyID:        artifact.VacancyID,
@@ -148,6 +153,8 @@ func pilotArtifactToAPIApplicationApproval(artifact PilotArtifact) (APIApplicati
 		PreviewFreshAt:   artifact.PreviewFreshAt,
 		Status:           "READY_FOR_EXPLICIT_SEND",
 		FinalDecision:    "MATCH",
+		PreparationID:    artifact.PreparationID,
+		PreparationHash:  artifact.PreparationHash,
 	}, nil
 }
 
@@ -229,6 +236,9 @@ func runHHAPIApprovalCommand(args []string, stdout io.Writer, deps HHAPICommandD
 		approval.CoverLetter = replacement
 		approval.ContentHash = contentHash(replacement)
 	}
+	if err := validatePreparationApprovalBinding(context.Background(), deps.CareerWorkflow, approval, approval.VacancyID, approval.ProviderResumeID); err != nil {
+		return err
+	}
 	raw, err := json.MarshalIndent(approval, "", "  ")
 	if err != nil {
 		return errors.New("API application approval could not be encoded")
@@ -275,6 +285,9 @@ func runHHAPIApprovalReview(args []string, stdout io.Writer, deps HHAPICommandDe
 	}
 	pilotHash := sha256.Sum256(raw)
 	approval := buildManualAPIApplicationApproval(artifact, providerResumeID, reviewedLetter, hex.EncodeToString(pilotHash[:]), nonce, now)
+	if err := validatePreparationApprovalBinding(context.Background(), deps.CareerWorkflow, approval, approval.VacancyID, approval.ProviderResumeID); err != nil {
+		return err
+	}
 	encoded, err := json.MarshalIndent(approval, "", "  ")
 	if err != nil {
 		return errors.New("API manual application approval could not be encoded")

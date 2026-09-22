@@ -59,6 +59,8 @@ type APIApplicationApproval struct {
 	OriginalAIRecommendationReasons []string   `json:"original_ai_recommendation_reasons,omitempty"`
 	OriginalFinalDecision           string     `json:"original_final_decision,omitempty"`
 	PilotArtifactHash               string     `json:"pilot_artifact_hash,omitempty"`
+	PreparationID                   string     `json:"preparation_id,omitempty"`
+	PreparationHash                 string     `json:"preparation_hash,omitempty"`
 }
 
 func loadAPIApplicationApproval(path string) (APIApplicationApproval, error) {
@@ -86,6 +88,9 @@ func loadAPIApplicationApproval(path string) (APIApplicationApproval, error) {
 
 func validateAPIApplicationApproval(approval APIApplicationApproval, vacancyID int, providerResumeID string, now time.Time) error {
 	if approval.Version != apiApplicationApprovalVersion || approval.VacancyID <= 0 || approval.VacancyID != vacancyID {
+		return errAPIApplicationApprovalIdentity
+	}
+	if err := validatePreparationReferenceShape(approval.PreparationID, approval.PreparationHash); err != nil {
 		return errAPIApplicationApprovalIdentity
 	}
 	approvedResumeID := strings.TrimSpace(approval.ProviderResumeID)
@@ -222,6 +227,9 @@ func runHHAPIApply(ctx context.Context, args []string, cfg Config, stdout, stder
 		return err
 	}
 	if err := validateAPIApplicationApproval(approval, vacancyID, providerResumeID, now); err != nil {
+		return err
+	}
+	if err := validatePreparationApprovalBinding(ctx, deps.CareerWorkflow, approval, vacancyID, providerResumeID); err != nil {
 		return err
 	}
 	oauthConfig := hhAPIReadOAuthConfig(cfg)

@@ -17,7 +17,10 @@ import (
 	"time"
 
 	hhapi "hh-ai-responder/internal/adapters/hh/api"
+	jsonstorage "hh-ai-responder/internal/adapters/storage/json"
+	postgresstorage "hh-ai-responder/internal/adapters/storage/postgres"
 	"hh-ai-responder/internal/hhread"
+	"hh-ai-responder/internal/ports"
 	attemptport "hh-ai-responder/internal/ports/applicationattempt"
 	hhwritegateway "hh-ai-responder/internal/usecase/hhwritegateway"
 )
@@ -36,6 +39,7 @@ type HHAPICommandDeps struct {
 	Now                      func() time.Time
 	ApplicationAttempts      attemptport.Store
 	ApplicationAudit         hhwritegateway.AuditSink
+	CareerWorkflow           ports.CareerWorkflowReader
 }
 
 func runHHAPICommand(ctx context.Context, args []string, cfg Config, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -65,7 +69,14 @@ func buildProductionHHAPICommandDeps(ctx context.Context, cfg Config) (HHAPIComm
 		closePersistence()
 		return HHAPICommandDeps{}, func() {}, err
 	}
-	return HHAPICommandDeps{ApplicationAttempts: applicationAttempts}, closePersistence, nil
+	var careerWorkflow ports.CareerWorkflowReader
+	switch cfg.StorageBackend {
+	case storageBackendJSON:
+		careerWorkflow = jsonstorage.NewCareerWorkflowRepository(cfg.CareerAgentWorkflowPath)
+	case storageBackendPostgres:
+		careerWorkflow = postgresstorage.NewCareerWorkflowRepository(candidatePersistence.Pool)
+	}
+	return HHAPICommandDeps{ApplicationAttempts: applicationAttempts, CareerWorkflow: careerWorkflow}, closePersistence, nil
 }
 
 func runHHAPICommandWithDeps(ctx context.Context, args []string, cfg Config, stdin io.Reader, stdout, stderr io.Writer, deps HHAPICommandDeps) error {

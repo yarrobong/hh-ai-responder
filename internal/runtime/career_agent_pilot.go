@@ -76,6 +76,8 @@ type PilotArtifact struct {
 	Preflight                 PilotPreflightSnapshot      `json:"preflight"`
 	CoverLetter               string                      `json:"cover_letter,omitempty"`
 	ContentHash               string                      `json:"content_hash,omitempty"`
+	PreparationID             string                      `json:"preparation_id,omitempty"`
+	PreparationHash           string                      `json:"preparation_hash,omitempty"`
 	Nonce                     string                      `json:"nonce,omitempty"`
 	NonceUsedAt               *time.Time                  `json:"nonce_used_at,omitempty"`
 	PreviewFreshAt            time.Time                   `json:"preview_fresh_at"`
