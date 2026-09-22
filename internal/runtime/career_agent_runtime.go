@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"hh-ai-responder/internal/careeragent"
+	"hh-ai-responder/internal/usecase/vacancyanalysis"
+	"hh-ai-responder/internal/vacancy"
 )
 
 func (r *HHAIResponder) initializeCareerAgentProfiles(cfg Config) {
@@ -93,10 +95,33 @@ func (r *HHAIResponder) resumeIdentifierForProfile(id string) string {
 			if value := strings.TrimSpace(profile.ProviderID); value != "" {
 				return value
 			}
-			return profile.Hash
+			if value := strings.TrimSpace(profile.Hash); value != "" {
+				return value
+			}
+			if profile.HHID > 0 {
+				return fmt.Sprint(profile.HHID)
+			}
+			return ""
 		}
 	}
 	return ""
+}
+
+func (r *HHAIResponder) analyzeAdvisoryResumeRoute(value Vacancy, candidate LegacyCandidateContext, description string) (vacancyanalysis.Assessment, error) {
+	if r == nil {
+		return vacancyanalysis.Assessment{}, errors.New("HH responder is not configured")
+	}
+	return rootApplicationAnalyzer{client: r.ai}.Analyze(ctxOrBackground(r.ctx), vacancyanalysis.Input{
+		Candidate: vacancyanalysis.CandidateFacts{
+			FullName: candidate.FullName, ResumeTitle: candidate.ResumeTitle, Salary: candidate.Salary,
+			Experience: candidate.Experience, Skills: candidate.Skills, Location: candidate.Location,
+			EducationKnown: candidate.EducationKnown, EducationLevel: candidate.EducationLevel,
+			EducationDetails: candidate.EducationDetails, TotalExperienceMonthsKnown: candidate.TotalExperienceMonthsKnown,
+			TotalExperienceMonths: candidate.TotalExperienceMonths, Profile: candidate.Profile, SafeContext: candidate.SafeContext,
+		},
+		Vacancy: value, Description: description, Salary: vacancy.FormatCompensation(&value.Compensation),
+		Location: value.Area.Name, WorkSchedule: value.WorkSchedule, IncludeKeywords: append([]string(nil), r.includeKeywords...),
+	})
 }
 
 func (r *HHAIResponder) resumeProfileID(identifier string) string {

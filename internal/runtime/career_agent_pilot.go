@@ -723,9 +723,15 @@ func (r *HHAIResponder) buildCareerAgentPilotPreviewFromStateWithSelection(value
 	route := r.routeResumeForVacancy(value)
 	selectionBasis := pilotResumeSelectionRouter
 	selectedProfileID, selectedProfileTitle := route.SelectedResumeID, route.SelectedResumeTitle
+	advisoryRoute := false
 	if explicitProfile != nil {
 		selectionBasis = pilotResumeSelectionOperatorExplicit
 		selectedProfileID, selectedProfileTitle = explicitProfile.ID, explicitProfile.Title
+	} else if route.Status == careeragent.RouteReviewRequired && route.ReasonCode == careeragent.RouteReasonAmbiguous {
+		if advisoryProfile, ok := careeragent.AdvisoryResumeProfile(route, r.careerAgentResumes); ok {
+			advisoryRoute = true
+			selectedProfileID, selectedProfileTitle = advisoryProfile.ID, advisoryProfile.Title
+		}
 	}
 	artifact := PilotArtifact{
 		Version: pilotArtifactVersion, Status: applicationpilot.StatusBlocked, VacancyID: value.ID, Vacancy: value,
@@ -751,9 +757,12 @@ func (r *HHAIResponder) buildCareerAgentPilotPreviewFromStateWithSelection(value
 			return preview, nil
 		}
 	}
-	if explicitProfile == nil && (route.Status != careeragent.RouteSelected || route.Confidence == careeragent.ConfidenceLow) {
+	if explicitProfile == nil && !advisoryRoute && (route.Status != careeragent.RouteSelected || route.Confidence == careeragent.ConfidenceLow) {
 		preview.Reasons = append(preview.Reasons, "resume router requires review: "+strings.Join(route.Reasons, "; "))
 		return preview, nil
+	}
+	if advisoryRoute {
+		preview.Reasons = append(preview.Reasons, "ambiguous resume route: bounded advisory analysis only")
 	}
 	selectedIdentifier := r.resumeIdentifierForProfile(selectedProfileID)
 	if selectedIdentifier == "" {
@@ -808,6 +817,15 @@ func (r *HHAIResponder) buildCareerAgentPilotPreviewFromStateWithSelection(value
 	if pilotAIBlocksPreview(explicitProfile != nil, assessment, decision, r.minMatchScore) {
 		artifact.Status = applicationpilot.StatusBlocked
 		preview.Status = applicationpilot.StatusBlocked
+		return preview, nil
+	}
+	if advisoryRoute {
+		artifact.Status = applicationpilot.StatusBlocked
+		artifact.FinalDecision = string(applicationprocessing.DecisionReviewRequired)
+		artifact.FinalReason = "ambiguous resume route remains review required after advisory analysis"
+		preview.Status = applicationpilot.StatusBlocked
+		preview.Reasons = append(preview.Reasons, artifact.FinalReason)
+		preview.Artifact = artifact
 		return preview, nil
 	}
 

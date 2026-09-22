@@ -275,6 +275,46 @@ func (r *HHAIResponder) ApplyVacancies() error {
 			trace.FinalRouteReasonCode = route.ReasonCode
 			recordRouteReason(&summary, route.ReasonCode)
 			recordRouterOutcome(&summary, route.ReasonCode, "")
+			if route.ReasonCode == careeragent.RouteReasonAmbiguous && r.careerAgentMode == "shadow" {
+				if advisoryProfile, ok := careeragent.AdvisoryResumeProfile(route, r.careerAgentResumes); ok {
+					advisoryIdentifier := r.resumeIdentifierForProfile(advisoryProfile.ID)
+					if advisoryIdentifier != "" && advisoryIdentifier != r.resumeIdentifierForValue(selectedResume) {
+						var activateErr error
+						selectedResume, selectedCandidate, selectedResolver, activateErr = r.activateResume(advisoryIdentifier)
+						if activateErr != nil {
+							recordStage(stageStats, "resume_routing", "advisory resume activation failed", false, true)
+							summary.ReviewRequired++
+							summary.ReviewAfterDetail++
+							trace.FinalDecision = string(VacancyReviewRequired)
+							finish(trace, TerminalReviewRequired, "advisory resume facts could not be verified: "+activateErr.Error())
+							continue
+						}
+					}
+					trace.SelectedResume = firstNonEmpty(selectedResume.Hash, advisoryProfile.Hash, advisoryProfile.ProviderID)
+					trace.SelectedResumeTitle = firstNonEmpty(selectedResume.Title, advisoryProfile.Title)
+					assessment, advisoryErr := r.analyzeAdvisoryResumeRoute(value, selectedCandidate, value.Description)
+					if advisoryErr != nil {
+						summary.Errors++
+						trace.AICallReason = "called: bounded advisory analysis failed"
+						trace.FinalDecision = string(VacancyReviewRequired)
+						finish(trace, TerminalError, "bounded advisory analysis failed: "+advisoryErr.Error())
+						continue
+					}
+					summary.AIEvaluated++
+					trace.AIEvaluated = true
+					trace.AICallReason = "called: bounded advisory analysis for ambiguous resume route"
+					trace.AIScore = &assessment.Score
+					trace.AIReasons = append([]string(nil), assessment.Reasons...)
+					recordAIDecisionBreakdown(&summary, &trace, assessment, r.minMatchScore)
+					summary.ReviewRequired++
+					summary.ReviewAfterDetail++
+					summary.FinalAmbiguous++
+					trace.FinalDecision = string(VacancyReviewRequired)
+					r.skipVacancy(value, vacancyURL, "ambiguous resume route remains review required after advisory analysis", nil)
+					finish(trace, TerminalReviewRequired, "ambiguous resume route remains review required after advisory analysis")
+					continue
+				}
+			}
 			if !careerAgentRouteAllowsAI(route, r.careerAgentMode) {
 				recordStage(stageStats, "resume_routing", strings.Join(route.Reasons, "; "), false, true)
 				summary.ReviewRequired++

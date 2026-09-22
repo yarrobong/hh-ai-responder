@@ -86,3 +86,28 @@ func ResolveResumeRoute(vacancy VacancyInput, resumes []ResumeProfile) ResumeRou
 	}
 	return result
 }
+
+// AdvisoryResumeProfile returns one deterministic resume candidate for bounded
+// analysis of a genuinely ambiguous route. It never converts the route into a
+// selection and therefore cannot authorize preparation or an HH write.
+func AdvisoryResumeProfile(route RouteDecision, resumes []ResumeProfile) (ResumeProfile, bool) {
+	if route.Status != RouteReviewRequired || route.ReasonCode != RouteReasonAmbiguous {
+		return ResumeProfile{}, false
+	}
+	for _, score := range route.AlternativeScores {
+		if len(score.HardBlockers) > 0 || score.ResumeID == "" {
+			continue
+		}
+		for _, profile := range resumes {
+			if !profile.Enabled || profile.ID != score.ResumeID || !resumeHasProviderIdentity(profile) {
+				continue
+			}
+			return profile, true
+		}
+	}
+	return ResumeProfile{}, false
+}
+
+func resumeHasProviderIdentity(profile ResumeProfile) bool {
+	return profile.ID != "" && (profile.ProviderID != "" || profile.Hash != "" || profile.HHID > 0)
+}
