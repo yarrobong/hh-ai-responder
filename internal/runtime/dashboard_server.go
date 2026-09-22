@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"hh-ai-responder/internal/ports"
 	applicationreconciliation "hh-ai-responder/internal/usecase/applicationreconciliation"
 	autochatreconciliation "hh-ai-responder/internal/usecase/autochatreconciliation"
 	"hh-ai-responder/internal/usecase/inboxrefresh"
@@ -62,6 +63,7 @@ type DashboardDependencies struct {
 	ControlledReconciliation  ControlledReconciler
 	RankedQueue               *vacancyranking.QueueService
 	VacancyReviews            vacancyreview.Store
+	CareerWorkflow            ports.CareerWorkflowStore
 }
 
 type DashboardServer struct {

@@ -307,7 +307,9 @@ func loadDashboard(ctx context.Context, wd string, cfg Config) (*DashboardServer
 	var service *HHReadSyncService
 	var rankedQueue *vacancyranking.QueueService
 	var vacancyReviews vacancyreview.Store
+	var careerRepositories CareerRepositories
 	if career, ok := careerRepositoriesFromStores(vacancies, applications, conversations); ok {
+		careerRepositories = career
 		service = NewHHReadSyncServiceWithRepositories(readClient, career, syncOptions)
 		if postgresVacancies, postgresOK := career.Vacancies.(*PostgresVacancyRepository); postgresOK && postgresVacancies.Pool() != nil && candidatePersistence.Repository != nil {
 			vacancyReviews = NewPostgresVacancyReviewRepository(postgresVacancies.Pool())
@@ -316,6 +318,10 @@ func loadDashboard(ctx context.Context, wd string, cfg Config) (*DashboardServer
 		}
 	} else {
 		service = NewHHReadSyncServiceWithOptions(readClient, syncOptions)
+	}
+	careerWorkflowStore, _, err := buildCareerWorkflowStore(cfg, backend, careerRepositories)
+	if err != nil {
+		return nil, err
 	}
 	if err := service.LoadState(); err != nil {
 		return nil, err
@@ -363,7 +369,7 @@ func loadDashboard(ctx context.Context, wd string, cfg Config) (*DashboardServer
 		}
 	}
 	controlled := &operatorControlledReconciler{actions: actions, conversations: conversations, reader: hhWriteChatDeliveryReader{source: readClient}}
-	dashboard, err := NewDashboardServer(DashboardDependencies{FollowUpPolicy: cfg.FollowUpPolicy, Vacancies: vacancies, Applications: applications, Conversations: conversations, Knowledge: kb, Drafts: drafts, Clarifications: clarifications, Sync: service, Orchestrator: orchestrator, Resolver: resolver, Updater: updater, ProposalUpdater: proposalUpdater, Mutation: mutation, CandidateClose: candidateClose, CareerClose: careerClose, Notifications: notifications, QualityLog: qualityLog, WriteGateway: gateway, Lifecycle: lifecycle, ConversationDisplayTTL: cfg.ConversationDisplayTTL, BackgroundInboxRefresh: cfg.BackgroundInboxRefresh, DailyRefreshStatePath: dailyRefreshStateFor(wd), Reliability: reliabilityinspection.NewService(applicationAttemptReader, autoChatAttemptReader), ReliabilityBackend: backend, ApplicationReconciliation: applicationReconciliationService, AutoChatReconciliation: autoChatReconciliationService, ReliabilityNotifications: notificationProjector, ControlledReconciliation: controlled, RankedQueue: rankedQueue, VacancyReviews: vacancyReviews})
+	dashboard, err := NewDashboardServer(DashboardDependencies{FollowUpPolicy: cfg.FollowUpPolicy, Vacancies: vacancies, Applications: applications, Conversations: conversations, Knowledge: kb, Drafts: drafts, Clarifications: clarifications, Sync: service, Orchestrator: orchestrator, Resolver: resolver, Updater: updater, ProposalUpdater: proposalUpdater, Mutation: mutation, CandidateClose: candidateClose, CareerClose: careerClose, Notifications: notifications, QualityLog: qualityLog, WriteGateway: gateway, Lifecycle: lifecycle, ConversationDisplayTTL: cfg.ConversationDisplayTTL, BackgroundInboxRefresh: cfg.BackgroundInboxRefresh, DailyRefreshStatePath: dailyRefreshStateFor(wd), Reliability: reliabilityinspection.NewService(applicationAttemptReader, autoChatAttemptReader), ReliabilityBackend: backend, ApplicationReconciliation: applicationReconciliationService, AutoChatReconciliation: autoChatReconciliationService, ReliabilityNotifications: notificationProjector, ControlledReconciliation: controlled, RankedQueue: rankedQueue, VacancyReviews: vacancyReviews, CareerWorkflow: careerWorkflowStore})
 	if err != nil {
 		return nil, err
 	}

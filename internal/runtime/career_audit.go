@@ -9,18 +9,22 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"hh-ai-responder/internal/careeragent"
 )
 
 type CareerSnapshot struct {
-	Vacancies      []Vacancy
-	Applications   []JobApplication
-	Conversations  []EmployerConversation
-	Events         []ApplicationEvent
-	Drafts         []AIDraft
-	Clarifications []CandidateClarificationRequest
-	Sync           HHSyncState
-	StoreErrors    []string
-	Consistency    map[string][]string
+	Vacancies                 []Vacancy
+	Applications              []JobApplication
+	Conversations             []EmployerConversation
+	Events                    []ApplicationEvent
+	Drafts                    []AIDraft
+	Clarifications            []CandidateClarificationRequest
+	Sync                      HHSyncState
+	StoreErrors               []string
+	Consistency               map[string][]string
+	CareerReviewQueue         []careeragent.ReviewQueueItem `json:"career_review_queue,omitempty"`
+	CareerWorkflowUnavailable string                        `json:"career_workflow_unavailable,omitempty"`
 }
 type CareerAuditWarning struct {
 	Code       string `json:"code"`
