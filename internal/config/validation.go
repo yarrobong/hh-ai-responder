@@ -189,6 +189,13 @@ func ValidQuietHours(spec string) bool {
 }
 
 func Validate(c Config) error {
+	workflowPath := strings.TrimSpace(c.CareerAgentWorkflowPath)
+	if workflowPath == "" {
+		return errors.New("career-agent-workflow path must not be empty")
+	}
+	if strings.ContainsRune(workflowPath, '\x00') {
+		return errors.New("career-agent-workflow path contains an invalid NUL byte")
+	}
 	if c.StorageBackend == "postgres" && strings.TrimSpace(c.DatabaseURL) == "" {
 		return errors.New("DATABASE_URL is required when STORAGE_BACKEND=postgres")
 	}

@@ -48,6 +48,9 @@ func TestLoadSafeDefaults(t *testing.T) {
 	if cfg.BrowserProfilePath == "" || filepath.Base(cfg.BrowserProfilePath) != DefaultProfileDir {
 		t.Fatalf("BrowserProfilePath = %q, want %q", cfg.BrowserProfilePath, DefaultProfileDir)
 	}
+	if filepath.Base(cfg.CareerAgentWorkflowPath) != "career_agent_workflow.json" {
+		t.Fatalf("CareerAgentWorkflowPath = %q, want career_agent_workflow.json", cfg.CareerAgentWorkflowPath)
+	}
 	if cfg.SearchPeriodDays != DefaultSearchPeriodDays || cfg.CareerAgentMaxSearchProfiles != DefaultCareerAgentMaxSearchProfiles || cfg.AutoApplyMode != "off" {
 		t.Fatalf("unexpected Career Agent defaults: period=%d profiles=%d mode=%q", cfg.SearchPeriodDays, cfg.CareerAgentMaxSearchProfiles, cfg.AutoApplyMode)
 	}
@@ -183,6 +186,7 @@ func TestLoadCLIOverridesEnvironment(t *testing.T) {
 		"--chat-mode", "off",
 		"--sync-interval", "30s",
 		"--conversation-display-ttl", "5s",
+		"--career-agent-workflow", filepath.Join(workDir, "cli-workflow.json"),
 	}, lookupFrom(map[string]string{
 		"HH_AI_MODEL":                 "env-model",
 		"STORAGE_BACKEND":             "postgres",
@@ -194,15 +198,24 @@ func TestLoadCLIOverridesEnvironment(t *testing.T) {
 		"HH_CHAT_MODE":                "review",
 		"HH_SYNC_INTERVAL":            "2h",
 		"HH_CONVERSATION_DISPLAY_TTL": "2m",
+		"HH_CAREER_AGENT_WORKFLOW":    filepath.Join(workDir, "env-workflow.json"),
 	}), workDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.AIModel != "cli-model" || cfg.StorageBackend != "json" || cfg.CandidateID != "cli-candidate" || cfg.CandidateProfilePath != filepath.Join(workDir, "cli-profile.json") {
+	if cfg.AIModel != "cli-model" || cfg.StorageBackend != "json" || cfg.CandidateID != "cli-candidate" || cfg.CandidateProfilePath != filepath.Join(workDir, "cli-profile.json") || cfg.CareerAgentWorkflowPath != filepath.Join(workDir, "cli-workflow.json") {
 		t.Fatalf("CLI did not override env: %+v", cfg)
 	}
 	if cfg.DryRun || !cfg.HHWriteEnabled || cfg.MinSalary != 90000 || cfg.ChatMode != "off" || cfg.MonitorInterval != 30*time.Second || cfg.ConversationDisplayTTL != 5*time.Second {
 		t.Fatalf("CLI precedence values incorrect: %+v", cfg)
+	}
+}
+
+func TestLoadRejectsInvalidCareerWorkflowPath(t *testing.T) {
+	for _, args := range [][]string{{"--career-agent-workflow", ""}, {"--career-agent-workflow", "bad\x00path"}} {
+		if _, err := Load(args, lookupFrom(nil), t.TempDir()); err == nil {
+			t.Fatalf("invalid workflow path %q was accepted", args[1])
+		}
 	}
 }
 

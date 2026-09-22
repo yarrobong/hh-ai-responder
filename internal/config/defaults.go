@@ -78,6 +78,7 @@ func defaults(workingDir string) Config {
 		CandidateStoriesPath:         filepath.Join(workingDir, "candidate_stories.json"),
 		CareerAgentResultPath:        filepath.Join(workingDir, "career_agent_latest.json"),
 		CareerAgentFeedbackPath:      filepath.Join(workingDir, "career_agent_feedback.json"),
+		CareerAgentWorkflowPath:      filepath.Join(workingDir, "career_agent_workflow.json"),
 		ResumeRegistryPath:           filepath.Join(workingDir, "resume_registry.json"),
 		BrowserProfilePath:           filepath.Join(workingDir, DefaultProfileDir),
 		BrowserTransport:             DefaultBrowserTransport,

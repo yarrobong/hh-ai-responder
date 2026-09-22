@@ -303,6 +303,7 @@ cp example.env .env
 | `HH_RESUME_REGISTRY` | `-resume-registry` | Локальные enabled/disabled overrides нормализованных HH-резюме; файл создаётся только явной CLI-командой. |
 | `HH_CAREER_AGENT_RESULT` | `-career-agent-result` | Последний JSON shadow/canary report. |
 | `HH_CAREER_AGENT_FEEDBACK` | `-career-agent-feedback` | Структурированный feedback `ACCEPT`, `REJECT`, `WRONG_RESUME`, `GOOD_MATCH`, `BAD_MATCH`. |
+| `HH_CAREER_AGENT_WORKFLOW` | `-career-agent-workflow` | Durable Career Agent runs и application-preparation store; по умолчанию `career_agent_workflow.json`. |
 | `HH_AUTO_APPLY_MODE` | `-auto-apply-mode` | Документирует `off`/`canary`; само значение не включает writes. Для live-пути нужен `career-agent --canary`. |
 | `HH_SYNC_INTERVAL` | `-sync-interval` | Интервал локального Career Monitor; по умолчанию `15m`. Только read-only sync. |
 | `HH_QUIET_HOURS` | `-quiet-hours` | Тихие часы уведомлений в формате `23:00-07:00`; HH sync не отключается. |

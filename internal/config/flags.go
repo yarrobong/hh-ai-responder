@@ -129,6 +129,9 @@ func Load(args []string, lookup LookupEnv, workingDir string) (Config, error) {
 	if !flags["career-agent-feedback"] {
 		cfg.CareerAgentFeedbackPath = get("HH_CAREER_AGENT_FEEDBACK", cfg.CareerAgentFeedbackPath)
 	}
+	if !flags["career-agent-workflow"] {
+		cfg.CareerAgentWorkflowPath = get("HH_CAREER_AGENT_WORKFLOW", cfg.CareerAgentWorkflowPath)
+	}
 	if !flags["resume-registry"] {
 		cfg.ResumeRegistryPath = get("HH_RESUME_REGISTRY", cfg.ResumeRegistryPath)
 	}
@@ -437,6 +440,7 @@ func registerFlags(fs *flag.FlagSet, cfg *Config, includeKeywordsRaw, excludeKey
 	fs.StringVar(&cfg.CandidateStoriesPath, "candidate-stories", filepath.Join(wd, "candidate_stories.json"), "Примеры опыта кандидата")
 	fs.StringVar(&cfg.CareerAgentResultPath, "career-agent-result", filepath.Join(wd, "career_agent_latest.json"), "Последний Career Agent shadow report")
 	fs.StringVar(&cfg.CareerAgentFeedbackPath, "career-agent-feedback", filepath.Join(wd, "career_agent_feedback.json"), "Career Agent feedback store")
+	fs.StringVar(&cfg.CareerAgentWorkflowPath, "career-agent-workflow", filepath.Join(wd, "career_agent_workflow.json"), "Durable Career Agent workflow store")
 	fs.StringVar(&cfg.ResumeRegistryPath, "resume-registry", filepath.Join(wd, "resume_registry.json"), "Локальные enabled/disabled overrides резюме")
 	fs.StringVar(&cfg.BrowserProfilePath, "browser-profile", filepath.Join(wd, DefaultProfileDir), "Persistent headed Chromium profile for HH session")
 	fs.StringVar(&cfg.BrowserTraceVacancyURL, "browser-trace-vacancy", "", "One safe vacancy URL for browser/HTTP read trace")

@@ -37,6 +37,7 @@ type Config struct {
 	MaxSearchPagesPerRun         int
 	CareerAgentResultPath        string
 	CareerAgentFeedbackPath      string
+	CareerAgentWorkflowPath      string
 	ResumeRegistryPath           string
 	CookiesPath                  string
 	BrowserProfilePath           string
