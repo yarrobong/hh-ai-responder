@@ -1,0 +1,3 @@
+DROP INDEX IF EXISTS automatic_application_attempts_vacancy_created_idx;
+DROP INDEX IF EXISTS automatic_application_attempts_active_vacancy_unique;
+DROP TABLE IF EXISTS automatic_application_attempts;
