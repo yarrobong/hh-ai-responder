@@ -513,6 +513,14 @@ type DashboardMetrics struct {
 	WorkflowWaiting        int                  `json:"workflow_waiting"`
 	WorkflowClarifications int                  `json:"workflow_clarifications"`
 	WorkflowImportant      int                  `json:"workflow_important"`
+	CareerNew              int                  `json:"career_new"`
+	CareerAnalyzing        int                  `json:"career_analyzing"`
+	CareerMatched          int                  `json:"career_matched"`
+	CareerReviewRequired   int                  `json:"career_review_required"`
+	CareerReady            int                  `json:"career_ready"`
+	CareerApplied          int                  `json:"career_applied"`
+	CareerInterview        int                  `json:"career_interview"`
+	CareerRunStatus        string               `json:"career_run_status,omitempty"`
 	HHWrite                *HHWriteMetrics      `json:"hh_write_metrics,omitempty"`
 	FirstPilot             *HHFirstPilotSummary `json:"first_pilot,omitempty"`
 }
@@ -542,6 +550,7 @@ func (s *DashboardServer) analytics(period string, now time.Time) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	applyCareerAgentMetrics(&metrics, snapshot.careerQueue, snapshot.careerRuns)
 	for _, v := range snapshot.vacancies {
 		if inWindow(v.CreatedAt) {
 			metrics.TotalVacancies++

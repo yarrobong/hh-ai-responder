@@ -318,7 +318,10 @@ func dashboardReadOnlyPath(p []string) bool {
 	if len(p) == 1 {
 		return p[0] == "dashboard"
 	}
-	return len(p) == 2 && (p[0] == "inbox" && p[1] == "overview" || p[0] == "notifications" && p[1] == "overview")
+	if len(p) == 2 && (p[0] == "inbox" && p[1] == "overview" || p[0] == "notifications" && p[1] == "overview") {
+		return true
+	}
+	return p[0] == "career" && (len(p) == 2 || len(p) == 3)
 }
 
 func dashboardRouteMethod(p []string) string {
@@ -332,6 +335,10 @@ func dashboardRouteMethod(p []string) string {
 	}
 	if len(p) == 2 {
 		switch p[0] {
+		case "career":
+			if p[1] == "review-queue" || p[1] == "runs" || p[1] == "metrics" {
+				return "GET"
+			}
 		case "notifications":
 			if p[1] == "overview" {
 				return "GET"
@@ -364,6 +371,9 @@ func dashboardRouteMethod(p []string) string {
 				return "POST"
 			}
 		}
+	}
+	if len(p) == 3 && p[0] == "career" && p[1] == "vacancies" && p[2] != "" {
+		return "GET"
 	}
 	if len(p) == 3 && p[0] == "vacancies" && p[1] != "" && p[2] == "ranking" {
 		return "GET"
@@ -418,12 +428,15 @@ func (s *DashboardServer) servePage(w http.ResponseWriter, r *http.Request) {
 	case "/styles.css":
 		file, contentType = "web/styles.css", "text/css; charset=utf-8"
 	default:
-		valid := path == "/health" || path == "/" || path == "/today" || path == "/inbox" || path == "/applications" || path == "/vacancies" || path == "/knowledge" || path == "/knowledge/questions" || path == "/analytics" || path == "/sync" || path == "/reliability"
+		valid := path == "/health" || path == "/" || path == "/today" || path == "/inbox" || path == "/applications" || path == "/vacancies" || path == "/knowledge" || path == "/knowledge/questions" || path == "/analytics" || path == "/sync" || path == "/reliability" || path == "/career"
 		parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
 		if len(parts) == 2 && parts[1] != "" && (parts[0] == "applications" || parts[0] == "vacancies" || parts[0] == "conversations") {
 			valid = true
 		}
 		if len(parts) == 3 && parts[0] == "reliability" && parts[1] != "" && parts[2] != "" {
+			valid = true
+		}
+		if len(parts) == 3 && parts[0] == "career" && parts[1] == "vacancies" && parts[2] != "" {
 			valid = true
 		}
 		if !valid {
@@ -572,6 +585,9 @@ func (s *DashboardServer) readAPI(w http.ResponseWriter, r *http.Request, p []st
 		result = BuildQualityReport(s.QualityLog.List())
 	case "reliability":
 		s.readReliabilityAPI(w, r, p)
+		return
+	case "career":
+		s.readCareerAPI(w, r, p)
 		return
 	}
 	if err != nil {

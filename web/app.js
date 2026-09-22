@@ -88,6 +88,7 @@ const titles = {
   "/inbox": "Inbox",
   "/applications": "Applications",
   "/vacancies": "Vacancies",
+  "/career": "Career Agent",
   "/knowledge": "Knowledge",
   "/knowledge/questions": "Knowledge questions",
   "/analytics": "Analytics",
@@ -368,6 +369,36 @@ async function overview(dashboardPromise) {
     metricsCards(m) + workflowOverview(m) + notificationPanel(notifications) +
     `<div class="grid-two"><div>${panel("В фокусе · Inbox", inbox.items.length ? inbox.items.slice(0, 5).map(inboxCard).join("") : empty("Входящие под контролем", "Новые диалоги появятся здесь после синхронизации."), '<a href="/inbox">Все диалоги →</a>')}</div><div>${panel("Поиск в цифрах", `<div class="panel-body"><div class="mini-stat"><span>Response rate</span><b>${m.response_rate.toFixed(1)}%</b></div><div class="mini-stat"><span>Interview conversion</span><b>${m.interview_conversion.toFixed(1)}%</b></div><div class="mini-stat"><span>Сообщения без ответа</span><b>${m.new_messages}</b></div></div>`, '<a href="/analytics">Analytics →</a>')}${panel("AI Assistant", `<div class="panel-body"><div class="mini-stat"><a href="/inbox">Drafts awaiting review</a><b>${m.ai_drafts}</b></div><div class="mini-stat"><a href="/knowledge/questions">Pending clarifications</a><b>${m.pending_clarifications}</b></div><div class="mini-stat"><a href="/knowledge/questions">Knowledge questions</a><b>${m.knowledge_questions}</b></div><div class="mini-stat"><a href="/knowledge/questions">Knowledge proposals</a><b>${m.pending_proposals}</b></div></div>`)}</div></div><div class="callout"><strong>Ваши решения остаются за вами</strong>AI готовит черновики и уточнения. Dashboard ничего не отправляет работодателям. Последняя успешная синхронизация: ${date(d.sync.last_success)}.</div>`
   );
+}
+function careerQueueCard(item) {
+  const s = item.snapshot || {};
+  const vacancy = s.vacancy || {};
+  const prep = s.preparation || {};
+  const route = s.route || {};
+  return `<article class="panel career-queue-card"><div class="panel-body"><div class="queue-card-heading"><h3><a href="/career/vacancies/${urlID(item.vacancy_id)}">${esc(vacancy.title || item.title || `Vacancy ${item.vacancy_id}`)}</a></h3>${badge(item.pipeline_state)}</div><div class="queue-meta"><span class="muted">${esc(vacancy.company || item.company || "")}</span><span class="muted">Priority ${esc(item.priority)}</span><span class="muted">Published ${shortDate(vacancy.published_at)}</span></div><div class="career-summary">${pairs([["Route", route.status || "unknown"], ["Resume", route.resume_id || "—"], ["Match", s.deterministic_match?.score ?? "—"], ["Preparation", prep.status || "—"], ["Application", s.application?.status || "—"], ["Conversation", s.conversation?.status || "—"]])}</div><p>${esc(s.next_action || "Review vacancy details and route evidence.")}</p>${list(s.knowledge_requests).length ? `<div class="callout compact"><strong>Knowledge Requests</strong>${ul(s.knowledge_requests)}</div>` : ""}</div></article>`;
+}
+async function careerAgentWorkspace() {
+  const [queue, metrics, runs] = await Promise.all([api("/career/review-queue"), api("/career/metrics"), api("/career/runs")]);
+  const items = list(queue.items);
+  const counts = [
+    ["New", metrics.new], ["Analyzing", metrics.analyzing], ["Matched", metrics.matched],
+    ["Review required", metrics.review_required], ["Ready", metrics.ready], ["Applied", metrics.applied], ["Interview", metrics.interview],
+  ];
+  const timeline = list(runs.runs).slice(0, 8).map((run) => `<li>${badge(run.status)} <strong>${esc(run.run_type || run.id)}</strong> · ${date(run.started_at)}${run.error_summary ? ` · ${esc(run.error_summary)}` : ""}</li>`).join("");
+  return heading("Career Agent", "Ordered review workspace. AI and preparation remain review-only until explicit approval.") +
+    `<div class="career-metrics">${counts.map(([label, value]) => `<div class="stat"><div class="stat-label">${esc(label)}</div><div class="stat-value">${esc(value || 0)}</div></div>`).join("")}</div>` +
+    panel("Review queue", items.length ? items.map(careerQueueCard).join("") : empty("Review queue is empty", "Run the Career Agent to populate durable review items.")) +
+    panel("Run timeline", timeline ? `<ul class="list">${timeline}</ul>` : '<p class="muted">No durable runs yet.</p>');
+}
+async function careerAgentVacancy(id) {
+  const s = await api(`/career/vacancies/${urlID(id)}`);
+  const prep = s.preparation || {};
+  const route = s.route || {};
+  return heading(s.vacancy?.title || `Vacancy ${id}`, "Read-only Career Agent workspace") +
+    panel("Route and match", pairs([["Route status", route.status], ["Route confidence", route.confidence], ["Selected resume", route.resume_id], ["Match score", s.deterministic_match?.score], ["AI score", s.advisory?.score], ["AI mode", s.advisory?.review_only ? "review only" : "not evaluated"]])) +
+    panel("Preparation", pairs([["Status", prep.status], ["Preparation ID", prep.id], ["Cover-letter hash", prep.cover_letter_hash], ["Candidate version", prep.candidate_version], ["Snapshot hash", prep.candidate_snapshot_hash]]) + (prep.cover_letter ? `<div class="draft">${esc(prep.cover_letter)}</div>` : '<p class="muted">No cover letter stored.</p>')) +
+    panel("Knowledge Requests", list(s.knowledge_requests).length ? ul(s.knowledge_requests) : '<p class="muted">No open requests.</p>') +
+    panel("Application and conversation", pairs([["Application", s.application?.status], ["Application next action", s.application?.next_action], ["Conversation", s.conversation?.status], ["Conversation next action", s.conversation?.next_action], ["Safe next action", s.next_action]]));
 }
 function select(name, label, options, current = "") {
   return `<label>${label}<select name="${name}">${options.map(([value, text]) => `<option value="${esc(value)}" ${value === current ? "selected" : ""}>${esc(text)}</option>`).join("")}</select></label>`;
@@ -969,6 +1000,7 @@ async function render(silent = false) {
     else if (path === "/today") html = await today();
     else if (path === "/applications") html = await applications();
     else if (path === "/vacancies") html = await vacancies();
+    else if (path === "/career") html = await careerAgentWorkspace();
     else if (path === "/inbox") html = await inbox();
     else if (path === "/knowledge") html = await knowledge();
     else if (path === "/knowledge/questions") html = await questions();
@@ -980,6 +1012,8 @@ async function render(silent = false) {
       html = await applicationDetail(decodeURIComponent(parts[1]));
     else if (parts.length === 2 && parts[0] === "vacancies")
       html = await vacancyDetail(decodeURIComponent(parts[1]));
+    else if (parts.length === 3 && parts[0] === "career" && parts[1] === "vacancies")
+      html = await careerAgentVacancy(decodeURIComponent(parts[2]));
     else if (parts.length === 2 && parts[0] === "conversations")
       html = await conversationDetail(decodeURIComponent(parts[1]));
     else if (parts.length === 3 && parts[0] === "reliability")
