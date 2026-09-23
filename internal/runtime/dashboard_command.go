@@ -225,6 +225,9 @@ func loadDashboard(ctx context.Context, wd string, cfg Config) (*DashboardServer
 	if strings.TrimSpace(cfg.CandidateProfilePath) == "" {
 		cfg.CandidateProfilePath = profile
 	}
+	if strings.TrimSpace(cfg.CareerAgentWorkflowPath) == "" {
+		cfg.CareerAgentWorkflowPath = filepath.Join(wd, "career_agent_workflow.json")
+	}
 	conversations, applications, vacancies, clarifications, drafts, careerClose, err := loadHHLocalStoresForBackend(ctx, cfg, wd, profile)
 	if err != nil {
 		return nil, err

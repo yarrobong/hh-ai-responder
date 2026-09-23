@@ -119,13 +119,23 @@ func (s *Service) linkApplications(ctx context.Context, saved conversation.Emplo
 		if saved.HHMetadata == nil {
 			saved.HHMetadata = map[string]string{}
 		}
+		changed := false
 		if len(exactApplications) > 1 {
-			saved.HHMetadata["warning_conflicting_application_relation"] = "true"
+			if saved.HHMetadata["warning_conflicting_application_relation"] != "true" {
+				saved.HHMetadata["warning_conflicting_application_relation"] = "true"
+				changed = true
+			}
 		} else {
-			saved.HHMetadata["warning_unresolved_application_relation"] = "true"
+			if saved.HHMetadata["warning_unresolved_application_relation"] != "true" {
+				saved.HHMetadata["warning_unresolved_application_relation"] = "true"
+				changed = true
+			}
 		}
-		_, err := s.deps.Conversations.Upsert(ctx, saved)
-		return err
+		if changed {
+			_, err := s.deps.Conversations.Upsert(ctx, saved)
+			return err
+		}
+		return nil
 	}
 	for _, candidate := range exactApplications {
 		if saved.Status == conversation.StatusCandidateActionRequired && candidate.Status == application.StatusApplied {
@@ -245,8 +255,11 @@ func MergeConversation(old conversation.EmployerConversation, incoming *conversa
 		}
 	}
 	incoming.Messages = merged
+	if incoming.HHMetadata == nil {
+		incoming.HHMetadata = map[string]string{}
+	}
 	for key, value := range old.HHMetadata {
-		if (key == "warning_message_content_conflict" || key == "sync_list_fingerprint") && incoming.HHMetadata[key] == "" {
+		if (key == "warning_message_content_conflict" || key == "warning_unresolved_application_relation" || key == "warning_conflicting_application_relation" || key == "sync_list_fingerprint") && incoming.HHMetadata[key] == "" {
 			incoming.HHMetadata[key] = value
 		}
 	}
