@@ -33,6 +33,9 @@ func TestDailyVacancyStageMapsExistingCareerAgentReport(t *testing.T) {
 	if len(result.Summary.Failures) != 1 {
 		t.Fatalf("failures=%v", result.Summary.Failures)
 	}
+	if len(result.Attention) != 1 || result.Attention[0].VacancyID != 103 {
+		t.Fatalf("attention=%+v", result.Attention)
+	}
 }
 
 func TestDailyCommunicationStageMapsReadOnlyReport(t *testing.T) {

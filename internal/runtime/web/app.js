@@ -88,6 +88,7 @@ const titles = {
   "/inbox": "Inbox",
   "/applications": "Applications",
   "/vacancies": "Vacancies",
+  "/career": "Career Agent",
   "/knowledge": "Knowledge",
   "/knowledge/questions": "Knowledge questions",
   "/analytics": "Analytics",
@@ -415,6 +416,18 @@ function filters(kind) {
         )}`
       : `<label>Score от<input type="number" name="min_score" min="0" max="100" placeholder="0" value="${esc(q.get("min_score") || "")}"></label><label>до<input type="number" name="max_score" min="0" max="100" placeholder="100" value="${esc(q.get("max_score") || "")}"></label>`;
   return `<form class="filter-bar" data-filter>${common}${extra}<button type="submit">Применить</button><a href="/${kind}">Сбросить</a></form>`;
+}
+function attentionCard(item) {
+  return `<article class="question"><p>${badge(item.type)} <strong>${esc(item.title || "Требуется внимание")}</strong></p><p>${esc(item.summary || item.reason || "")}</p><p class="muted">${esc(item.risk || "manual review")} · ${date(item.updated_at)}</p><p>${esc(item.next_action || "Проверить вручную")}</p></article>`;
+}
+async function careerAgentWorkspace() {
+  const [attention, metrics, runs] = await Promise.all([api("/career/attention"), api("/career/metrics"), api("/career/runs")]);
+  const items = list(attention.items);
+  const runList = list(runs.runs).slice(0, 8).map((run) => `<li>${badge(run.status)} <strong>${esc(run.run_type || run.id)}</strong> · ${date(run.started_at)}</li>`).join("");
+  return heading("Career Agent Control Center", "Единая read-only очередь для вакансий и коммуникаций.", '<button class="primary" data-action="career-daily-run">Run daily</button>') +
+    panel("Daily status", `${pairs([["Last run", runList ? "см. timeline" : "не запускался"], ["Review queue", items.length], ["Matched vacancies", metrics.matched || 0], ["Run status", metrics.run_status || "—"]])}<p class="muted">Run daily выполняет только HH reads, AI analysis и локальную telemetry. Approval/send flow остаётся отдельным.</p>`) +
+    panel("Unified Attention Queue", items.length ? items.map(attentionCard).join("") : empty("Очередь пуста", "Новых безопасных действий для ручной проверки нет.", "")) +
+    panel("Run timeline", runList ? `<ul class="list">${runList}</ul>` : '<p class="muted">Durable runs пока не записаны.</p>');
 }
 async function applications() {
   const rows = await api(`/applications${location.search}`);
@@ -955,6 +968,7 @@ async function render(silent = false) {
     else if (path === "/today") html = await today();
     else if (path === "/applications") html = await applications();
     else if (path === "/vacancies") html = await vacancies();
+    else if (path === "/career") html = await careerAgentWorkspace();
     else if (path === "/inbox") html = await inbox();
     else if (path === "/knowledge") html = await knowledge();
     else if (path === "/knowledge/questions") html = await questions();
@@ -1031,6 +1045,22 @@ document.addEventListener("click", async (event) => {
   const { action, id } = button.dataset;
     if (action === "reload") {
     await render();
+      return;
+    }
+    if (action === "career-daily-run") {
+      if (busy) return;
+      busy = true;
+      button.disabled = true;
+      try {
+        const result = await api("/career/run", {});
+        toast(`Daily run: ${result.summary?.result || result.run?.status || "completed"}`);
+        await render();
+      } catch (err) {
+        toast(err.message);
+      } finally {
+        busy = false;
+        button.disabled = false;
+      }
       return;
     }
     if (action === "deep-health") {

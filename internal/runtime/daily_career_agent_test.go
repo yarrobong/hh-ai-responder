@@ -3,10 +3,14 @@ package runtime
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	jsonstorage "hh-ai-responder/internal/adapters/storage/json"
 	"hh-ai-responder/internal/careeragent"
 )
 
@@ -49,6 +53,22 @@ func (s *dailyWorkflowStoreFixture) UpsertRunItem(_ context.Context, item career
 	defer s.mu.Unlock()
 	s.items = append(s.items, item)
 	return nil
+}
+
+func (s *dailyWorkflowStoreFixture) ListRunItems(_ context.Context, runID string, limit int) ([]careeragent.AgentRunItem, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := make([]careeragent.AgentRunItem, 0, len(s.items))
+	for _, item := range s.items {
+		if runID != "" && item.RunID != runID {
+			continue
+		}
+		result = append(result, item)
+	}
+	if limit > 0 && len(result) > limit {
+		result = result[:limit]
+	}
+	return result, nil
 }
 
 func (s *dailyWorkflowStoreFixture) UpsertPreparation(context.Context, careeragent.ApplicationPreparation) error {
@@ -120,6 +140,28 @@ func TestDailyCareerAgentPersistsPartialRunAndStageFailure(t *testing.T) {
 	}
 }
 
+func TestDailyCareerAgentMarksAllStageFailureAsFailed(t *testing.T) {
+	store := newDailyWorkflowStoreFixture()
+	started := time.Date(2026, 9, 24, 9, 3, 0, 0, time.UTC)
+	stage := func(context.Context, time.Time, string) (careeragent.DailyStageResult, error) {
+		return careeragent.DailyStageResult{}, errors.New("stage unavailable")
+	}
+	service, err := NewDailyCareerAgentService(DailyCareerAgentDependencies{Workflow: store, Vacancy: stage, Communication: stage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.Run(context.Background(), started)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Run.Status != careeragent.AgentRunStatusFailed || result.Summary.Result != careeragent.DailyResultFailed {
+		t.Fatalf("result=%+v", result)
+	}
+	if len(result.Summary.Failures) != 2 || len(store.items) != 2 {
+		t.Fatalf("failure accounting summary=%+v items=%d", result.Summary, len(store.items))
+	}
+}
+
 func TestDailyCareerAgentSecondInvocationDoesNotOverlap(t *testing.T) {
 	store := newDailyWorkflowStoreFixture()
 	started := time.Date(2026, 9, 24, 9, 3, 0, 0, time.UTC)
@@ -159,5 +201,59 @@ func TestDailyCareerAgentSecondInvocationDoesNotOverlap(t *testing.T) {
 	<-firstDone
 	if store.starts != 1 {
 		t.Fatalf("starts=%d, want one durable run", store.starts)
+	}
+}
+
+func TestDailyCareerAgentSharedDurableStoreClaimsOneRunAcrossInstances(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "career-workflow.json")
+	firstStore := jsonstorage.NewCareerWorkflowRepository(path)
+	secondStore := jsonstorage.NewCareerWorkflowRepository(path)
+	started := time.Date(2026, 9, 24, 9, 3, 0, 0, time.UTC)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var stageCalls atomic.Int32
+	stage := func(context.Context, time.Time, string) (careeragent.DailyStageResult, error) {
+		stageCalls.Add(1)
+		close(entered)
+		<-release
+		return careeragent.DailyStageResult{}, nil
+	}
+	first, err := NewDailyCareerAgentService(DailyCareerAgentDependencies{Workflow: firstStore, Vacancy: stage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewDailyCareerAgentService(DailyCareerAgentDependencies{Workflow: secondStore, Vacancy: stage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstDone := make(chan careeragent.DailyCareerAgentRun, 1)
+	firstErr := make(chan error, 1)
+	go func() {
+		result, runErr := first.Run(context.Background(), started)
+		firstDone <- result
+		firstErr <- runErr
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("first shared-store run did not start")
+	}
+	secondResult, secondErr := second.Run(context.Background(), started)
+	if secondErr != nil {
+		t.Fatal(secondErr)
+	}
+	if !secondResult.IdempotentReplay || secondResult.Run.ID != careeragent.DailyRunID(started) {
+		t.Fatalf("second shared-store result=%+v", secondResult)
+	}
+	close(release)
+	if err := <-firstErr; err != nil {
+		t.Fatal(err)
+	}
+	<-firstDone
+	if got := stageCalls.Load(); got != 1 {
+		t.Fatalf("stage calls=%d, want one claimed run", got)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("durable workflow file missing: %v", err)
 	}
 }

@@ -174,3 +174,16 @@ func TestRenderCareerAgentHumanReportRouteCategories(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderDailyCareerAgentStatusIsStableAndExplicitlyReadOnly(t *testing.T) {
+	started := time.Date(2026, 9, 24, 9, 0, 0, 0, time.UTC)
+	run := careeragent.NewAgentRun("daily-career-agent-2026-09-24", careeragent.AgentRunStageCareerAgent, started)
+	result := careeragent.DailyCareerAgentRun{Run: run, Summary: careeragent.DailyCareerAgentSummary{Result: careeragent.DailyResultPartialSuccess, Vacancy: careeragent.DailyVacancySummary{Scanned: 4, Found: 3, Matched: 1, ReviewRequired: 2}, Communication: careeragent.DailyCommunicationSummary{ConversationsSynced: 5, NewMessages: 7, RepliesNeeded: 2, Failures: 1}}, Attention: []careeragent.AttentionItem{{ID: "attention-1"}, {ID: "attention-2"}}}
+	result.IdempotentReplay = true
+	output := renderDailyCareerAgentStatus(result)
+	for _, expected := range []string{"Career Agent daily: PARTIAL_SUCCESS", "Run: daily-career-agent-2026-09-24", "Vacancies: scanned=4 found=3 matched=1 review=2", "Communication: conversations=5 new_messages=7 replies_needed=2 failures=1", "Attention: 2", "HH writes: 0", "Replay: true"} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("daily status missing %q:\n%s", expected, output)
+		}
+	}
+}

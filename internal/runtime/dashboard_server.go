@@ -64,6 +64,7 @@ type DashboardDependencies struct {
 	RankedQueue               *vacancyranking.QueueService
 	VacancyReviews            vacancyreview.Store
 	CareerWorkflow            ports.CareerWorkflowStore
+	Daily                     *DailyCareerAgentService
 }
 
 type DashboardServer struct {
@@ -269,6 +270,13 @@ func (s *DashboardServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Daily orchestration owns its own overlap guard and durable lifecycle. Do
+	// not hold the dashboard mutation lock while it performs read-only HH sync
+	// and AI analysis; otherwise a manual run would freeze unrelated views.
+	if method == http.MethodPost && len(p) == 2 && p[0] == "career" && p[1] == "run" {
+		s.runDailyCareerAgentAPI(w, r)
+		return
+	}
 	if method == http.MethodGet && dashboardReadOnlyPath(p) {
 		if err := s.refreshForRead(); err != nil {
 			dashboardError(w, 500, "Cannot reload local data")
@@ -336,7 +344,7 @@ func dashboardRouteMethod(p []string) string {
 	if len(p) == 2 {
 		switch p[0] {
 		case "career":
-			if p[1] == "review-queue" || p[1] == "runs" || p[1] == "metrics" {
+			if p[1] == "review-queue" || p[1] == "runs" || p[1] == "metrics" || p[1] == "attention" {
 				return "GET"
 			}
 		case "notifications":
@@ -374,6 +382,9 @@ func dashboardRouteMethod(p []string) string {
 	}
 	if len(p) == 3 && p[0] == "career" && p[1] == "vacancies" && p[2] != "" {
 		return "GET"
+	}
+	if len(p) == 2 && p[0] == "career" && p[1] == "run" {
+		return "POST"
 	}
 	if len(p) == 3 && p[0] == "vacancies" && p[1] != "" && p[2] == "ranking" {
 		return "GET"

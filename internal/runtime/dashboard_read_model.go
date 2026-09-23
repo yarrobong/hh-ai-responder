@@ -23,6 +23,7 @@ type dashboardSnapshot struct {
 	careerRuns     []careeragent.AgentRun
 	preparations   []careeragent.ApplicationPreparation
 	careerQueue    []careeragent.ReviewQueueItem
+	attention      []careeragent.AttentionItem
 	careerError    string
 	sync           HHSyncState
 }
@@ -94,6 +95,13 @@ func (s *DashboardServer) loadDashboardSnapshot() (dashboardSnapshot, error) {
 		if err != nil {
 			result.careerError = careerReviewUnavailableMessage("Career Agent review workspace unavailable", err)
 			result.careerQueue = nil
+		}
+	}
+	if result.careerError == "" {
+		result.attention, err = s.buildAttentionQueue(result)
+		if err != nil {
+			result.careerError = careerReviewUnavailableMessage("Career Agent attention queue unavailable", err)
+			result.attention = nil
 		}
 	}
 	return result, nil

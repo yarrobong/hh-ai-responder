@@ -3,9 +3,23 @@ package runtime
 import (
 	"net/http"
 	"strconv"
+	"time"
 
 	"hh-ai-responder/internal/careeragent"
 )
+
+func (s *DashboardServer) runDailyCareerAgentAPI(w http.ResponseWriter, r *http.Request) {
+	if s.Daily == nil {
+		dashboardError(w, http.StatusServiceUnavailable, "Daily Career Agent is not configured")
+		return
+	}
+	result, err := s.Daily.Run(r.Context(), time.Now().UTC())
+	if err != nil {
+		dashboardError(w, http.StatusConflict, "Daily Career Agent run failed")
+		return
+	}
+	dashboardJSON(w, http.StatusOK, result)
+}
 
 func (s *DashboardServer) readCareerAPI(w http.ResponseWriter, r *http.Request, p []string) {
 	snapshot, err := s.loadDashboardSnapshot()
@@ -22,6 +36,8 @@ func (s *DashboardServer) readCareerAPI(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	switch {
+	case len(p) == 2 && p[1] == "attention":
+		dashboardJSON(w, http.StatusOK, map[string]any{"items": snapshot.attention, "count": len(snapshot.attention)})
 	case len(p) == 2 && p[1] == "review-queue":
 		dashboardJSON(w, http.StatusOK, map[string]any{"items": snapshot.careerQueue, "count": len(snapshot.careerQueue)})
 	case len(p) == 2 && p[1] == "runs":

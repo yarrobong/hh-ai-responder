@@ -13,6 +13,8 @@ import (
 
 var ErrDailyCareerAgentInProgress = errors.New("daily Career Agent run is already in progress")
 
+const dailyStaleRunAfter = 6 * time.Hour
+
 type DailyCareerAgentStage func(context.Context, time.Time, string) (careeragent.DailyStageResult, error)
 
 // DailyCareerAgentDependencies intentionally has no HH writer or approval
@@ -64,21 +66,39 @@ func (s *DailyCareerAgentService) Run(ctx context.Context, now time.Time) (caree
 	}
 	defer s.running.Store(false)
 
-	if err := s.workflow.RecoverInterruptedRuns(ctx, now); err != nil {
-		return careeragent.DailyCareerAgentRun{}, fmt.Errorf("recover daily Career Agent runs: %w", err)
-	}
 	if existing, err := s.workflow.GetRun(ctx, runID); err == nil {
-		return dailyReplay(existing), nil
+		if existing.Status != careeragent.AgentRunStatusRunning || existing.StartedAt.After(now.Add(-dailyStaleRunAfter)) {
+			return dailyReplay(existing), nil
+		}
+		if err := s.workflow.RecoverInterruptedRuns(ctx, now); err != nil {
+			return careeragent.DailyCareerAgentRun{}, fmt.Errorf("recover stale daily Career Agent run: %w", err)
+		}
 	} else if !errors.Is(err, careeragent.ErrAgentRunNotFound) {
 		return careeragent.DailyCareerAgentRun{}, fmt.Errorf("inspect daily Career Agent run: %w", err)
+	} else if err := s.workflow.RecoverInterruptedRuns(ctx, now.Add(-dailyStaleRunAfter)); err != nil {
+		return careeragent.DailyCareerAgentRun{}, fmt.Errorf("recover stale daily Career Agent runs: %w", err)
 	}
 
 	run := careeragent.NewAgentRun(runID, careeragent.AgentRunStageCareerAgent, now)
 	run.RunType = "daily_career_agent"
-	if err := s.workflow.StartRun(ctx, run); err != nil {
+	if coordinator, ok := s.workflow.(ports.CareerWorkflowRunCoordinator); ok {
+		claimed, err := coordinator.AcquireRun(ctx, run)
+		if err != nil {
+			return careeragent.DailyCareerAgentRun{}, fmt.Errorf("acquire daily Career Agent run: %w", err)
+		}
+		if !claimed {
+			existing, getErr := s.workflow.GetRun(ctx, runID)
+			if getErr != nil {
+				return careeragent.DailyCareerAgentRun{}, fmt.Errorf("daily Career Agent run was claimed but cannot be read: %w", getErr)
+			}
+			return dailyReplay(existing), nil
+		}
+	} else if err := s.workflow.StartRun(ctx, run); err != nil {
 		return careeragent.DailyCareerAgentRun{}, fmt.Errorf("start daily Career Agent run: %w", err)
 	}
 	result := careeragent.DailyCareerAgentRun{Run: run, Attention: []careeragent.AttentionItem{}}
+	configuredStages := 0
+	failedStages := 0
 	for _, stage := range []struct {
 		name careeragent.AgentRunStage
 		fn   DailyCareerAgentStage
@@ -89,10 +109,12 @@ func (s *DailyCareerAgentService) Run(ctx context.Context, now time.Time) (caree
 		if stage.fn == nil {
 			continue
 		}
+		configuredStages++
 		stageResult, stageErr := stage.fn(ctx, now, runID)
 		careeragent.MergeDailyStageSummaryForRuntime(&result.Summary, stageResult.Summary)
 		result.Attention = append(result.Attention, stageResult.Attention...)
 		if stageErr != nil {
+			failedStages++
 			result.Summary.Failures = append(result.Summary.Failures, careeragent.RedactAgentError(stageErr))
 			result.Summary.Communication.Failures += boolInt(stage.name == careeragent.AgentRunStageCommunication)
 			stageResult.Items = append(stageResult.Items, careeragent.DailyStageFailureItemForRuntime(runID, stage.name, now, stageErr))
@@ -110,7 +132,12 @@ func (s *DailyCareerAgentService) Run(ctx context.Context, now time.Time) (caree
 		}
 	}
 
-	if len(result.Summary.Failures) > 0 {
+	if len(result.Summary.Failures) > 0 && failedStages == configuredStages {
+		result.Summary.Result = careeragent.DailyResultFailed
+		if err := result.Run.Finish(careeragent.AgentRunStatusFailed, string(result.Summary.Result), now, errors.New("all configured daily stages failed")); err != nil {
+			return s.failRun(ctx, result, err)
+		}
+	} else if len(result.Summary.Failures) > 0 {
 		result.Summary.Result = careeragent.DailyResultPartialSuccess
 		if err := result.Run.Finish(careeragent.AgentRunStatusPartial, string(result.Summary.Result), now, nil); err != nil {
 			return s.failRun(ctx, result, err)

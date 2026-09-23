@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -31,6 +32,9 @@ type CareerAgentRunReport struct {
 }
 
 func runCareerAgentCommand(args []string, cfg Config, stdout, stderr io.Writer) error {
+	if len(args) > 0 && args[0] == "daily" {
+		return runCareerAgentDaily(args[1:], cfg, stdout, stderr)
+	}
 	friendlyRun := len(args) > 0 && (args[0] == "run" || args[0] == "autopilot")
 	if len(args) > 0 && args[0] == "browser-session" {
 		return runBrowserSessionCommand(args[1:], cfg, stdout, stderr)
@@ -156,6 +160,67 @@ func runCareerAgentCommand(args []string, cfg Config, stdout, stderr io.Writer) 
 	}
 	_, err = stdout.Write(append(raw, '\n'))
 	return err
+}
+
+func runCareerAgentDaily(args []string, cfg Config, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("career-agent daily", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	jsonOutput := fs.Bool("json", false, "emit stable JSON output")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: career-agent daily [--json]")
+	}
+	// Daily orchestration is structurally read-only. These settings are
+	// explicit at the CLI boundary as well as enforced inside the stage adapter.
+	cfg.DryRun = true
+	cfg.HHWriteEnabled = false
+	cfg.AutoApply, cfg.AutoChat, cfg.AutoTouch, cfg.AutoJobStatus = false, false, false, false
+	cfg.ChatMode = "off"
+	wd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	dashboard, err := loadDashboard(context.Background(), wd, cfg)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if dashboard.CareerClose != nil {
+			dashboard.CareerClose()
+		}
+		if dashboard.CandidateClose != nil {
+			dashboard.CandidateClose()
+		}
+	}()
+	responder, err := NewHHAIResponder(context.Background(), cfg)
+	if err != nil {
+		return err
+	}
+	defer responder.closeResources()
+	service, err := NewRuntimeDailyCareerAgentService(responder, dashboard, dashboard.CareerWorkflow)
+	if err != nil {
+		return err
+	}
+	result, runErr := service.Run(context.Background(), time.Now().UTC())
+	if *jsonOutput {
+		if err := writeJSON(stdout, result); err != nil {
+			return err
+		}
+	} else if _, err := io.WriteString(stdout, renderDailyCareerAgentStatus(result)); err != nil {
+		return err
+	}
+	return runErr
+}
+
+func renderDailyCareerAgentStatus(result careeragent.DailyCareerAgentRun) string {
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "Career Agent daily: %s\nRun: %s\nVacancies: scanned=%d found=%d matched=%d review=%d\nCommunication: conversations=%d new_messages=%d replies_needed=%d failures=%d\nAttention: %d\nHH writes: %d\n", result.Summary.Result, result.Run.ID, result.Summary.Vacancy.Scanned, result.Summary.Vacancy.Found, result.Summary.Vacancy.Matched, result.Summary.Vacancy.ReviewRequired, result.Summary.Communication.ConversationsSynced, result.Summary.Communication.NewMessages, result.Summary.Communication.RepliesNeeded, result.Summary.Communication.Failures, len(result.Attention), result.Summary.HHWrites)
+	if result.IdempotentReplay {
+		builder.WriteString("Replay: true\n")
+	}
+	return builder.String()
 }
 
 func renderCareerAgentStatus(report CareerAgentRunReport) string {

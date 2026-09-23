@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"hh-ai-responder/internal/careeragent"
@@ -40,6 +41,11 @@ func dailyStageResultFromCareerAgentReport(report CareerAgentRunReport, runID st
 		}
 		result.Items = append(result.Items, item)
 	}
+	// Vacancy review/failure items are part of the same derived attention
+	// projection as communication work items. Keep the stage result useful to
+	// CLI callers immediately; the dashboard rebuilds the queue from durable
+	// run items after restart.
+	result.Attention = append(result.Attention, attentionFromRunItems(result.Items)...)
 	return result, nil
 }
 
@@ -55,6 +61,32 @@ func dailyStageResultFromCommunicationReport(report CommunicationRunReport) care
 		result.Summary.Failures = append(result.Summary.Failures, fmt.Sprintf("communication stage reported %d persistence failures", report.Failures))
 	}
 	return result
+}
+
+func dailyCommunicationStageResult(report CommunicationRunReport, inbox CandidateInbox, runID string, now time.Time) (careeragent.DailyStageResult, error) {
+	result := dailyStageResultFromCommunicationReport(report)
+	if strings.TrimSpace(runID) == "" {
+		return result, errors.New("daily communication stage requires a run id")
+	}
+	for _, item := range inbox.Items {
+		workItems := item.Workflow.CommunicationItems
+		if len(workItems) == 0 {
+			result.Items = append(result.Items, careeragent.AgentRunItem{ID: "communication-item-" + item.Conversation.ID, RunID: runID, TargetType: "communication_conversation", TargetID: item.Conversation.ID, ApplicationID: item.Conversation.ApplicationID, ConversationID: item.Conversation.ID, VacancyID: item.Conversation.VacancyID, Stage: careeragent.AgentRunStageCommunication, Status: careeragent.AgentRunItemStatusPrepared, DecisionCode: item.Bucket, CreatedAt: now})
+			continue
+		}
+		for _, workItem := range workItems {
+			id := firstNonEmpty(workItem.ID, item.Conversation.ID)
+			status := careeragent.AgentRunItemStatusPrepared
+			if workItem.RequiresReview {
+				status = careeragent.AgentRunItemStatusReviewRequired
+			}
+			result.Items = append(result.Items, careeragent.AgentRunItem{ID: "communication-item-" + id, RunID: runID, TargetType: "communication_work_item", TargetID: id, ApplicationID: item.Conversation.ApplicationID, ConversationID: item.Conversation.ID, VacancyID: item.Conversation.VacancyID, Stage: careeragent.AgentRunStageCommunication, Status: status, DecisionCode: string(workItem.Type), CreatedAt: now})
+			if workItem.RequiresReview {
+				result.Attention = append(result.Attention, careeragent.AttentionItem{ID: "communication:" + id, Type: string(workItem.Type), Priority: 0, ApplicationID: item.Conversation.ApplicationID, ConversationID: item.Conversation.ID, VacancyID: item.Conversation.VacancyID, Title: "Требуется проверка сообщения", Summary: string(workItem.Type), Reason: "communication_work_item_requires_review", Risk: "manual_reply", NextAction: "Проверить диалог вручную", CreatedAt: now, UpdatedAt: now})
+			}
+		}
+	}
+	return result, nil
 }
 
 // NewRuntimeDailyCareerAgentService composes the shared application service
@@ -110,11 +142,15 @@ func (r *HHAIResponder) dailyVacancyStage() DailyCareerAgentStage {
 }
 
 func (s *DashboardServer) dailyCommunicationStage() DailyCareerAgentStage {
-	return func(ctx context.Context, now time.Time, _ string) (careeragent.DailyStageResult, error) {
+	return func(ctx context.Context, now time.Time, runID string) (careeragent.DailyStageResult, error) {
 		if s == nil {
 			return careeragent.DailyStageResult{}, errors.New("daily communication dashboard is nil")
 		}
-		report, err := s.refreshDailyCommunication(ctx, now)
-		return dailyStageResultFromCommunicationReport(report), err
+		report, inbox, err := s.refreshDailyCommunicationSnapshot(ctx, now)
+		result, mapErr := dailyCommunicationStageResult(report, inbox, runID, now)
+		if err != nil {
+			return result, err
+		}
+		return result, mapErr
 	}
 }
