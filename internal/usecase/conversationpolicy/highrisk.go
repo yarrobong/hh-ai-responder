@@ -16,6 +16,12 @@ func HighRiskMessageReason(message string) string {
 	if text == "" {
 		return ""
 	}
+	if containsAny(text, "password", "парол", "credential", "credentials", "api key", "apikey", "api-key", "token", "secret", "otp", "2fa", "код подтверждения", "логин", "учетная запись", "учётная запись") {
+		return "credentials or authentication secret"
+	}
+	if containsAny(text, "ignore previous instructions", "ignore prior instructions", "игнорируй предыдущие инструкции", "system:") {
+		return "prompt injection in employer content"
+	}
 
 	categories := []struct {
 		reason   string
