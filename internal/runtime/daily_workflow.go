@@ -215,15 +215,16 @@ func classifyCareerWorkflow(a JobApplication, c EmployerConversation, pending []
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
+	latestClassification := conversationpolicy.MessageClassification{}
 	if latest != nil && latest.Sender == ConversationSenderEmployer {
-		classification := conversationpolicy.ClassifyMessage(latest.Text)
+		latestClassification = conversationpolicy.ClassifyMessage(latest.Text)
 		var followUpDue *time.Time
 		if followUp != nil && followUp.Status == FollowUpEligible {
 			followUpDue = followUp.EligibleAt
 		}
 		projection.CommunicationItems = communicationworkitem.Project(communicationworkitem.Input{
 			ConversationID: c.ID, ApplicationID: firstNonEmpty(c.ApplicationID, a.ID), VacancyID: c.VacancyID,
-			MessageID: latest.ID, MessageText: latest.Text, Classification: classification, FollowUpDueAt: followUpDue, Now: now,
+			MessageID: latest.ID, MessageText: latest.Text, Classification: latestClassification, FollowUpDueAt: followUpDue, Now: now,
 		})
 	} else if followUp != nil && followUp.Status == FollowUpEligible {
 		projection.CommunicationItems = communicationworkitem.Project(communicationworkitem.Input{
@@ -239,7 +240,14 @@ func classifyCareerWorkflow(a JobApplication, c EmployerConversation, pending []
 		_ = terminal
 		projection.State = WorkflowTerminal
 	} else {
+		if latestClassification.Type == conversationpolicy.MessageTypeSuspicious || latestClassification.Type == conversationpolicy.MessageTypeUnknown {
+			projection.State = WorkflowNeedsUserAction
+			projection.Diagnostics = append(projection.Diagnostics, "manual_review_message_classification:"+string(latestClassification.Type))
+		}
 		for _, q := range pending {
+			if projection.State != "" {
+				break
+			}
 			conversationMatch := q.ConversationID == c.ID
 			applicationMatch := q.ConversationID == "" && q.ApplicationID != "" && a.ID != "" && q.ApplicationID == a.ID
 			if q.Status == ClarificationPending && (conversationMatch || applicationMatch) {
