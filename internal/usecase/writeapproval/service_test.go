@@ -121,6 +121,31 @@ func TestConversationVersionChangesOnRelevantMessageMutation(t *testing.T) {
 	}
 }
 
+func TestValidateForSendRejectsChangedEmployerMessageHash(t *testing.T) {
+	approval, input := createTestApproval(t)
+	input.Conversation.Messages[0].Text = "same message id, changed content"
+	result := NewService(Options{}).ValidateForSend(ValidateInput{Approval: approval, Draft: input.Draft, Conversation: input.Conversation, LatestDeliveredMessageID: input.LastMessageID, CurrentRelevantKnowledgeHash: input.CurrentRelevantKnowledgeHash, CurrentCandidateKnowledgeVersion: input.CurrentCandidateKnowledgeVersion})
+	if result.Status != ValidationStale || !strings.Contains(strings.Join(result.Reasons, ";"), "employer message changed") {
+		t.Fatalf("changed employer message was not stale: %+v", result)
+	}
+}
+
+func TestConversationVersionBindsApplicationRelation(t *testing.T) {
+	input := testInput()
+	input.Conversation.ApplicationID = "application-1"
+	input.Conversation.VacancyID = 42
+	first := ConversationVersion(input.Conversation)
+	input.Conversation.ApplicationID = "application-2"
+	if first == ConversationVersion(input.Conversation) {
+		t.Fatal("conversation version ignored application relation mutation")
+	}
+	input.Conversation.ApplicationID = "application-1"
+	input.Conversation.VacancyID = 43
+	if first == ConversationVersion(input.Conversation) {
+		t.Fatal("conversation version ignored vacancy relation mutation")
+	}
+}
+
 func TestInvalidationDecisionsNeverTouchTerminalTransportHistory(t *testing.T) {
 	approvals := []Approval{{ID: "sent", DraftID: "draft-1", ConversationID: "conversation-1", Status: ActionSent}, {ID: "approved", DraftID: "draft-1", ConversationID: "conversation-1", Status: ActionApproved}}
 	invalidated := InvalidateDraft(approvals, "draft-1", "draft edited after approval")

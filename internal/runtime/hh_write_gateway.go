@@ -81,6 +81,7 @@ type ApprovedHHAction struct {
 	ActionType                HHWriteActionType         `json:"action_type"`
 	ConversationID            string                    `json:"conversation_id"`
 	ApplicationID             string                    `json:"application_id,omitempty"`
+	EmployerMessageHash       string                    `json:"employer_message_hash,omitempty"`
 	DraftID                   string                    `json:"draft_id"`
 	ReplyPurpose              string                    `json:"reply_purpose,omitempty"`
 	ApprovedText              string                    `json:"approved_text"`
@@ -771,7 +772,7 @@ func (g *HHWriteGateway) ApproveDraft(draftID, approvedBy string) (ApprovedHHAct
 		return ApprovedHHAction{}, err
 	}
 	approval := created.Approval
-	action := ApprovedHHAction{ID: approval.ID, ActionType: HHWriteActionType(approval.ActionType), ConversationID: approval.ConversationID, ApplicationID: approval.ApplicationID, DraftID: approval.DraftID, ReplyPurpose: approval.ReplyPurpose, ApprovedText: approval.ApprovedText, ApprovedBy: approval.ApprovedBy, ApprovedAt: approval.ApprovedAt, SourceMessageID: approval.SourceMessageID, ConversationVersion: approval.ConversationVersion, CandidateKnowledgeVersion: approval.CandidateKnowledgeVersion, RelevantKnowledgeSnapshot: relevantSnapshot, RelevantKnowledgeHash: approval.RelevantKnowledgeHash, LastMessageID: approval.LastMessageID, ContentHash: approval.ContentHash, SendNonce: approval.SendNonce, Status: HHWriteApproved, CreatedAt: approval.CreatedAt, UpdatedAt: approval.UpdatedAt}
+	action := ApprovedHHAction{ID: approval.ID, ActionType: HHWriteActionType(approval.ActionType), ConversationID: approval.ConversationID, ApplicationID: approval.ApplicationID, EmployerMessageHash: approval.EmployerMessageHash, DraftID: approval.DraftID, ReplyPurpose: approval.ReplyPurpose, ApprovedText: approval.ApprovedText, ApprovedBy: approval.ApprovedBy, ApprovedAt: approval.ApprovedAt, SourceMessageID: approval.SourceMessageID, ConversationVersion: approval.ConversationVersion, CandidateKnowledgeVersion: approval.CandidateKnowledgeVersion, RelevantKnowledgeSnapshot: relevantSnapshot, RelevantKnowledgeHash: approval.RelevantKnowledgeHash, LastMessageID: approval.LastMessageID, ContentHash: approval.ContentHash, SendNonce: approval.SendNonce, Status: HHWriteApproved, CreatedAt: approval.CreatedAt, UpdatedAt: approval.UpdatedAt}
 	if err := g.Actions.put(action); err != nil {
 		return ApprovedHHAction{}, err
 	}

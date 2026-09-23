@@ -17,11 +17,22 @@ func ContentHash(text string) string {
 // remains compatible with persisted approvals.
 func ConversationVersion(c ConversationSnapshot) string {
 	raw, _ := json.Marshal(struct {
-		ID, HHID string
-		Status   string
-		Messages []MessageSnapshot
-	}{c.ID, c.ExternalID, c.Status, cloneMessages(c.Messages)})
+		ID, HHID, ApplicationID string
+		VacancyID               int
+		Status                  string
+		Messages                []MessageSnapshot
+	}{c.ID, c.ExternalID, c.ApplicationID, c.VacancyID, c.Status, cloneMessages(c.Messages)})
 	return ContentHash(string(raw))
+}
+
+func LatestEmployerMessageHash(c ConversationSnapshot) string {
+	for i := len(c.Messages) - 1; i >= 0; i-- {
+		message := c.Messages[i]
+		if message.Sender == "employer" && !message.HHSystemEvent && !message.ContentUnavailable {
+			return ContentHash(message.Text)
+		}
+	}
+	return ""
 }
 
 func active(status ActionStatus) bool {

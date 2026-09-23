@@ -80,6 +80,8 @@ type MessageSnapshot struct {
 type ConversationSnapshot struct {
 	ID              string
 	ExternalID      string
+	ApplicationID   string
+	VacancyID       int
 	Status          string
 	Messages        []MessageSnapshot
 	LatestMessageID string
@@ -93,6 +95,7 @@ type Approval struct {
 	ActionType                ActionType
 	ConversationID            string
 	ApplicationID             string
+	EmployerMessageHash       string
 	DraftID                   string
 	ReplyPurpose              string
 	ApprovedText              string
@@ -140,6 +143,7 @@ type AuthorizationEvidence struct {
 	ActionType            ActionType
 	ApprovedText          string
 	ContentHash           string
+	EmployerMessageHash   string
 	RelevantKnowledgeHash string
 	ConversationVersion   string
 	LastMessageID         string

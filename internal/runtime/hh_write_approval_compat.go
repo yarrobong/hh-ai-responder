@@ -32,13 +32,13 @@ func approvalConversationSnapshot(c EmployerConversation) writeapproval.Conversa
 			Source: string(message.Source), Direction: string(message.Direction),
 		})
 	}
-	return writeapproval.ConversationSnapshot{ID: c.ID, ExternalID: c.HHConversationID, Status: string(c.Status), Messages: messages}
+	return writeapproval.ConversationSnapshot{ID: c.ID, ExternalID: c.HHConversationID, ApplicationID: c.ApplicationID, VacancyID: c.VacancyID, Status: string(c.Status), Messages: messages}
 }
 
 func approvalSnapshot(action ApprovedHHAction) writeapproval.Approval {
 	return writeapproval.Approval{
 		ID: action.ID, ActionType: writeapproval.ActionType(action.ActionType), ConversationID: action.ConversationID,
-		ApplicationID: action.ApplicationID, DraftID: action.DraftID, ReplyPurpose: action.ReplyPurpose,
+		ApplicationID: action.ApplicationID, EmployerMessageHash: action.EmployerMessageHash, DraftID: action.DraftID, ReplyPurpose: action.ReplyPurpose,
 		ApprovedText: action.ApprovedText, ApprovedBy: action.ApprovedBy, ApprovedAt: action.ApprovedAt,
 		SourceMessageID: action.SourceMessageID, ConversationVersion: action.ConversationVersion,
 		CandidateKnowledgeVersion: action.CandidateKnowledgeVersion, RelevantKnowledgeHash: action.RelevantKnowledgeHash,

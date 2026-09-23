@@ -93,7 +93,7 @@ func (s *Service) Create(input CreateInput) (ApprovalCreated, error) {
 	}
 	approval := Approval{
 		ID: actionID, ActionType: input.ActionType, ConversationID: input.Conversation.ID,
-		ApplicationID: input.Draft.ApplicationID, DraftID: input.Draft.ID, ReplyPurpose: wantPurpose,
+		ApplicationID: input.Draft.ApplicationID, EmployerMessageHash: LatestEmployerMessageHash(input.Conversation), DraftID: input.Draft.ID, ReplyPurpose: wantPurpose,
 		ApprovedText: input.Draft.Text, ApprovedBy: input.ApprovedBy, ApprovedAt: now,
 		SourceMessageID: input.SourceMessageID, ConversationVersion: ConversationVersion(input.Conversation),
 		CandidateKnowledgeVersion: input.CurrentCandidateKnowledgeVersion,
@@ -128,6 +128,10 @@ func (s *Service) ValidateForSend(input ValidateInput) ValidationResult {
 		result.Status = ValidationStale
 		result.Reasons = append(result.Reasons, ErrContentMismatch.Error())
 	}
+	if a.EmployerMessageHash != "" && a.EmployerMessageHash != LatestEmployerMessageHash(input.Conversation) {
+		result.Status = ValidationStale
+		result.Reasons = append(result.Reasons, "employer message changed after approval")
+	}
 	if strings.TrimSpace(input.Conversation.ExternalID) == "" {
 		result.Status = ValidationStale
 		result.Reasons = append(result.Reasons, "conversation has no strong HH external identifier")
@@ -158,7 +162,7 @@ func (s *Service) ValidateForSend(input ValidateInput) ValidationResult {
 		}
 		return result
 	}
-	result.Evidence = AuthorizationEvidence{ApprovalID: a.ID, DraftID: a.DraftID, ConversationID: a.ConversationID, ActionType: a.ActionType, ApprovedText: a.ApprovedText, ContentHash: a.ContentHash, RelevantKnowledgeHash: a.RelevantKnowledgeHash, ConversationVersion: a.ConversationVersion, LastMessageID: a.LastMessageID, SendNonce: a.SendNonce}
+	result.Evidence = AuthorizationEvidence{ApprovalID: a.ID, DraftID: a.DraftID, ConversationID: a.ConversationID, ActionType: a.ActionType, ApprovedText: a.ApprovedText, ContentHash: a.ContentHash, EmployerMessageHash: a.EmployerMessageHash, RelevantKnowledgeHash: a.RelevantKnowledgeHash, ConversationVersion: a.ConversationVersion, LastMessageID: a.LastMessageID, SendNonce: a.SendNonce}
 	return result
 }
 
