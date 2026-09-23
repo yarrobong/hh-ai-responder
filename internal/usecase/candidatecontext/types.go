@@ -102,7 +102,7 @@ func Empty() CandidateContext {
 }
 
 func (c CandidateContext) RequiresCandidateInput() bool {
-	if c.UserConfirmationRequired || len(c.UnknownAtomicFacts) > 0 {
+	if c.UserConfirmationRequired || len(c.UnknownAtomicFacts) > 0 || len(c.PartiallyResolvedFacts) > 0 {
 		return true
 	}
 	return len(c.MissingInformation) > 0 && c.MessageIntent == ""

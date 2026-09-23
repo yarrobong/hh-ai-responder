@@ -2,6 +2,8 @@ package employerreply
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -117,6 +119,9 @@ func (s *Service) Prepare(ctx context.Context, input Input) (Decision, error) {
 			return manualReviewDecision("черновик не прошёл проверку фактов", []string{err.Error()}, value.ReplyGuidance.AlreadyDiscussedTopics, requirement), nil
 		}
 	}
+	if decision.Action == ActionNeedCandidate {
+		decision.KnowledgeRequests = knowledgeRequests(decision.MissingInformation)
+	}
 	return decision, nil
 }
 
@@ -215,7 +220,28 @@ func missingDecision(values []candidatecontext.CandidateMissingInformation, reas
 	if len(missing) == 0 {
 		missing = append(missing, MissingInformation{Topic: "candidate_context", Question: "Подтверди, пожалуйста, что именно нужно ответить работодателю."})
 	}
-	return Decision{Action: ActionNeedCandidate, ReplyRequirement: requirement, Reason: reason, Confidence: 1, UsedFacts: []string{}, MissingInformation: missing, ForbiddenClaimsChecked: true, ConversationTopicsUsed: uniqueStrings(topics), Warnings: []string{}}
+	return Decision{Action: ActionNeedCandidate, ReplyRequirement: requirement, Reason: reason, Confidence: 1, UsedFacts: []string{}, MissingInformation: missing, KnowledgeRequests: knowledgeRequests(missing), ForbiddenClaimsChecked: true, ConversationTopicsUsed: uniqueStrings(topics), Warnings: []string{}}
+}
+
+func knowledgeRequests(values []MissingInformation) []KnowledgeRequest {
+	result := make([]KnowledgeRequest, 0, len(values))
+	seen := map[string]bool{}
+	for _, value := range values {
+		key := strings.ToLower(strings.TrimSpace(value.Topic)) + "\x00" + strings.TrimSpace(value.Question)
+		if strings.TrimSpace(value.Question) == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		topic, question := strings.TrimSpace(value.Topic), strings.TrimSpace(value.Question)
+		result = append(result, KnowledgeRequest{Topic: topic, Question: question, Source: "employer_message", Status: KnowledgeRequestPending, DeterministicKey: knowledgeRequestKey(topic, question)})
+	}
+	return result
+}
+
+func knowledgeRequestKey(topic, question string) string {
+	raw := strings.ToLower(strings.Join([]string{strings.TrimSpace(topic), strings.TrimSpace(question)}, "\x00"))
+	sum := sha256.Sum256([]byte(raw))
+	return "knowledge-request-" + hex.EncodeToString(sum[:])
 }
 
 func clarificationTopic(question string) string {

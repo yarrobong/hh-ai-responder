@@ -24,6 +24,30 @@ type MissingInformation struct {
 	Question string `json:"question"`
 }
 
+type KnowledgeRequestStatus string
+
+const (
+	KnowledgeRequestPending  KnowledgeRequestStatus = "pending"
+	KnowledgeRequestResolved KnowledgeRequestStatus = "resolved"
+)
+
+// KnowledgeRequest is a reviewable request for candidate input. It is not a
+// Candidate Knowledge mutation and carries no send capability.
+type KnowledgeRequest struct {
+	Topic             string                 `json:"topic"`
+	Question          string                 `json:"question"`
+	Source            string                 `json:"source"`
+	Status            KnowledgeRequestStatus `json:"status"`
+	DeterministicKey  string                 `json:"deterministic_key,omitempty"`
+	UnknownID         string                 `json:"unknown_id,omitempty"`
+	ClarificationID   string                 `json:"clarification_id,omitempty"`
+	ConversationID    string                 `json:"conversation_id,omitempty"`
+	ApplicationID     string                 `json:"application_id,omitempty"`
+	VacancyID         int                    `json:"vacancy_id,omitempty"`
+	EmployerMessageID string                 `json:"employer_message_id,omitempty"`
+	MissingPart       string                 `json:"missing_part,omitempty"`
+}
+
 // Decision is the employer-reply business result. It is intentionally not a
 // send request and contains no approval, nonce, delivery, or HH capability.
 type Decision struct {
@@ -34,6 +58,7 @@ type Decision struct {
 	Confidence             float64                             `json:"confidence"`
 	UsedFacts              []string                            `json:"used_facts"`
 	MissingInformation     []MissingInformation                `json:"missing_information"`
+	KnowledgeRequests      []KnowledgeRequest                  `json:"knowledge_requests,omitempty"`
 	ForbiddenClaimsChecked bool                                `json:"forbidden_claims_checked"`
 	ConversationTopicsUsed []string                            `json:"conversation_topics_used"`
 	Warnings               []string                            `json:"warnings"`

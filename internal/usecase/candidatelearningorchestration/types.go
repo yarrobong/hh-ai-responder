@@ -15,6 +15,7 @@ type ClarificationStore interface {
 	RecordAnswerEvidence(string, candidateacquisition.CandidateAnswer) error
 	SetProposalIDs(string, []string) error
 	MarkResolved(string, candidateacquisition.CandidateClarificationStatus, string) error
+	Reopen(string, string) error
 }
 
 // CandidateReader supplies a detached canonical snapshot for answer and

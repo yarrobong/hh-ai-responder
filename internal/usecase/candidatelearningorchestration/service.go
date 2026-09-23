@@ -268,7 +268,21 @@ func (s *Service) RejectProposal(ctx context.Context, proposalID string) error {
 	if err := checkContext(ctx); err != nil {
 		return err
 	}
-	return s.mutation.RejectProposal(ctx, proposalID)
+	if err := s.mutation.RejectProposal(ctx, proposalID); err != nil {
+		return err
+	}
+	requests, err := s.clarifications.List()
+	if err != nil {
+		return err
+	}
+	for _, request := range requests {
+		for _, id := range request.ProposalIDs {
+			if id == proposalID {
+				return s.clarifications.Reopen(request.ID, "proposal rejected; candidate may answer again")
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Service) DismissClarification(ctx context.Context, id, evidence string) (AnswerResult, error) {

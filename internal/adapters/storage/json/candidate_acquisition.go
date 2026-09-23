@@ -248,6 +248,20 @@ func (s *CandidateClarificationStore) MarkResolved(id string, status candidateac
 	return s.replace(value)
 }
 
+// Reopen returns a rejected interpretation to the candidate-input stage while
+// retaining the prior answer and proposal IDs as audit history.
+func (s *CandidateClarificationStore) Reopen(id, reason string) error {
+	value, err := s.Get(id)
+	if err != nil {
+		return err
+	}
+	value.Status = candidateacquisition.ClarificationPending
+	value.ResolvedAt = nil
+	value.ResolutionReason = strings.TrimSpace(reason)
+	value.ReadyForRegeneration = true
+	return s.replace(value)
+}
+
 // Replace updates one already-present persisted value. Policy callers decide
 // whether the new lifecycle value is allowed; this method only stores it.
 func (s *CandidateClarificationStore) Replace(value candidateacquisition.CandidateClarificationRequest) error {

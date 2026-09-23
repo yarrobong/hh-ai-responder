@@ -133,6 +133,9 @@ func TestServiceDeterministicPolicyAndCandidateSafetyGateAI(t *testing.T) {
 	if err != nil || decision.Action != ActionNeedCandidate || fake.calls != 0 {
 		t.Fatalf("unknown fact was not gated: %+v err=%v calls=%d", decision, err, fake.calls)
 	}
+	if len(decision.KnowledgeRequests) != 1 || decision.KnowledgeRequests[0].Status != KnowledgeRequestPending || decision.KnowledgeRequests[0].DeterministicKey == "" || !strings.EqualFold(decision.KnowledgeRequests[0].Topic, "kubernetes") {
+		t.Fatalf("unknown fact did not become a pending knowledge request: %+v", decision.KnowledgeRequests)
+	}
 
 	input = replyInput(djangoContext())
 	input.Context.ReplyRequirement = conversationpolicy.NoReplyNeeded

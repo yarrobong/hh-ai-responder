@@ -79,6 +79,17 @@ func (f *fakeClarifications) MarkResolved(id string, status candidateacquisition
 	return errors.New("clarification not found")
 }
 
+func (f *fakeClarifications) Reopen(id, reason string) error {
+	for i := range f.values {
+		if f.values[i].ID == id {
+			f.values[i].Status = candidateacquisition.ClarificationPending
+			f.values[i].ResolutionReason = reason
+			return nil
+		}
+	}
+	return errors.New("clarification not found")
+}
+
 type fakeCandidateReader struct {
 	value candidate.Candidate
 	err   error
@@ -197,6 +208,17 @@ func TestConfirmAndRejectUseExplicitMutationBoundary(t *testing.T) {
 	}
 	if mutation.rejectCalls != 1 || mutation.choiceCalls != 0 || mutation.dismissCalls != 0 {
 		t.Fatalf("reject crossed mutation boundary: %+v", mutation)
+	}
+}
+
+func TestRejectProposalReopensClarificationForRetry(t *testing.T) {
+	store := &fakeClarifications{values: []candidateacquisition.CandidateClarificationRequest{{ID: "clarification-1", ProposalIDs: []string{"proposal-2"}, Status: candidateacquisition.ClarificationAnswered}}}
+	service := newTestService(store, &fakeMutation{}, nil)
+	if err := service.RejectProposal(context.Background(), "proposal-2"); err != nil {
+		t.Fatal(err)
+	}
+	if store.values[0].Status != candidateacquisition.ClarificationPending {
+		t.Fatalf("rejected proposal did not reopen clarification: %+v", store.values[0])
 	}
 }
 

@@ -75,6 +75,9 @@ func TestResolverPartialProductionEvidenceStaysPartial(t *testing.T) {
 	if !ok || fact.Status != ResolvedFactPartiallyAnswerable || fact.MissingPart == "" {
 		t.Fatalf("Docker production evidence should remain partial: %+v", result)
 	}
+	if !result.RequiresCandidateInput() {
+		t.Fatalf("material partial fact must require candidate input: %+v", result)
+	}
 }
 
 func TestResolverUnknownTechnologyIsNotInferred(t *testing.T) {

@@ -19,6 +19,7 @@ type CandidateAcquisitionWriter interface {
 	RecordAnswerEvidence(string, candidateacquisition.CandidateAnswer) error
 	SetProposalIDs(string, []string) error
 	MarkResolved(string, candidateacquisition.CandidateClarificationStatus, string) error
+	Reopen(string, string) error
 }
 
 // CandidateAcquisitionStore is the narrow compatibility contract needed by
