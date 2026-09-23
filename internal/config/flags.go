@@ -200,6 +200,16 @@ func Load(args []string, lookup LookupEnv, workingDir string) (Config, error) {
 			return Config{}, err
 		}
 	}
+	if !flags["career-agent-daily-scheduler"] {
+		if cfg.CareerAgentDailySchedulerEnabled, err = getBool("HH_CAREER_AGENT_DAILY_ENABLED", cfg.CareerAgentDailySchedulerEnabled); err != nil {
+			return Config{}, err
+		}
+	}
+	if !flags["career-agent-daily-interval"] {
+		if cfg.CareerAgentDailyInterval, err = parseDuration("HH_CAREER_AGENT_DAILY_INTERVAL", cfg.CareerAgentDailyInterval); err != nil {
+			return Config{}, err
+		}
+	}
 	if !flags["ai-base-url"] {
 		cfg.AIBaseURL = get("HH_AI_BASE_URL", cfg.AIBaseURL)
 	}
@@ -453,6 +463,8 @@ func registerFlags(fs *flag.FlagSet, cfg *Config, includeKeywordsRaw, excludeKey
 	fs.DurationVar(&cfg.NotificationCooldown, "notification-cooldown", DefaultNotificationCooldown, "Cooldown одинаковых уведомлений")
 	fs.DurationVar(&cfg.ConversationDisplayTTL, "conversation-display-ttl", DefaultConversationDisplayTTL, "TTL display freshness targeted refresh")
 	fs.BoolVar(&cfg.BackgroundInboxRefresh, "background-inbox-refresh", false, "Периодически обновлять Inbox metadata в фоне")
+	fs.BoolVar(&cfg.CareerAgentDailySchedulerEnabled, "career-agent-daily-scheduler", false, "Запускать read-only daily Career Agent в dashboard scheduler")
+	fs.DurationVar(&cfg.CareerAgentDailyInterval, "career-agent-daily-interval", DefaultCareerAgentDailyInterval, "Интервал read-only daily Career Agent")
 	fs.DurationVar(&cfg.FollowUp.AfterApplicationWithoutReply, "follow-up-after-application", cfg.FollowUp.AfterApplicationWithoutReply, "Follow-up delay after application (e.g. 120h)")
 	fs.DurationVar(&cfg.FollowUp.AfterCandidateMessageWithoutReply, "follow-up-after-message", cfg.FollowUp.AfterCandidateMessageWithoutReply, "Follow-up delay after candidate message")
 	fs.DurationVar(&cfg.FollowUp.MinimumInterval, "follow-up-minimum-interval", cfg.FollowUp.MinimumInterval, "Minimum interval between confirmed follow-ups")

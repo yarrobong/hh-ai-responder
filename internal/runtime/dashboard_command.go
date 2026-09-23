@@ -420,6 +420,14 @@ func runDashboardCommand(args []string, cfg Config, out io.Writer) error {
 	if dailyErr != nil {
 		return dailyErr
 	}
+	if cfg.CareerAgentDailySchedulerEnabled {
+		schedulerRunner := DailyCareerAgentScheduler{Service: dashboard.Daily, Interval: cfg.CareerAgentDailyInterval, Logger: schedulerLogger{}}
+		go func() {
+			if schedulerErr := schedulerRunner.Run(ctx); schedulerErr != nil && !errors.Is(schedulerErr, context.Canceled) {
+				schedulerLogger{}.Error("Daily Career Agent scheduler stopped: %v", schedulerErr)
+			}
+		}()
+	}
 	dashboard.backgroundContext = ctx
 	dashboard.startBackgroundInboxRefresh(ctx, cfg.MonitorInterval)
 	address := net.JoinHostPort(opts.Host, strconv.Itoa(opts.Port))

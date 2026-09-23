@@ -133,6 +133,10 @@ dashboard`) содержит Career Agent Control Center, unified Attention Queu
 безопасную кнопку `Run daily`. Ни CLI, ни dashboard, ни scheduler не получают
 `HHWriteGateway`: approval и отправка остаются отдельным ручным flow.
 
+Периодический scheduler в dashboard default-off; для явного включения задайте
+`HH_CAREER_AGENT_DAILY_ENABLED=true` и при необходимости
+`HH_CAREER_AGENT_DAILY_INTERVAL=24h`.
+
 Подробности и PostgreSQL parity описаны в
 [`docs/OPERATIONAL_CAREER_AGENT.md`](docs/OPERATIONAL_CAREER_AGENT.md).
 

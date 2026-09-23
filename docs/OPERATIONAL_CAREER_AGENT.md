@@ -17,6 +17,8 @@ Phase 4 adds one read-only daily application service shared by the CLI, dashboar
 
 The dashboard exposes `GET /api/career/attention`, `GET /api/career/runs`, and a manual `POST /api/career/run` button. The button starts the same `DailyCareerAgentService` used by the CLI. Scheduler wiring uses `internal/platform/scheduler` and the same service; the scheduler does not implement a second workflow.
 
+The dashboard scheduler is default-off. Enable it with `HH_CAREER_AGENT_DAILY_ENABLED=true` and configure its completion-based interval with `HH_CAREER_AGENT_DAILY_INTERVAL=24h`.
+
 ## Safety boundary
 
 `DailyCareerAgentService` receives a workflow telemetry store and read-only vacancy/communication stages. It does not receive `HHWriteGateway`, approval stores, HH write clients, or send callbacks. Daily composition also forces shadow mode, `HH_DRY_RUN=true`, `HH_WRITE_ENABLED=false`, and disables legacy auto-apply, auto-chat, resume-touch, and job-search-status actions.

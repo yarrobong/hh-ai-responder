@@ -38,12 +38,13 @@ const (
 )
 
 const (
-	DefaultAIConnectTimeout       = 5 * time.Second
-	DefaultAITimeout              = 30 * time.Second
-	DefaultRequestInterval        = 1200 * time.Millisecond
-	DefaultConversationDisplayTTL = 60 * time.Second
-	DefaultMonitorInterval        = 15 * time.Minute
-	DefaultNotificationCooldown   = 15 * time.Minute
+	DefaultAIConnectTimeout         = 5 * time.Second
+	DefaultAITimeout                = 30 * time.Second
+	DefaultRequestInterval          = 1200 * time.Millisecond
+	DefaultConversationDisplayTTL   = 60 * time.Second
+	DefaultMonitorInterval          = 15 * time.Minute
+	DefaultCareerAgentDailyInterval = 24 * time.Hour
+	DefaultNotificationCooldown     = 15 * time.Minute
 )
 
 // DefaultFollowUpConfig is the primitive configuration counterpart of the
@@ -95,6 +96,7 @@ func defaults(workingDir string) Config {
 		MonitorInterval:              DefaultMonitorInterval,
 		NotificationCooldown:         DefaultNotificationCooldown,
 		ConversationDisplayTTL:       DefaultConversationDisplayTTL,
+		CareerAgentDailyInterval:     DefaultCareerAgentDailyInterval,
 		HHMaxWritesPerRun:            DefaultHHMaxWritesPerRun,
 		HHMaxWritesPerDay:            DefaultHHMaxWritesPerDay,
 	}
