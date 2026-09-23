@@ -8,6 +8,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"hh-ai-responder/internal/usecase/communicationworkitem"
+	"hh-ai-responder/internal/usecase/conversationpolicy"
 )
 
 // CareerWorkflowState is the small, user-facing state vocabulary for the
@@ -29,18 +32,19 @@ const (
 const dailyWorkflowPromptVersion = "stage24-v1"
 
 type CareerWorkflowProjection struct {
-	State                   CareerWorkflowState        `json:"state"`
-	Label                   string                     `json:"label"`
-	WhatIsHappening         string                     `json:"what_is_happening"`
-	WhatToDo                string                     `json:"what_to_do"`
-	AIProposal              string                     `json:"ai_proposal,omitempty"`
-	Priority                int                        `json:"priority"`
-	LastEmployerMessageHash string                     `json:"last_employer_message_hash,omitempty"`
-	DraftCacheKey           string                     `json:"draft_cache_key,omitempty"`
-	ExternalAction          *ExternalActionRequirement `json:"external_action,omitempty"`
-	Waiting                 *WorkflowWaitingDetails    `json:"waiting,omitempty"`
-	FollowUp                *WorkflowFollowUpDetails   `json:"follow_up,omitempty"`
-	Diagnostics             []string                   `json:"diagnostics,omitempty"`
+	State                   CareerWorkflowState              `json:"state"`
+	Label                   string                           `json:"label"`
+	WhatIsHappening         string                           `json:"what_is_happening"`
+	WhatToDo                string                           `json:"what_to_do"`
+	AIProposal              string                           `json:"ai_proposal,omitempty"`
+	Priority                int                              `json:"priority"`
+	LastEmployerMessageHash string                           `json:"last_employer_message_hash,omitempty"`
+	DraftCacheKey           string                           `json:"draft_cache_key,omitempty"`
+	ExternalAction          *ExternalActionRequirement       `json:"external_action,omitempty"`
+	Waiting                 *WorkflowWaitingDetails          `json:"waiting,omitempty"`
+	FollowUp                *WorkflowFollowUpDetails         `json:"follow_up,omitempty"`
+	CommunicationItems      []communicationworkitem.WorkItem `json:"communication_items,omitempty"`
+	Diagnostics             []string                         `json:"diagnostics,omitempty"`
 }
 
 type WorkflowWaitingDetails struct {
@@ -204,12 +208,27 @@ func userActionInstruction(text string) string {
 }
 
 func classifyCareerWorkflow(a JobApplication, c EmployerConversation, pending []CandidateClarificationRequest, now time.Time, followUp *FollowUpCandidate, resolver *CandidateContextResolver) CareerWorkflowProjection {
-	projection := CareerWorkflowProjection{Label: "Требует проверки", Diagnostics: []string{}}
+	projection := CareerWorkflowProjection{Label: "Требует проверки", Diagnostics: []string{}, CommunicationItems: []communicationworkitem.WorkItem{}}
 	latest := latestDeliveredMessage(c)
 	messageHash := latestEmployerMessageHash(c)
 	projection.LastEmployerMessageHash = messageHash
 	if now.IsZero() {
 		now = time.Now().UTC()
+	}
+	if latest != nil && latest.Sender == ConversationSenderEmployer {
+		classification := conversationpolicy.ClassifyMessage(latest.Text)
+		var followUpDue *time.Time
+		if followUp != nil && followUp.Status == FollowUpEligible {
+			followUpDue = followUp.EligibleAt
+		}
+		projection.CommunicationItems = communicationworkitem.Project(communicationworkitem.Input{
+			ConversationID: c.ID, ApplicationID: firstNonEmpty(c.ApplicationID, a.ID), VacancyID: c.VacancyID,
+			MessageID: latest.ID, MessageText: latest.Text, Classification: classification, FollowUpDueAt: followUpDue, Now: now,
+		})
+	} else if followUp != nil && followUp.Status == FollowUpEligible {
+		projection.CommunicationItems = communicationworkitem.Project(communicationworkitem.Input{
+			ConversationID: c.ID, ApplicationID: firstNonEmpty(c.ApplicationID, a.ID), VacancyID: c.VacancyID, FollowUpDueAt: followUp.EligibleAt, Now: now,
+		})
 	}
 
 	state := (ConversationStateResolver{}).Resolve(a, c, nil, false, nil, now)

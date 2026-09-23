@@ -75,7 +75,7 @@ func ClassifyMessage(text string) MessageClassification {
 	if containsAny(lower, "когда готовы выйти", "когда сможете приступить", "дата выхода", "дата начала", "available to start", "when can you start") {
 		return classification(MessageTypeAdministrative, RiskHigh, true, true, "availability or start date")
 	}
-	if containsAny(lower, "тестовое", "тестовое задание", "тест assignment", "take-home", "questionnaire", "пройдите тест") {
+	if containsAny(lower, "тестовое", "тестовое задание", "тест assignment", "take-home", "questionnaire", "пройдите тест", "выполните тест") {
 		return classification(MessageTypeTestAssignment, RiskHigh, false, true, "test assignment")
 	}
 	if containsAny(lower, "оффер", "offer", "предлагаем работу", "готовы сделать вам") {
