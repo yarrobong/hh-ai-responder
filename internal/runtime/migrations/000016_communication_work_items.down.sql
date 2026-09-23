@@ -1,5 +1,6 @@
 DROP INDEX IF EXISTS agent_run_items_conversation_idx;
 DROP INDEX IF EXISTS agent_run_items_run_target_key;
+DELETE FROM agent_run_items WHERE target_type <> 'vacancy';
 ALTER TABLE agent_run_items
     DROP COLUMN IF EXISTS conversation_id,
     DROP COLUMN IF EXISTS application_id,
