@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type orchestratorTestAI struct {
@@ -58,6 +59,54 @@ func TestAIReplyOrchestratorConfirmedDjangoCreatesDraftOnly(t *testing.T) {
 	}
 	if strings.Contains(ai.user, "sources") || strings.Contains(ai.user, "confirmed_at") {
 		t.Fatal("private knowledge metadata leaked into AI context")
+	}
+}
+
+func TestAIDraftStoreUpsertByInputFingerprintIsIdempotentAcrossReload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "drafts.json")
+	store := NewAIDraftStore(path)
+	if err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+	input := AIDraft{
+		Type:             AIDraftEmployerReply,
+		ConversationID:   "conversation-1",
+		InputFingerprint: "fingerprint-1",
+		Text:             "Здравствуйте!",
+		DecisionReason:   "fixture",
+		CreatedAt:        time.Date(2026, 9, 24, 8, 0, 0, 0, time.UTC),
+		UpdatedAt:        time.Date(2026, 9, 24, 8, 0, 0, 0, time.UTC),
+	}
+	first, created, err := store.UpsertByInputFingerprint(input)
+	if err != nil || !created {
+		t.Fatalf("first upsert: draft=%+v created=%v err=%v", first, created, err)
+	}
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded := NewAIDraftStore(path)
+	if err := reloaded.Load(); err != nil {
+		t.Fatal(err)
+	}
+	second, created, err := reloaded.UpsertByInputFingerprint(AIDraft{
+		Type:             AIDraftEmployerReply,
+		ConversationID:   input.ConversationID,
+		InputFingerprint: input.InputFingerprint,
+		Text:             "Другой текст не должен породить второй draft",
+		DecisionReason:   input.DecisionReason,
+		CreatedAt:        input.CreatedAt,
+		UpdatedAt:        input.UpdatedAt,
+	})
+	if err != nil || created {
+		t.Fatalf("second upsert: draft=%+v created=%v err=%v", second, created, err)
+	}
+	if second.ID != first.ID || second.Text != first.Text {
+		t.Fatalf("idempotent upsert replaced durable draft: first=%+v second=%+v", first, second)
+	}
+	values, err := reloaded.List()
+	if err != nil || len(values) != 1 {
+		t.Fatalf("expected one durable draft, values=%+v err=%v", values, err)
 	}
 }
 

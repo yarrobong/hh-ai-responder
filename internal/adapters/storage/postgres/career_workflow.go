@@ -77,6 +77,38 @@ func (r *CareerWorkflowRepository) StartRun(ctx context.Context, run careeragent
 	return nil
 }
 
+func (r *CareerWorkflowRepository) AcquireRun(ctx context.Context, run careeragent.AgentRun) (bool, error) {
+	if err := r.requireDB(); err != nil {
+		return false, err
+	}
+	if run.Status != careeragent.AgentRunStatusRunning {
+		return false, errors.New("career workflow acquire requires a running run")
+	}
+	if err := run.Validate(); err != nil {
+		return false, err
+	}
+	command, err := r.db.Exec(postgresContext(ctx), `
+		INSERT INTO agent_runs
+		(id, run_type, stage, status, started_at, result_code, summary, error_code, error_summary, confidence, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		ON CONFLICT (id) DO NOTHING`,
+		run.ID, run.RunType, run.Stage, run.Status, run.StartedAt, workflowNullableString(string(run.ResultCode)), workflowNullableString(run.Summary), workflowNullableString(run.ErrorCode), workflowNullableString(run.ErrorSummary), workflowNullableFloat(run.Confidence), run.CreatedAt)
+	if err != nil {
+		return false, fmt.Errorf("acquire career agent run: %w", err)
+	}
+	if command.RowsAffected() == 1 {
+		return true, nil
+	}
+	existing, err := r.GetRun(ctx, run.ID)
+	if err != nil {
+		return false, err
+	}
+	if existing.Stage != run.Stage || existing.RunType != run.RunType || !existing.StartedAt.Equal(run.StartedAt) {
+		return false, ErrWorkflowConflict(run.ID)
+	}
+	return false, nil
+}
+
 func (r *CareerWorkflowRepository) FinishRun(ctx context.Context, run careeragent.AgentRun) error {
 	if err := r.requireDB(); err != nil {
 		return err
@@ -244,6 +276,56 @@ func (r *CareerWorkflowRepository) ListRuns(ctx context.Context, query careerage
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate career agent runs: %w", err)
+	}
+	return result, nil
+}
+
+func (r *CareerWorkflowRepository) ListRunItems(ctx context.Context, runID string, limit int) ([]careeragent.AgentRunItem, error) {
+	if err := r.requireDB(); err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 1000 {
+		limit = 1000
+	}
+	statement := `SELECT id, run_id, target_type, target_id, vacancy_id, application_id, conversation_id, stage, status, decision_code, confidence, evidence_json, error_code, created_at FROM agent_run_items`
+	args := []any{}
+	if strings.TrimSpace(runID) != "" {
+		statement += " WHERE run_id=$1"
+		args = append(args, runID)
+	}
+	statement += fmt.Sprintf(" ORDER BY created_at DESC, target_type, target_id LIMIT $%d", len(args)+1)
+	args = append(args, limit)
+	rows, err := r.db.Query(postgresContext(ctx), statement, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list career agent run items: %w", err)
+	}
+	defer rows.Close()
+	result := []careeragent.AgentRunItem{}
+	for rows.Next() {
+		var item careeragent.AgentRunItem
+		var vacancyID pgtype.Int4
+		var applicationID, conversationID, decisionCode, errorCode pgtype.Text
+		var confidence pgtype.Float8
+		var evidence []byte
+		if err := rows.Scan(&item.ID, &item.RunID, &item.TargetType, &item.TargetID, &vacancyID, &applicationID, &conversationID, &item.Stage, &item.Status, &decisionCode, &confidence, &evidence, &errorCode, &item.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan career agent run item: %w", err)
+		}
+		if vacancyID.Valid {
+			item.VacancyID = int(vacancyID.Int32)
+		}
+		item.ApplicationID, item.ConversationID, item.DecisionCode, item.ErrorCode = workflowNullableText(applicationID), workflowNullableText(conversationID), workflowNullableText(decisionCode), workflowNullableText(errorCode)
+		if confidence.Valid {
+			value := confidence.Float64
+			item.Confidence = &value
+		}
+		item.Evidence = workflowCloneJSON(evidence)
+		if err := item.Validate(); err != nil {
+			return nil, fmt.Errorf("validate stored career agent run item: %w", err)
+		}
+		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate career agent run items: %w", err)
 	}
 	return result, nil
 }

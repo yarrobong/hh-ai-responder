@@ -14,6 +14,7 @@ import (
 
 	"hh-ai-responder/internal/platform"
 	llmport "hh-ai-responder/internal/ports/llm"
+	"hh-ai-responder/internal/usecase/aidraft"
 	applicationanswer "hh-ai-responder/internal/usecase/applicationanswer"
 	coverletter "hh-ai-responder/internal/usecase/coverletter"
 	employerreply "hh-ai-responder/internal/usecase/employerreply"
@@ -32,76 +33,24 @@ type aiModelNamer interface {
 	ModelName() string
 }
 
-type AIDraftType string
+type AIDraftType = aidraft.Type
+type AIDraftStatus = aidraft.Status
+type AIDraftSource = aidraft.Source
+type AIDraft = aidraft.Draft
 
 const (
-	AIDraftFollowUp          AIDraftType = "follow_up"
-	AIDraftEmployerReply     AIDraftType = "employer_reply"
-	AIDraftCoverLetter       AIDraftType = "cover_letter"
-	AIDraftApplicationAnswer AIDraftType = "application_answer"
+	AIDraftFollowUp          = aidraft.TypeFollowUp
+	AIDraftEmployerReply     = aidraft.TypeEmployerReply
+	AIDraftCoverLetter       = aidraft.TypeCoverLetter
+	AIDraftApplicationAnswer = aidraft.TypeApplicationAnswer
+	AIDraftGenerated         = aidraft.StatusGenerated
+	AIDraftApproved          = aidraft.StatusApproved
+	AIDraftRejected          = aidraft.StatusRejected
+	AIDraftSuperseded        = aidraft.StatusSuperseded
+	AIDraftSent              = aidraft.StatusSent
+	AIDraftSourceAI          = aidraft.SourceAI
+	AIDraftSourceUserEdited  = aidraft.SourceUserEdited
 )
-
-type AIDraftStatus string
-
-const (
-	AIDraftGenerated  AIDraftStatus = "generated"
-	AIDraftApproved   AIDraftStatus = "approved"
-	AIDraftRejected   AIDraftStatus = "rejected"
-	AIDraftSuperseded AIDraftStatus = "superseded"
-	AIDraftSent       AIDraftStatus = "sent" // retained for a future explicit send flow
-)
-
-type AIDraftSource string
-
-const (
-	AIDraftSourceAI         AIDraftSource = "ai"
-	AIDraftSourceUserEdited AIDraftSource = "user_edited"
-)
-
-type AIDraft struct {
-	InputFingerprint      string        `json:"input_fingerprint,omitempty"`
-	PromptVersion         string        `json:"prompt_version,omitempty"`
-	EmployerMessageHash   string        `json:"employer_message_hash,omitempty"`
-	RelevantKnowledgeHash string        `json:"relevant_knowledge_hash,omitempty"`
-	ID                    string        `json:"id"`
-	Type                  AIDraftType   `json:"type"`
-	ApplicationID         string        `json:"application_id,omitempty"`
-	ConversationID        string        `json:"conversation_id,omitempty"`
-	InputMessageID        string        `json:"input_message_id,omitempty"`
-	Text                  string        `json:"text"`
-	OriginalText          string        `json:"original_text,omitempty"`
-	EditedText            string        `json:"edited_text,omitempty"`
-	Source                AIDraftSource `json:"source,omitempty"`
-	Status                AIDraftStatus `json:"status"`
-	Model                 string        `json:"model,omitempty"`
-	CreatedAt             time.Time     `json:"created_at"`
-	UpdatedAt             time.Time     `json:"updated_at"`
-	DecisionReason        string        `json:"decision_reason"`
-	UsedFacts             []string      `json:"used_facts"`
-}
-
-func (d AIDraft) validate() error {
-	if strings.TrimSpace(d.ID) == "" || strings.TrimSpace(d.Text) == "" || d.CreatedAt.IsZero() || d.UpdatedAt.Before(d.CreatedAt) {
-		return errors.New("AI draft requires identity, text and ordered timestamps")
-	}
-	switch d.Type {
-	case AIDraftFollowUp, AIDraftEmployerReply, AIDraftCoverLetter, AIDraftApplicationAnswer:
-	default:
-		return errors.New("invalid AI draft type")
-	}
-	switch d.Status {
-	case AIDraftGenerated, AIDraftApproved, AIDraftRejected, AIDraftSuperseded, AIDraftSent:
-	default:
-		return errors.New("invalid AI draft status")
-	}
-	if strings.TrimSpace(d.DecisionReason) == "" {
-		return errors.New("AI draft requires a decision reason")
-	}
-	if d.Source != "" && d.Source != AIDraftSourceAI && d.Source != AIDraftSourceUserEdited {
-		return errors.New("invalid AI draft source")
-	}
-	return nil
-}
 
 type aiDraftStoreFile struct {
 	Version int       `json:"version"`
@@ -111,15 +60,31 @@ type aiDraftStoreFile struct {
 // AIDraftStore is local persistence only. It has no method that sends or
 // approves anything, and Save remains explicit like the other project stores.
 type AIDraftStore struct {
-	path   string
-	drafts []AIDraft
+	path    string
+	drafts  []AIDraft
+	backend aidraft.Backend
 }
 
 func NewAIDraftStore(path string) *AIDraftStore {
 	return &AIDraftStore{path: path, drafts: []AIDraft{}}
 }
 
+func NewAIDraftStoreWithBackend(backend aidraft.Backend) *AIDraftStore {
+	return &AIDraftStore{drafts: []AIDraft{}, backend: backend}
+}
+
 func (s *AIDraftStore) Load() error {
+	if s != nil && s.backend != nil {
+		values, err := s.backend.Load(stdcontext.Background())
+		if err != nil {
+			return err
+		}
+		if err := validateAIDrafts(values); err != nil {
+			return err
+		}
+		s.drafts = values
+		return nil
+	}
 	if s == nil || strings.TrimSpace(s.path) == "" {
 		return errors.New("AI draft store requires a path")
 	}
@@ -147,7 +112,7 @@ func (s *AIDraftStore) Load() error {
 func validateAIDrafts(values []AIDraft) error {
 	ids := map[string]bool{}
 	for _, draft := range values {
-		if err := draft.validate(); err != nil {
+		if err := draft.Validate(); err != nil {
 			return err
 		}
 		if ids[draft.ID] {
@@ -159,6 +124,9 @@ func validateAIDrafts(values []AIDraft) error {
 }
 
 func (s *AIDraftStore) Save() error {
+	if s != nil && s.backend != nil {
+		return s.backend.Save(stdcontext.Background(), s.drafts)
+	}
 	if s == nil || strings.TrimSpace(s.path) == "" {
 		return errors.New("AI draft store requires a path")
 	}
@@ -177,6 +145,13 @@ func (s *AIDraftStore) Save() error {
 func (s *AIDraftStore) Create(draft AIDraft) (AIDraft, error) {
 	if s == nil {
 		return AIDraft{}, errors.New("AI draft store is nil")
+	}
+	if s.backend != nil {
+		created, err := s.backend.Create(stdcontext.Background(), draft)
+		if err == nil {
+			s.drafts = appendDraftCache(s.drafts, created)
+		}
+		return created, err
 	}
 	if draft.ID == "" {
 		var err error
@@ -207,7 +182,7 @@ func (s *AIDraftStore) Create(draft AIDraft) (AIDraft, error) {
 	if draft.UsedFacts == nil {
 		draft.UsedFacts = []string{}
 	}
-	if err := draft.validate(); err != nil {
+	if err := draft.Validate(); err != nil {
 		return AIDraft{}, err
 	}
 	for _, old := range s.drafts {
@@ -219,7 +194,36 @@ func (s *AIDraftStore) Create(draft AIDraft) (AIDraft, error) {
 	return cloneKnowledge(draft)
 }
 
+// UpsertByInputFingerprint preserves the first durable draft for one logical
+// workflow input. Repeated daily runs therefore reuse their successful draft
+// result instead of appending another equivalent record.
+func (s *AIDraftStore) UpsertByInputFingerprint(draft AIDraft) (AIDraft, bool, error) {
+	if s == nil {
+		return AIDraft{}, false, errors.New("AI draft store is nil")
+	}
+	if s.backend != nil {
+		value, created, err := s.backend.UpsertByInputFingerprint(stdcontext.Background(), draft)
+		if err == nil {
+			s.drafts = appendDraftCache(s.drafts, value)
+		}
+		return value, created, err
+	}
+	if fingerprint := strings.TrimSpace(draft.InputFingerprint); fingerprint != "" {
+		for _, existing := range s.drafts {
+			if existing.InputFingerprint == fingerprint {
+				clone, err := cloneKnowledge(existing)
+				return clone, false, err
+			}
+		}
+	}
+	created, err := s.Create(draft)
+	return created, err == nil, err
+}
+
 func (s *AIDraftStore) Get(id string) (AIDraft, error) {
+	if s != nil && s.backend != nil {
+		return s.backend.Get(stdcontext.Background(), id)
+	}
 	if s != nil {
 		for _, draft := range s.drafts {
 			if draft.ID == id {
@@ -234,12 +238,31 @@ func (s *AIDraftStore) List() ([]AIDraft, error) {
 	if s == nil {
 		return nil, errors.New("AI draft store is nil")
 	}
+	if s.backend != nil {
+		values, err := s.backend.List(stdcontext.Background())
+		if err != nil {
+			return nil, err
+		}
+		s.drafts = values
+	}
 	return cloneKnowledge(s.drafts)
 }
 
 // SetStatus supports the future review UI. Even the sent enum only changes a
 // local draft record; this store has no transport or HH client dependency.
 func (s *AIDraftStore) SetStatus(id string, status AIDraftStatus) error {
+	if s != nil && s.backend != nil {
+		if err := s.backend.SetStatus(stdcontext.Background(), id, status); err != nil {
+			return err
+		}
+		for i := range s.drafts {
+			if s.drafts[i].ID == id {
+				s.drafts[i].Status = status
+				s.drafts[i].UpdatedAt = time.Now().UTC()
+			}
+		}
+		return nil
+	}
 	draft, err := s.Get(id)
 	if err != nil {
 		return err
@@ -270,6 +293,19 @@ func (s *AIDraftStore) updateText(id, text string, source AIDraftSource) error {
 	if source != AIDraftSourceAI && source != AIDraftSourceUserEdited {
 		return errors.New("invalid AI draft source")
 	}
+	if s.backend != nil {
+		if err := s.backend.UpdateText(stdcontext.Background(), id, text, source); err != nil {
+			return err
+		}
+		for i := range s.drafts {
+			if s.drafts[i].ID == id {
+				s.drafts[i].Text = text
+				s.drafts[i].Source = source
+				s.drafts[i].UpdatedAt = time.Now().UTC()
+			}
+		}
+		return nil
+	}
 	for i := range s.drafts {
 		if s.drafts[i].ID != id {
 			continue
@@ -287,13 +323,23 @@ func (s *AIDraftStore) updateText(id, text string, source AIDraftSource) error {
 		if updated.UpdatedAt.Before(updated.CreatedAt) {
 			updated.UpdatedAt = updated.CreatedAt
 		}
-		if err := updated.validate(); err != nil {
+		if err := updated.Validate(); err != nil {
 			return err
 		}
 		s.drafts[i] = updated
 		return nil
 	}
 	return errors.New("AI draft not found")
+}
+
+func appendDraftCache(values []AIDraft, value AIDraft) []AIDraft {
+	for i := range values {
+		if values[i].ID == value.ID {
+			values[i] = value
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 type AIReplyOrchestrator struct {

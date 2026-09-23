@@ -2,6 +2,7 @@ package jsonstorage
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -25,6 +26,7 @@ type clarificationStoreFile struct {
 type CandidateClarificationStore struct {
 	path           string
 	clarifications []candidateacquisition.CandidateClarificationRequest
+	backend        ports.CandidateClarificationBackend
 }
 
 // Path returns the configured file path for diagnostics and reload planners.
@@ -37,6 +39,12 @@ func (s *CandidateClarificationStore) Path() string {
 
 func NewCandidateClarificationStore(path string) *CandidateClarificationStore {
 	return &CandidateClarificationStore{path: path, clarifications: []candidateacquisition.CandidateClarificationRequest{}}
+}
+
+// NewCandidateClarificationStoreWithBackend preserves the runtime façade while
+// selecting a durable backend at the composition root.
+func NewCandidateClarificationStoreWithBackend(backend ports.CandidateClarificationBackend) *CandidateClarificationStore {
+	return &CandidateClarificationStore{clarifications: []candidateacquisition.CandidateClarificationRequest{}, backend: backend}
 }
 
 func NewClarificationStore(path string) *CandidateClarificationStore {
@@ -72,6 +80,17 @@ func containsClarificationSecret(raw []byte) bool {
 }
 
 func (s *CandidateClarificationStore) Load() error {
+	if s != nil && s.backend != nil {
+		values, err := s.backend.Load(context.Background())
+		if err != nil {
+			return err
+		}
+		if err := validateClarifications(values); err != nil {
+			return err
+		}
+		s.clarifications = values
+		return nil
+	}
 	if s == nil || strings.TrimSpace(s.path) == "" {
 		return errors.New("clarification store requires a path")
 	}
@@ -111,6 +130,9 @@ func validateClarifications(values []candidateacquisition.CandidateClarification
 }
 
 func (s *CandidateClarificationStore) Save() error {
+	if s != nil && s.backend != nil {
+		return s.backend.Save(context.Background(), s.clarifications)
+	}
 	if s == nil || strings.TrimSpace(s.path) == "" {
 		return errors.New("clarification store requires a path")
 	}
@@ -129,6 +151,13 @@ func (s *CandidateClarificationStore) Save() error {
 func (s *CandidateClarificationStore) Create(value candidateacquisition.CandidateClarificationRequest) (candidateacquisition.CandidateClarificationRequest, error) {
 	if s == nil {
 		return candidateacquisition.CandidateClarificationRequest{}, errors.New("clarification store is nil")
+	}
+	if s.backend != nil {
+		created, err := s.backend.Create(context.Background(), value)
+		if err == nil {
+			s.clarifications = appendClarificationCache(s.clarifications, created)
+		}
+		return created, err
 	}
 	if value.ID == "" {
 		var err error
@@ -155,7 +184,36 @@ func (s *CandidateClarificationStore) Create(value candidateacquisition.Candidat
 	return Clone(value)
 }
 
+// UpsertByIdentity preserves the first durable clarification for one logical
+// knowledge gap or conversation relation. The input is not merged on replay:
+// the original question remains the audit record and the caller can resolve
+// or reopen it explicitly.
+func (s *CandidateClarificationStore) UpsertByIdentity(value candidateacquisition.CandidateClarificationRequest) (candidateacquisition.CandidateClarificationRequest, bool, error) {
+	if s == nil {
+		return candidateacquisition.CandidateClarificationRequest{}, false, errors.New("clarification store is nil")
+	}
+	if s.backend != nil {
+		created, inserted, err := s.backend.UpsertByIdentity(context.Background(), value)
+		if err == nil {
+			s.clarifications = appendClarificationCache(s.clarifications, created)
+		}
+		return created, inserted, err
+	}
+	identity := candidateacquisition.ClarificationIdentity(value)
+	for _, existing := range s.clarifications {
+		if candidateacquisition.ClarificationIdentity(existing) == identity {
+			clone, err := Clone(existing)
+			return clone, false, err
+		}
+	}
+	created, err := s.Create(value)
+	return created, err == nil, err
+}
+
 func (s *CandidateClarificationStore) Get(id string) (candidateacquisition.CandidateClarificationRequest, error) {
+	if s != nil && s.backend != nil {
+		return s.backend.Get(context.Background(), id)
+	}
 	if s != nil {
 		for _, value := range s.clarifications {
 			if value.ID == id {
@@ -170,10 +228,20 @@ func (s *CandidateClarificationStore) List() ([]candidateacquisition.CandidateCl
 	if s == nil {
 		return nil, errors.New("clarification store is nil")
 	}
+	if s.backend != nil {
+		values, err := s.backend.List(context.Background())
+		if err != nil {
+			return nil, err
+		}
+		s.clarifications = values
+	}
 	return Clone(s.clarifications)
 }
 
 func (s *CandidateClarificationStore) SetStatus(id string, status candidateacquisition.CandidateClarificationStatus) error {
+	if s != nil && s.backend != nil {
+		return s.backend.SetStatus(context.Background(), id, status)
+	}
 	value, err := s.Get(id)
 	if err != nil {
 		return err
@@ -192,6 +260,9 @@ func (s *CandidateClarificationStore) SetStatus(id string, status candidateacqui
 }
 
 func (s *CandidateClarificationStore) RecordAnswer(id string, answer candidateacquisition.CandidateAnswer) error {
+	if s != nil && s.backend != nil {
+		return s.backend.RecordAnswer(context.Background(), id, answer)
+	}
 	if strings.TrimSpace(answer.Raw) == "" {
 		return errors.New("candidate answer is empty")
 	}
@@ -212,6 +283,9 @@ func (s *CandidateClarificationStore) RecordAnswer(id string, answer candidateac
 
 // RecordAnswerEvidence preserves original text without resolving the request.
 func (s *CandidateClarificationStore) RecordAnswerEvidence(id string, answer candidateacquisition.CandidateAnswer) error {
+	if s != nil && s.backend != nil {
+		return s.backend.RecordAnswerEvidence(context.Background(), id, answer)
+	}
 	if strings.TrimSpace(answer.Raw) == "" {
 		return errors.New("candidate answer is empty")
 	}
@@ -224,6 +298,9 @@ func (s *CandidateClarificationStore) RecordAnswerEvidence(id string, answer can
 }
 
 func (s *CandidateClarificationStore) SetProposalIDs(id string, ids []string) error {
+	if s != nil && s.backend != nil {
+		return s.backend.SetProposalIDs(context.Background(), id, ids)
+	}
 	value, err := s.Get(id)
 	if err != nil {
 		return err
@@ -236,6 +313,9 @@ func (s *CandidateClarificationStore) SetProposalIDs(id string, ids []string) er
 }
 
 func (s *CandidateClarificationStore) MarkResolved(id string, status candidateacquisition.CandidateClarificationStatus, reason string) error {
+	if s != nil && s.backend != nil {
+		return s.backend.MarkResolved(context.Background(), id, status, reason)
+	}
 	value, err := s.Get(id)
 	if err != nil {
 		return err
@@ -251,6 +331,9 @@ func (s *CandidateClarificationStore) MarkResolved(id string, status candidateac
 // Reopen returns a rejected interpretation to the candidate-input stage while
 // retaining the prior answer and proposal IDs as audit history.
 func (s *CandidateClarificationStore) Reopen(id, reason string) error {
+	if s != nil && s.backend != nil {
+		return s.backend.Reopen(context.Background(), id, reason)
+	}
 	value, err := s.Get(id)
 	if err != nil {
 		return err
@@ -265,7 +348,20 @@ func (s *CandidateClarificationStore) Reopen(id, reason string) error {
 // Replace updates one already-present persisted value. Policy callers decide
 // whether the new lifecycle value is allowed; this method only stores it.
 func (s *CandidateClarificationStore) Replace(value candidateacquisition.CandidateClarificationRequest) error {
+	if s != nil && s.backend != nil {
+		return s.backend.Replace(context.Background(), value)
+	}
 	return s.replace(value)
+}
+
+func appendClarificationCache(values []candidateacquisition.CandidateClarificationRequest, value candidateacquisition.CandidateClarificationRequest) []candidateacquisition.CandidateClarificationRequest {
+	for i := range values {
+		if values[i].ID == value.ID {
+			values[i] = value
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 func (s *CandidateClarificationStore) replace(value candidateacquisition.CandidateClarificationRequest) error {
