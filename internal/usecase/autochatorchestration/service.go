@@ -212,6 +212,9 @@ func (s *Service) Run(ctx context.Context, _ Input) (Result, error) {
 		if reviewReason == "" && s.opts.DurableAttempts && !s.opts.WriteEnabled {
 			reviewReason = "HH writes disabled"
 		}
+		if reviewReason == "" && s.opts.Mode == "auto" && !s.opts.AllowAutomaticReplies {
+			reviewReason = "explicit employer-reply approval required"
+		}
 		s.logDebug("Reply prepared for chat #%d (review=%t)", chat.ID, reviewReason != "")
 		if reviewReason != "" {
 			s.logInfo("REVIEW: would reply in chat %d (%s): %s", chat.ID, reviewReason, proposal.Text)

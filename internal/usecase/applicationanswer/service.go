@@ -72,10 +72,7 @@ func (s *Service) Prepare(ctx context.Context, input Input) (Result, error) {
 		return Result{}, err
 	}
 	if decision.Action == employerreply.ActionDraftReply {
-		if err := employerreply.ValidateUsedFacts(decision.UsedFacts, input.CandidateContext); err != nil {
-			return manualReviewResult("черновик содержит неподтверждённые использованные факты", err), nil
-		}
-		if err := employerreply.ValidateDraft(decision.Draft, input.CandidateContext); err != nil {
+		if err := employerreply.ValidateGeneratedReply(decision, input.CandidateContext); err != nil {
 			return manualReviewResult("черновик не прошёл проверку фактов", err), nil
 		}
 		if err := validateApplicationDraft(decision.Draft, input.CandidateContext); err != nil {

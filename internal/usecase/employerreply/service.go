@@ -111,11 +111,8 @@ func (s *Service) Prepare(ctx context.Context, input Input) (Decision, error) {
 	}
 	decision.ReplyRequirement = requirement
 	decision.ConversationTopicsUsed = uniqueStrings(append(decision.ConversationTopicsUsed, value.ReplyGuidance.AlreadyDiscussedTopics...))
-	if decision.Action == ActionDraftReply {
-		if err := ValidateUsedFacts(decision.UsedFacts, value.CandidateContext); err != nil {
-			return manualReviewDecision("черновик содержит неподтверждённые использованные факты", []string{err.Error()}, value.ReplyGuidance.AlreadyDiscussedTopics, requirement), nil
-		}
-		if err := ValidateDraft(decision.Draft, value.CandidateContext); err != nil {
+	if decision.Action == ActionDraftReply || decision.Action == ActionCourtesyReply {
+		if err := ValidateGeneratedReply(decision, value.CandidateContext); err != nil {
 			return manualReviewDecision("черновик не прошёл проверку фактов", []string{err.Error()}, value.ReplyGuidance.AlreadyDiscussedTopics, requirement), nil
 		}
 	}

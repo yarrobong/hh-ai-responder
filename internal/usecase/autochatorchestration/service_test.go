@@ -99,11 +99,25 @@ func runTestService(source *sourceFake, preparer *preparerFake, actions *actionF
 	if options.Now == nil {
 		options.Now = func() time.Time { return time.Unix(2, 0).UTC() }
 	}
+	options.AllowAutomaticReplies = true
 	result, err := NewService(Dependencies{Chats: source, ReplyPreparer: preparer, Actions: actions, Audit: audit, Logger: loggerFake{}}, options).Run(context.Background(), Input{})
 	if err != nil {
 		panic(err)
 	}
 	return result
+}
+
+func TestRunAutoModeRequiresExplicitReplyApproval(t *testing.T) {
+	source := &sourceFake{chats: []Chat{testChat(99)}, histories: map[int64]History{99: testHistory()}}
+	preparer := &preparerFake{proposals: map[int64]autochatreply.ProposedResult{99: {Outcome: autochatreply.OutcomeReply, Text: "Да"}}}
+	actions := &actionFake{}
+	result, err := NewService(Dependencies{Chats: source, ReplyPreparer: preparer, Actions: actions}, Options{Mode: "auto"}).Run(context.Background(), Input{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(actions.sendCalls) != 0 || result.ManualReview != 1 || result.Items[0].Outcome != ItemManualReview {
+		t.Fatalf("automatic employer reply was not blocked: result=%+v sends=%v", result, actions.sendCalls)
+	}
 }
 
 func TestRunReplyExecutesOneSendAndNoLeave(t *testing.T) {

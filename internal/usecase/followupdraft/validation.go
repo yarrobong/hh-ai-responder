@@ -21,22 +21,13 @@ func validateGeneratedDraft(value employerreply.Decision, context employerreply.
 	if len(value.Warnings) > 0 {
 		return errors.New("generated follow-up contains warnings")
 	}
-	if err := employerreply.ValidateUsedFacts(value.UsedFacts, context.CandidateContext); err != nil {
-		return err
-	}
-	if err := employerreply.ValidateDraft(value.Draft, context.CandidateContext); err != nil {
-		return err
-	}
-	return nil
+	return employerreply.ValidateGeneratedReply(value, context.CandidateContext)
 }
 
 // ValidateSavedDraft rechecks a previously generated follow-up against the
 // current safe Candidate context before the root workflow reuses it.
 func ValidateSavedDraft(text string, usedFacts []string, context employerreply.Context) error {
-	if err := employerreply.ValidateUsedFacts(usedFacts, context.CandidateContext); err != nil {
-		return err
-	}
-	return employerreply.ValidateDraft(text, context.CandidateContext)
+	return employerreply.ValidateGeneratedReply(employerreply.Decision{Action: employerreply.ActionDraftReply, Draft: text, UsedFacts: usedFacts}, context.CandidateContext)
 }
 
 func manualReview(reason string, warnings []string, topics []string) employerreply.Decision {

@@ -87,6 +87,23 @@ func TestServiceUsesTypedProviderAndPreservesPromptInvariants(t *testing.T) {
 	}
 }
 
+func TestServiceValidatesCourtesyReplyLikeNormalDraft(t *testing.T) {
+	raw := `{"action":"courtesy_reply_optional","draft":"У меня есть Kubernetes production опыт.","reply_requirement":"REPLY_OPTIONAL","reason":"courtesy","confidence":1,"used_facts":["Kubernetes production"],"missing_information":[],"forbidden_claims_checked":true,"conversation_topics_used":[],"warnings":[]}`
+	if _, parseErr := ParseDecision(raw); parseErr != nil {
+		t.Fatalf("fixture parse failed: %v", parseErr)
+	}
+	fake := &completionFake{responses: []string{raw}}
+	input := replyInput(djangoContext())
+	input.Context.CandidateContext.ForbiddenClaims = []string{"Kubernetes production"}
+	decision, err := NewService(Dependencies{Completion: fake}, Options{}).Prepare(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Action != ActionManualReview {
+		t.Fatalf("courtesy draft bypassed validation: %+v", decision)
+	}
+}
+
 func TestServiceRetriesOnlyMalformedBusinessOutput(t *testing.T) {
 	fake := &completionFake{responses: []string{"not json", validDecision(ActionDraftReply, "Да, использовал Django.")}}
 	service := NewService(Dependencies{Completion: fake}, Options{Attempts: 2})

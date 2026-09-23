@@ -67,7 +67,7 @@ func ValidateDecision(value Decision) error {
 func ValidateUsedFacts(used []string, value candidatecontext.CandidateContext) error {
 	allowedValues := append([]string{}, value.AllowedFacts...)
 	allowedValues = append(allowedValues, value.RelevantSkills...)
-	for _, fact := range append(append([]candidatecontext.ResolvedFact{}, value.ResolvedFacts...), value.PartiallyResolvedFacts...) {
+	for _, fact := range value.ResolvedFacts {
 		allowedValues = append(allowedValues, fact.AllowedClaims...)
 		allowedValues = append(allowedValues, fact.Value)
 	}
@@ -77,6 +77,28 @@ func ValidateUsedFacts(used []string, value candidatecontext.CandidateContext) e
 		if fact == "" || !candidatecontext.Mentions(allowed, fact) {
 			return errors.New("used fact is not present in CandidateContext")
 		}
+	}
+	return nil
+}
+
+// ValidateGeneratedReply is the single deterministic validation boundary for
+// all employer-facing draft actions. Courtesy replies are not exempt: the
+// text and every fact must satisfy the same evidence policy as a normal draft.
+func ValidateGeneratedReply(decision Decision, value candidatecontext.CandidateContext) error {
+	if decision.Action != ActionDraftReply && decision.Action != ActionCourtesyReply {
+		return nil
+	}
+	if strings.TrimSpace(decision.Draft) == "" {
+		return errors.New("reply action requires a draft")
+	}
+	if len([]rune(decision.Draft)) > 600 {
+		return errors.New("reply draft exceeds maximum length")
+	}
+	if err := ValidateUsedFacts(decision.UsedFacts, value); err != nil {
+		return fmt.Errorf("used facts: %w", err)
+	}
+	if err := ValidateDraft(decision.Draft, value); err != nil {
+		return fmt.Errorf("draft: %w", err)
 	}
 	return nil
 }
@@ -105,7 +127,7 @@ func ValidateDraft(draft string, value candidatecontext.CandidateContext) error 
 	}
 	allowedValues := append([]string{}, value.AllowedFacts...)
 	allowedValues = append(allowedValues, value.RelevantSkills...)
-	for _, fact := range append(append([]candidatecontext.ResolvedFact{}, value.ResolvedFacts...), value.PartiallyResolvedFacts...) {
+	for _, fact := range value.ResolvedFacts {
 		allowedValues = append(allowedValues, fact.AllowedClaims...)
 		allowedValues = append(allowedValues, fact.Value)
 	}

@@ -143,7 +143,10 @@ type Options struct {
 	DurableAttempts      bool
 	AttemptStoreInitErr  error
 	WriteEnabled         bool
-	Now                  func() time.Time
+	// AllowAutomaticReplies is an explicit opt-in retained only for legacy
+	// callers. Career Agent/runtime paths leave it false and remain draft-only.
+	AllowAutomaticReplies bool
+	Now                   func() time.Time
 }
 
 type Input struct{}

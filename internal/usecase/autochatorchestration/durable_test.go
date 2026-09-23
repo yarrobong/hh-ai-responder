@@ -112,6 +112,7 @@ func durableService(source *sourceFake, preparer *preparerFake, actions *durable
 		options.Mode = "auto"
 	}
 	options.DurableAttempts, options.WriteEnabled = true, true
+	options.AllowAutomaticReplies = true
 	if options.Now == nil {
 		options.Now = func() time.Time { return time.Unix(200, 0).UTC() }
 	}
