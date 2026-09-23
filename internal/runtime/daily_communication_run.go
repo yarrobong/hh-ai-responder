@@ -33,11 +33,54 @@ type CommunicationRunReport struct {
 // the existing HH read sync and Inbox projections, persists only redacted
 // local telemetry, and never receives HHWriteGateway or an HH write client.
 func (s *DashboardServer) RunDailyCommunication(ctx context.Context, now time.Time) (CommunicationRunReport, error) {
+	report, inbox, err := s.refreshDailyCommunicationSnapshot(ctx, now)
+	if err != nil {
+		return report, err
+	}
+	runID := communicationRunID(inbox)
+	run := careeragent.NewAgentRun(runID, careeragent.AgentRunStageCommunication, now.UTC())
+	run.RunType = "daily_communication"
+	report.Run = run
+	if existing, getErr := s.CareerWorkflow.GetRun(ctx, runID); getErr == nil {
+		report.Run = existing
+		report.IdempotentReplay = existing.Status != careeragent.AgentRunStatusRunning
+		return report, nil
+	} else if !errors.Is(getErr, careeragent.ErrAgentRunNotFound) {
+		return report, getErr
+	}
+	if err := s.CareerWorkflow.StartRun(ctx, run); err != nil {
+		return report, err
+	}
+	if err := persistCommunicationRunItems(ctx, s.CareerWorkflow, runID, inbox, now.UTC()); err != nil {
+		report.Failures++
+	}
+	status, result := careeragent.AgentRunStatusCompleted, "communication scan completed"
+	if report.Failures > 0 {
+		status, result = careeragent.AgentRunStatusPartial, "communication scan completed with persistence errors"
+	}
+	if err := report.Run.Finish(status, result, now.UTC(), nil); err != nil {
+		return report, err
+	}
+	if err := s.CareerWorkflow.FinishRun(ctx, report.Run); err != nil {
+		return report, err
+	}
+	return report, nil
+}
+
+// refreshDailyCommunication is the shared read-only stage used by the
+// unified daily Career Agent. It deliberately does not create a second
+// communication AgentRun; the outer daily service owns that lifecycle.
+func (s *DashboardServer) refreshDailyCommunication(ctx context.Context, now time.Time) (CommunicationRunReport, error) {
+	report, _, err := s.refreshDailyCommunicationSnapshot(ctx, now)
+	return report, err
+}
+
+func (s *DashboardServer) refreshDailyCommunicationSnapshot(ctx context.Context, now time.Time) (CommunicationRunReport, CandidateInbox, error) {
 	if s == nil || s.Sync == nil || s.CareerWorkflow == nil {
-		return CommunicationRunReport{}, errors.New("daily communication run is not configured")
+		return CommunicationRunReport{}, CandidateInbox{}, errors.New("daily communication run is not configured")
 	}
 	if ctx == nil {
-		return CommunicationRunReport{}, errors.New("daily communication context is nil")
+		return CommunicationRunReport{}, CandidateInbox{}, errors.New("daily communication context is nil")
 	}
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -45,11 +88,11 @@ func (s *DashboardServer) RunDailyCommunication(ctx context.Context, now time.Ti
 	syncResult, syncErr := s.Sync.RefreshInbox(ctx)
 	report := CommunicationRunReport{Sync: syncResult}
 	if syncErr != nil {
-		return report, syncErr
+		return report, CandidateInbox{}, syncErr
 	}
 	inbox, err := s.inbox()
 	if err != nil {
-		return report, err
+		return report, CandidateInbox{}, err
 	}
 	report.Conversations = len(inbox.Items)
 	for _, item := range inbox.Items {
@@ -66,34 +109,7 @@ func (s *DashboardServer) RunDailyCommunication(ctx context.Context, now time.Ti
 		}
 	}
 
-	runID := communicationRunID(inbox)
-	run := careeragent.NewAgentRun(runID, careeragent.AgentRunStageCommunication, now)
-	run.RunType = "daily_communication"
-	report.Run = run
-	if existing, getErr := s.CareerWorkflow.GetRun(ctx, runID); getErr == nil {
-		report.Run = existing
-		report.IdempotentReplay = existing.Status != careeragent.AgentRunStatusRunning
-		return report, nil
-	} else if !errors.Is(getErr, careeragent.ErrAgentRunNotFound) {
-		return report, getErr
-	}
-	if err := s.CareerWorkflow.StartRun(ctx, run); err != nil {
-		return report, err
-	}
-	if err := persistCommunicationRunItems(ctx, s.CareerWorkflow, runID, inbox, now); err != nil {
-		report.Failures++
-	}
-	status, result := careeragent.AgentRunStatusCompleted, "communication scan completed"
-	if report.Failures > 0 {
-		status, result = careeragent.AgentRunStatusPartial, "communication scan completed with persistence errors"
-	}
-	if err := report.Run.Finish(status, result, now, nil); err != nil {
-		return report, err
-	}
-	if err := s.CareerWorkflow.FinishRun(ctx, report.Run); err != nil {
-		return report, err
-	}
-	return report, nil
+	return report, inbox, nil
 }
 
 func communicationRunID(inbox CandidateInbox) string {
