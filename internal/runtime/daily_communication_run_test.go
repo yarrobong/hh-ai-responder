@@ -9,7 +9,12 @@ import (
 )
 
 func TestDailyCommunicationRunIsReadOnlyAndIdempotent(t *testing.T) {
-	s := dashboardTestServer(t)
+	workdir := t.TempDir()
+	s, err := loadDashboard(context.Background(), workdir, Config{AIBaseURL: "http://127.0.0.1:1", AIModel: "fixture", AITimeout: time.Second, AIConnectTimeout: time.Second, AIAttempts: 1, CareerAgentWorkflowPath: workdir + "/career-workflow.json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Sync.client = &syncFakeReadClient{}
 	now := time.Date(2026, 9, 24, 10, 0, 0, 0, time.UTC)
 	c, err := s.Conversations.UpsertConversation(EmployerConversation{ID: "conversation-communication", VacancyID: 42, HHConversationID: "hh-communication", CompanyName: "Fixture", VacancyTitle: "Python", Status: ConversationCandidateActionRequired, RawStatus: "RESPONSE"})
 	if err != nil {
