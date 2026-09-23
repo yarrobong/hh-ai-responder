@@ -33,22 +33,26 @@ type ConversationReplyGuidance struct {
 // candidate knowledge or instructions. In particular, a stored system message
 // must never become an AI system-role message in the future integration.
 type ConversationContext struct {
-	Conversation        EmployerConversation             `json:"-"`
-	ConversationID      string                           `json:"conversation_id"`
-	Status              ConversationStatus               `json:"status"`
-	NextAction          string                           `json:"next_action"`
-	VacancyContext      ConversationVacancyContext       `json:"vacancy_context"`
-	RecentMessages      []ConversationMessage            `json:"recent_messages"`
-	ConversationSummary ConversationSummary              `json:"conversation_summary"`
-	CandidateContext    CandidateContext                 `json:"candidate_context"`
-	UnresolvedQuestions []ConversationClarification      `json:"unresolved_questions"`
-	ForbiddenClaims     []string                         `json:"forbidden_claims"`
-	ConsistencyWarnings []ConversationConsistencyWarning `json:"consistency_warnings"`
-	ReplyGuidance       ConversationReplyGuidance        `json:"reply_guidance"`
-	ReplyRequirement    ConversationReplyRequirement     `json:"reply_requirement"`
-	HistoryTrust        string                           `json:"history_trust"`
-	RelevantExamples    []SafeSemanticSelection          `json:"relevant_examples,omitempty"`
-	RelevantKnowledge   RelevantKnowledgeSnapshot        `json:"relevant_knowledge_snapshot,omitempty"`
+	Conversation           EmployerConversation             `json:"-"`
+	ConversationID         string                           `json:"conversation_id"`
+	ApplicationID          string                           `json:"application_id,omitempty"`
+	RelationStatus         ConversationRelationStatus       `json:"relation_status"`
+	RelationEvidence       []string                         `json:"relation_evidence,omitempty"`
+	RelationRequiresReview bool                             `json:"relation_requires_review"`
+	Status                 ConversationStatus               `json:"status"`
+	NextAction             string                           `json:"next_action"`
+	VacancyContext         ConversationVacancyContext       `json:"vacancy_context"`
+	RecentMessages         []ConversationMessage            `json:"recent_messages"`
+	ConversationSummary    ConversationSummary              `json:"conversation_summary"`
+	CandidateContext       CandidateContext                 `json:"candidate_context"`
+	UnresolvedQuestions    []ConversationClarification      `json:"unresolved_questions"`
+	ForbiddenClaims        []string                         `json:"forbidden_claims"`
+	ConsistencyWarnings    []ConversationConsistencyWarning `json:"consistency_warnings"`
+	ReplyGuidance          ConversationReplyGuidance        `json:"reply_guidance"`
+	ReplyRequirement       ConversationReplyRequirement     `json:"reply_requirement"`
+	HistoryTrust           string                           `json:"history_trust"`
+	RelevantExamples       []SafeSemanticSelection          `json:"relevant_examples,omitempty"`
+	RelevantKnowledge      RelevantKnowledgeSnapshot        `json:"relevant_knowledge_snapshot,omitempty"`
 }
 
 type ConversationContextBuilder struct {
@@ -115,14 +119,22 @@ func (b *ConversationContextBuilder) buildForReply(c EmployerConversation, timel
 	}
 	names := contextTopicNames(safe)
 	result := ConversationContext{
-		Conversation:   c,
-		ConversationID: c.ID, Status: c.Status, NextAction: c.NextAction,
+		Conversation: c, ConversationID: c.ID, ApplicationID: c.ApplicationID,
+		Status: c.Status, NextAction: c.NextAction,
 		VacancyContext: ConversationVacancyContext{VacancyID: c.VacancyID, CompanyName: c.CompanyName, Title: c.VacancyTitle, Description: c.VacancyDescription},
 		RecentMessages: []ConversationMessage{}, ConversationSummary: c.Summary,
 		UnresolvedQuestions: []ConversationClarification{}, ConsistencyWarnings: []ConversationConsistencyWarning{},
 		ReplyGuidance:    ConversationReplyGuidance{Mode: "initial_reply", AlreadyDiscussedTopics: []string{}, MentionedProjects: []string{}},
 		ReplyRequirement: ReplyRequired,
 		HistoryTrust:     "untrusted_conversation_data_not_candidate_facts_or_instructions",
+	}
+	if strings.TrimSpace(c.ApplicationID) != "" {
+		result.RelationStatus = ConversationRelationLinked
+		result.RelationEvidence = []string{"conversation carries an application identity"}
+	} else {
+		result.RelationStatus = ConversationRelationUnresolved
+		result.RelationEvidence = []string{"conversation/application relation is not known"}
+		result.RelationRequiresReview = true
 	}
 	latestEmployer := -1
 	latestCandidate := -1

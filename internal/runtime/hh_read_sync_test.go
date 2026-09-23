@@ -154,7 +154,7 @@ func TestHHReadSyncImportsApplicationAndUnknownStatusSafely(t *testing.T) {
 func TestHHReadSyncImportsConversationMessagesAndUpdatesApplication(t *testing.T) {
 	vacancies, applications, conversations, statePath := newSyncStores(t)
 	_, _ = vacancies.Create(Vacancy{ID: 42, ExternalID: "hh-v-1", Name: "Python developer"})
-	application, err := applications.CreateApplication(JobApplication{ExternalID: "hh-response-1", VacancyID: 42, Source: ApplicationSourceHH, Status: ApplicationApplied})
+	application, err := applications.CreateApplication(JobApplication{ExternalID: "hh-response-1", VacancyID: 42, Source: ApplicationSourceHH, Status: ApplicationApplied, RawStatus: "response", HHMetadata: map[string]string{"conversation_external_id": "hh-chat-1"}})
 	if err != nil {
 		t.Fatal(err)
 	}

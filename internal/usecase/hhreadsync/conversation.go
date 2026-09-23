@@ -39,6 +39,9 @@ func (s *Service) importConversation(ctx context.Context, record hhread.Conversa
 		VacancyTitle: record.VacancyTitle, VacancyDescription: record.VacancyDescription, Status: importedConversationStatus(record.Status, messages),
 		CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, HHUpdatedAt: record.UpdatedAt, Messages: messages, RawStatus: record.Status,
 		HHMetadata: copyStringMap(record.Metadata)}
+	if value.HHMetadata == nil {
+		value.HHMetadata = map[string]string{}
+	}
 	if len(warnings) > 0 {
 		value.HHMetadata["warning_skipped_messages"] = "true"
 	}
@@ -51,11 +54,13 @@ func (s *Service) importConversation(ctx context.Context, record hhread.Conversa
 		return skipped, err
 	}
 	matchedApplication := application.JobApplication{}
-	for _, candidate := range applications {
-		if candidate.HHMetadata["conversation_external_id"] == externalID {
-			matchedApplication = candidate
-			break
-		}
+	exactApplications := exactApplicationMatches(value, applications)
+	if len(exactApplications) == 1 {
+		matchedApplication = exactApplications[0]
+		value.ApplicationID = matchedApplication.ID
+	}
+	if len(exactApplications) > 1 {
+		value.HHMetadata["warning_conflicting_application_relation"] = "true"
 	}
 	var appliedAt *time.Time
 	if matchedApplication.ID != "" {
@@ -109,26 +114,20 @@ func (s *Service) listApplications(ctx context.Context) ([]application.JobApplic
 }
 
 func (s *Service) linkApplications(ctx context.Context, saved conversation.EmployerConversation, applications []application.JobApplication) error {
-	exact := false
-	for _, candidate := range applications {
-		if candidate.HHMetadata["conversation_external_id"] == saved.HHConversationID {
-			exact = true
-			break
+	exactApplications := exactApplicationMatches(saved, applications)
+	if len(exactApplications) != 1 {
+		if saved.HHMetadata == nil {
+			saved.HHMetadata = map[string]string{}
 		}
+		if len(exactApplications) > 1 {
+			saved.HHMetadata["warning_conflicting_application_relation"] = "true"
+		} else {
+			saved.HHMetadata["warning_unresolved_application_relation"] = "true"
+		}
+		_, err := s.deps.Conversations.Upsert(ctx, saved)
+		return err
 	}
-	vacancyMatches := 0
-	for _, candidate := range applications {
-		if candidate.VacancyID == saved.VacancyID {
-			vacancyMatches++
-		}
-	}
-	for _, candidate := range applications {
-		if exact && candidate.HHMetadata["conversation_external_id"] != saved.HHConversationID {
-			continue
-		}
-		if !exact && (saved.VacancyID <= 0 || vacancyMatches != 1 || candidate.VacancyID != saved.VacancyID) {
-			continue
-		}
+	for _, candidate := range exactApplications {
 		if saved.Status == conversation.StatusCandidateActionRequired && candidate.Status == application.StatusApplied {
 			if err := s.deps.Applications.UpdateStatus(ctx, candidate.ID, application.StatusEmployerReplied); err != nil {
 				return err
@@ -141,6 +140,18 @@ func (s *Service) linkApplications(ctx context.Context, saved conversation.Emplo
 		}
 	}
 	return nil
+}
+
+func exactApplicationMatches(value conversation.EmployerConversation, applications []application.JobApplication) []application.JobApplication {
+	result := make([]application.JobApplication, 0, 2)
+	for _, candidate := range applications {
+		if strings.TrimSpace(value.ApplicationID) != "" && candidate.ID == value.ApplicationID ||
+			strings.TrimSpace(candidate.ConversationID) != "" && candidate.ConversationID == value.ID ||
+			strings.TrimSpace(value.HHConversationID) != "" && candidate.HHMetadata["conversation_external_id"] == value.HHConversationID {
+			result = append(result, candidate)
+		}
+	}
+	return result
 }
 
 // MapMessages performs the established protocol-to-domain mapping. Sender
@@ -211,6 +222,9 @@ func MergeConversation(old conversation.EmployerConversation, incoming *conversa
 		incoming.VacancyDescription = old.VacancyDescription
 	}
 	incoming.ID, incoming.CreatedAt = old.ID, old.CreatedAt
+	if incoming.ApplicationID == "" {
+		incoming.ApplicationID = old.ApplicationID
+	}
 	incoming.Summary, incoming.FollowUpState, incoming.NextAction = old.Summary, old.FollowUpState, old.NextAction
 	merged := append([]conversation.Message{}, old.Messages...)
 	for _, message := range incoming.Messages {
