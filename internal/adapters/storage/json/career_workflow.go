@@ -116,12 +116,14 @@ func (r *CareerWorkflowRepository) UpsertRunItem(ctx context.Context, item caree
 	if err := workflowContextError(ctx); err != nil {
 		return err
 	}
+	item.NormalizeTarget()
 	if err := item.Validate(); err != nil {
 		return err
 	}
 	return r.withLockedFile(func(file *careerWorkflowFile) error {
 		for index, existing := range file.Items {
-			if existing.RunID == item.RunID && existing.VacancyID == item.VacancyID {
+			existing.NormalizeTarget()
+			if existing.RunID == item.RunID && existing.TargetKey() == item.TargetKey() {
 				file.Items[index] = item
 				return nil
 			}
@@ -324,7 +326,7 @@ func writeCareerWorkflowFile(path string, file careerWorkflowFile) error {
 		if file.Items[i].RunID != file.Items[j].RunID {
 			return file.Items[i].RunID < file.Items[j].RunID
 		}
-		return file.Items[i].VacancyID < file.Items[j].VacancyID
+		return file.Items[i].TargetKey() < file.Items[j].TargetKey()
 	})
 	sort.SliceStable(file.Preparations, func(i, j int) bool {
 		if file.Preparations[i].VacancyID != file.Preparations[j].VacancyID {
@@ -357,14 +359,16 @@ func validateCareerWorkflowFile(file careerWorkflowFile) error {
 		seenRuns[run.ID] = struct{}{}
 	}
 	seenItems := map[string]struct{}{}
-	for _, item := range file.Items {
+	for index := range file.Items {
+		item := &file.Items[index]
+		item.NormalizeTarget()
 		if err := item.Validate(); err != nil {
 			return err
 		}
 		if _, exists := seenRuns[item.RunID]; !exists {
 			return fmt.Errorf("agent run item %q references unknown run %q", item.ID, item.RunID)
 		}
-		key := fmt.Sprintf("%s/%d", item.RunID, item.VacancyID)
+		key := item.RunID + "/" + item.TargetKey()
 		if _, exists := seenItems[key]; exists {
 			return fmt.Errorf("duplicate agent run item %q", key)
 		}

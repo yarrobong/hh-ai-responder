@@ -43,16 +43,20 @@ func (s AgentRunItemStatus) valid() bool {
 }
 
 type AgentRunItem struct {
-	ID           string             `json:"id"`
-	RunID        string             `json:"run_id"`
-	VacancyID    int                `json:"vacancy_id"`
-	Stage        AgentRunStage      `json:"stage"`
-	Status       AgentRunItemStatus `json:"status"`
-	DecisionCode string             `json:"decision_code,omitempty"`
-	Confidence   *float64           `json:"confidence,omitempty"`
-	Evidence     json.RawMessage    `json:"evidence_json,omitempty"`
-	ErrorCode    string             `json:"error_code,omitempty"`
-	CreatedAt    time.Time          `json:"created_at"`
+	ID             string             `json:"id"`
+	RunID          string             `json:"run_id"`
+	TargetType     string             `json:"target_type,omitempty"`
+	TargetID       string             `json:"target_id,omitempty"`
+	VacancyID      int                `json:"vacancy_id"`
+	ApplicationID  string             `json:"application_id,omitempty"`
+	ConversationID string             `json:"conversation_id,omitempty"`
+	Stage          AgentRunStage      `json:"stage"`
+	Status         AgentRunItemStatus `json:"status"`
+	DecisionCode   string             `json:"decision_code,omitempty"`
+	Confidence     *float64           `json:"confidence,omitempty"`
+	Evidence       json.RawMessage    `json:"evidence_json,omitempty"`
+	ErrorCode      string             `json:"error_code,omitempty"`
+	CreatedAt      time.Time          `json:"created_at"`
 }
 
 type RunQuery struct {
@@ -67,8 +71,15 @@ type PreparationQuery struct {
 }
 
 func (i AgentRunItem) Validate() error {
-	if strings.TrimSpace(i.ID) == "" || strings.TrimSpace(i.RunID) == "" || i.VacancyID <= 0 || !i.Stage.valid() || !i.Status.valid() || i.CreatedAt.IsZero() {
+	if strings.TrimSpace(i.ID) == "" || strings.TrimSpace(i.RunID) == "" || !i.Stage.valid() || !i.Status.valid() || i.CreatedAt.IsZero() {
 		return errors.New("invalid agent run item identity or status")
+	}
+	if strings.TrimSpace(i.TargetType) == "" {
+		if i.VacancyID <= 0 {
+			return errors.New("legacy agent run item requires a vacancy id")
+		}
+	} else if strings.TrimSpace(i.TargetID) == "" {
+		return errors.New("targeted agent run item requires a target id")
 	}
 	if i.Confidence != nil && (*i.Confidence < 0 || *i.Confidence > 1) {
 		return errors.New("agent run item confidence must be between 0 and 1")
@@ -77,6 +88,26 @@ func (i AgentRunItem) Validate() error {
 		return fmt.Errorf("validate agent run item evidence: %w", err)
 	}
 	return nil
+}
+
+func (i *AgentRunItem) NormalizeTarget() {
+	if i == nil || strings.TrimSpace(i.TargetType) != "" {
+		return
+	}
+	i.TargetType = "vacancy"
+	i.TargetID = fmt.Sprint(i.VacancyID)
+}
+
+func (i AgentRunItem) TargetKey() string {
+	targetType := strings.TrimSpace(i.TargetType)
+	targetID := strings.TrimSpace(i.TargetID)
+	if targetType == "" {
+		targetType = "vacancy"
+	}
+	if targetID == "" && i.VacancyID > 0 {
+		targetID = fmt.Sprint(i.VacancyID)
+	}
+	return targetType + ":" + targetID
 }
 
 type PreparationStatus string

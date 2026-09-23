@@ -30,6 +30,20 @@ func TestAgentRunItemRequiresStableIdentityAndBoundedEvidence(t *testing.T) {
 	}
 }
 
+func TestCommunicationAgentRunItemUsesStableTargetIdentity(t *testing.T) {
+	item := AgentRunItem{ID: "item-communication", RunID: "run-1", TargetType: "communication_work_item", TargetID: "work-1", ConversationID: "conversation-1", Stage: AgentRunStageCommunication, Status: AgentRunItemStatusReviewRequired, Evidence: []byte(`{"type":"INTERVIEW","requires_review":true}`), CreatedAt: time.Now().UTC()}
+	if err := item.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if item.TargetKey() != "communication_work_item:work-1" {
+		t.Fatalf("unexpected target key: %q", item.TargetKey())
+	}
+	item.NormalizeTarget()
+	if item.TargetType != "communication_work_item" || item.TargetID != "work-1" {
+		t.Fatal("normalization overwrote communication target")
+	}
+}
+
 func TestApplicationPreparationRequiresExactCoverLetterHash(t *testing.T) {
 	letter := "Здравствуйте! Готов обсудить интеграции."
 	hash := sha256.Sum256([]byte(letter))

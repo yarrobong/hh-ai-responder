@@ -47,6 +47,36 @@ func TestCareerWorkflowJSONUpsertsItemsAndPreparationsIdempotently(t *testing.T)
 	}
 }
 
+func TestCareerWorkflowJSONUpsertsCommunicationTargetsIndependently(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "career-workflow.json")
+	store := NewCareerWorkflowRepository(path)
+	started := time.Date(2026, 9, 22, 10, 0, 0, 0, time.UTC)
+	run := careeragent.NewAgentRun("communication-run", careeragent.AgentRunStageCommunication, started)
+	if err := store.StartRun(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	first := careeragent.AgentRunItem{ID: "work-item-1", RunID: run.ID, TargetType: "communication_work_item", TargetID: "work-1", ConversationID: "conversation-1", Stage: careeragent.AgentRunStageCommunication, Status: careeragent.AgentRunItemStatusReviewRequired, Evidence: []byte(`{"type":"INTERVIEW"}`), CreatedAt: started}
+	second := first
+	second.ID, second.TargetID, second.ConversationID = "work-item-2", "work-2", "conversation-2"
+	if err := store.UpsertRunItem(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertRunItem(context.Background(), second); err != nil {
+		t.Fatal(err)
+	}
+	first.DecisionCode = "UPDATED"
+	if err := store.UpsertRunItem(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(raw), `"target_type": "communication_work_item"`) != 2 || !strings.Contains(string(raw), `"decision_code": "UPDATED"`) {
+		t.Fatalf("communication target upsert was not idempotent: %s", raw)
+	}
+}
+
 func TestCareerWorkflowJSONRejectsMalformedStoredEvidence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "career-workflow.json")
 	if err := os.WriteFile(path, []byte(`{"version":1,"runs":[],"items":[{"id":"item","run_id":"run","vacancy_id":42,"stage":"analysis","status":"completed","evidence_json":{"broken":},"created_at":"2026-09-22T10:00:00Z"}],"preparations":[]}`), 0o600); err != nil {

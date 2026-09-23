@@ -122,6 +122,7 @@ func (r *CareerWorkflowRepository) UpsertRunItem(ctx context.Context, item caree
 	if err := r.requireDB(); err != nil {
 		return err
 	}
+	item.NormalizeTarget()
 	if err := item.Validate(); err != nil {
 		return err
 	}
@@ -132,13 +133,16 @@ func (r *CareerWorkflowRepository) UpsertRunItem(ctx context.Context, item caree
 	err = r.withMutation(ctx, func(db postgresDBTX) error {
 		_, execErr := db.Exec(postgresContext(ctx), `
 		INSERT INTO agent_run_items
-		(id, run_id, vacancy_id, stage, status, decision_code, confidence, evidence_json, error_code, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10)
-		ON CONFLICT (run_id, vacancy_id) DO UPDATE SET
+		(id, run_id, target_type, target_id, vacancy_id, application_id, conversation_id, stage, status, decision_code, confidence, evidence_json, error_code, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14)
+		ON CONFLICT (run_id, target_type, target_id) DO UPDATE SET
+		target_type=EXCLUDED.target_type, target_id=EXCLUDED.target_id,
+		vacancy_id=EXCLUDED.vacancy_id, application_id=EXCLUDED.application_id,
+		conversation_id=EXCLUDED.conversation_id,
 		stage=EXCLUDED.stage, status=EXCLUDED.status, decision_code=EXCLUDED.decision_code,
 		confidence=EXCLUDED.confidence, evidence_json=EXCLUDED.evidence_json,
 		error_code=EXCLUDED.error_code, created_at=EXCLUDED.created_at`,
-			item.ID, item.RunID, item.VacancyID, item.Stage, item.Status, workflowNullableString(item.DecisionCode),
+			item.ID, item.RunID, item.TargetType, item.TargetID, nullableWorkflowInt(item.VacancyID), workflowNullableString(item.ApplicationID), workflowNullableString(item.ConversationID), item.Stage, item.Status, workflowNullableString(item.DecisionCode),
 			workflowNullableFloat(item.Confidence), evidence, workflowNullableString(item.ErrorCode), item.CreatedAt)
 		return execErr
 	})
@@ -424,6 +428,13 @@ func scanApplicationPreparation(scanner careerAgentRunScanner) (careeragent.Appl
 
 func workflowNullableString(value string) any {
 	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return value
+}
+
+func nullableWorkflowInt(value int) any {
+	if value <= 0 {
 		return nil
 	}
 	return value
