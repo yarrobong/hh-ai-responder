@@ -527,13 +527,20 @@ type CandidateInboxItem struct {
 	PendingClarifications []CandidateClarificationRequest `json:"pending_clarifications,omitempty"`
 	AIDrafts              []AIDraft                       `json:"ai_drafts,omitempty"`
 	Warnings              []string                        `json:"warnings,omitempty"`
+	Bucket                string                          `json:"bucket"`
 	Workflow              CareerWorkflowProjection        `json:"workflow"`
+}
+
+type InboxBucketSummary struct {
+	Bucket string `json:"bucket"`
+	Count  int    `json:"count"`
 }
 
 type CandidateInbox struct {
 	FollowUps      []FollowUpCandidate   `json:"follow_ups"`
 	Items          []CandidateInboxItem  `json:"items"`
 	Sections       []InboxSectionSummary `json:"sections,omitempty"`
+	Buckets        []InboxBucketSummary  `json:"buckets,omitempty"`
 	ImportantCount int                   `json:"important_count"`
 }
 
@@ -588,11 +595,13 @@ func (s *HHReadSyncService) GetCandidateInbox() (CandidateInbox, error) {
 			}
 		}
 		item.Workflow = classifyCareerWorkflow(JobApplication{}, item.Conversation, item.PendingClarifications, time.Now().UTC(), nil, nil)
+		item.Bucket = communicationInboxBucket(item)
 		if resolvedState.Status != ConversationClosed && resolvedState.Status != ConversationRejected &&
 			(resolvedState.Status == ConversationCandidateActionRequired || len(item.PendingClarifications) > 0 || len(item.AIDrafts) > 0 || len(item.Warnings) > 0) {
 			result.Items = append(result.Items, item)
 		}
 	}
+	result.Buckets = buildInboxBuckets(result.Items)
 	return result, nil
 }
 

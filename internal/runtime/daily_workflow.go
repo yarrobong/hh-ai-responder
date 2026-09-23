@@ -328,6 +328,49 @@ func buildInboxSections(items []CandidateInboxItem) []InboxSectionSummary {
 	return sections
 }
 
+func communicationInboxBucket(item CandidateInboxItem) string {
+	for _, workItem := range item.Workflow.CommunicationItems {
+		switch workItem.Type {
+		case communicationworkitem.TypeInterview:
+			return "INTERVIEW"
+		case communicationworkitem.TypeTest:
+			return "TEST_TASK"
+		case communicationworkitem.TypeOffer:
+			return "OFFER"
+		case communicationworkitem.TypeRejection:
+			return "REJECTED"
+		}
+	}
+	if item.Workflow.FollowUp != nil && item.Workflow.FollowUp.Eligible {
+		return "FOLLOW_UP_DUE"
+	}
+	switch item.Workflow.State {
+	case WorkflowNeedsClarification:
+		return "NEEDS_CLARIFICATION"
+	case WorkflowNeedsReply:
+		return "NEEDS_REPLY"
+	case WorkflowWaitingForEmployer:
+		return "WAITING"
+	case WorkflowTerminal:
+		return "DONE"
+	default:
+		return "DONE"
+	}
+}
+
+func buildInboxBuckets(items []CandidateInboxItem) []InboxBucketSummary {
+	order := []string{"NEEDS_REPLY", "NEEDS_CLARIFICATION", "INTERVIEW", "TEST_TASK", "OFFER", "WAITING", "FOLLOW_UP_DUE", "REJECTED", "DONE"}
+	counts := map[string]int{}
+	for _, item := range items {
+		counts[item.Bucket]++
+	}
+	result := make([]InboxBucketSummary, 0, len(order))
+	for _, bucket := range order {
+		result = append(result, InboxBucketSummary{Bucket: bucket, Count: counts[bucket]})
+	}
+	return result
+}
+
 func sortWorkflowInbox(items []CandidateInboxItem) {
 	sort.SliceStable(items, func(i, j int) bool {
 		if items[i].Workflow.Priority != items[j].Workflow.Priority {
@@ -396,6 +439,7 @@ func BuildDailyWorkflowReport(snapshot CareerSnapshot, resolver *CandidateContex
 			}
 		}
 		item.Workflow = classifyCareerWorkflow(applications[conversation.ID], conversation, item.PendingClarifications, now, &followUp, resolver)
+		item.Bucket = communicationInboxBucket(item)
 		items = append(items, item)
 		report.Distribution[item.Workflow.State]++
 		if item.Workflow.State != WorkflowNoReplyNeeded && item.Workflow.State != WorkflowTerminal {

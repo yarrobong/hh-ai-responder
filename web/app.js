@@ -284,7 +284,7 @@ function inboxCard(item) {
   const action = workflow.what_to_do ? `<p class="muted truncate">${esc(workflow.what_to_do)}</p>` : "";
   const feedbackStates = [["NEEDS_REPLY", "Нужно ответить"], ["NEEDS_USER_ACTION", "Нужно действие"], ["WAITING_FOR_EMPLOYER", "Ждём работодателя"], ["INTERVIEW", "Интервью"], ["EXTERNAL_ACTION", "Внешнее действие"], ["NO_REPLY_NEEDED", "Не требует ответа"], ["TERMINAL", "Terminal"], ["other", "Другое"]];
   const feedback = `<div class="quality-actions"><span class="muted">Classification:</span><button data-action="classification-correct" data-id="${esc(c.id)}">Верно</button><select data-classification-state="${esc(c.id)}" aria-label="Ожидаемое состояние">${feedbackStates.map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select><button data-action="classification-wrong" data-id="${esc(c.id)}">Неверное состояние</button><button data-action="conversation-irrelevant" data-id="${esc(c.id)}">Не требует внимания</button></div>`;
-  return `<a class="queue-row workflow-row" href="/conversations/${urlID(c.id)}"><span class="avatar">${esc((c.company_name || "?").slice(0, 2).toUpperCase())}</span><div class="row-main"><div class="row-title"><strong>${esc(c.company_name || "Компания не указана")}</strong>${badge(workflow.state || "")}</div><p class="truncate">${esc(c.vacancy_title)}</p><p class="truncate">${esc(item.latest_message?.text || workflow.what_is_happening || "История ещё не загружена")}</p>${action}${preview}<p>${date(item.latest_message?.timestamp || c.updated_at)}</p>${feedback}</div></a>`;
+  return `<a class="queue-row workflow-row" href="/conversations/${urlID(c.id)}"><span class="avatar">${esc((c.company_name || "?").slice(0, 2).toUpperCase())}</span><div class="row-main"><div class="row-title"><strong>${esc(c.company_name || "Компания не указана")}</strong>${badge(item.bucket || workflow.state || "")}</div><p class="truncate">${esc(c.vacancy_title)}</p><p class="truncate">${esc(item.latest_message?.text || workflow.what_is_happening || "История ещё не загружена")}</p>${action}${preview}<p>${date(item.latest_message?.timestamp || c.updated_at)}</p>${feedback}</div></a>`;
 }
 
 function workflowSectionCard(section, items) {
@@ -687,13 +687,14 @@ function followUpMetrics(m) {
 async function inbox() {
   const d = await api("/inbox");
   const grouped = workflowItemsBySection(list(d.items), d.sections);
+  const bucketSummary = list(d.buckets).map((value) => `${esc(value.bucket)}: ${value.count || 0}`).join(" · ");
   return (
     heading(
       "Inbox",
       "Понятные следующие шаги по каждому диалогу — без необходимости разбираться в lifecycle-кодах.",
       '<button class="primary" data-action="sync" data-id="inbox">Refresh Inbox</button><a class="secondary-link" href="/knowledge/questions">Knowledge questions →</a>',
     ) +
-    `<div class="important-count"><strong>${d.important_count || 0}</strong><span>важных элементов</span><span class="muted">из ${d.items?.length || 0} диалогов</span></div>` +
+    `<div class="important-count"><strong>${d.important_count || 0}</strong><span>важных элементов</span><span class="muted">из ${d.items?.length || 0} диалогов</span></div><p class="muted">Buckets: ${bucketSummary || "—"}</p>` +
     `<div class="workflow-sections">${list(d.sections).map((section) => workflowSectionCard(section, grouped[section.id] || [])).join("")}</div>` +
     panel("Follow-up suggestions", list(d.follow_ups).length ? d.follow_ups.map(followUpCard).join("") : `<div class="panel-body muted">Сейчас нет подходящих follow-up. Suggestions не отправляются автоматически.</div>`) +
     `<div class="callout">Приоритет: интервью / внешнее действие → нужно ответить → уточнение → follow-up → ожидание → без действий. Технические lifecycle-поля доступны в Diagnostics.</div>`

@@ -1499,9 +1499,11 @@ func (s *DashboardServer) inbox() (CandidateInbox, error) {
 			followUp = FollowUpCandidate{ConversationID: inbox.Items[i].Conversation.ID, Status: FollowUpNotEligible}
 		}
 		inbox.Items[i].Workflow = classifyCareerWorkflow(application, inbox.Items[i].Conversation, inbox.Items[i].PendingClarifications, time.Now().UTC(), &followUp, s.Resolver)
+		inbox.Items[i].Bucket = communicationInboxBucket(inbox.Items[i])
 	}
 	sortWorkflowInbox(inbox.Items)
 	inbox.Sections = buildInboxSections(inbox.Items)
+	inbox.Buckets = buildInboxBuckets(inbox.Items)
 	inbox.ImportantCount = 0
 	for _, item := range inbox.Items {
 		if item.Workflow.State != WorkflowNoReplyNeeded && item.Workflow.State != WorkflowTerminal {

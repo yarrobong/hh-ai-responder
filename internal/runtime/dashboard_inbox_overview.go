@@ -27,6 +27,7 @@ type overviewInboxDraft struct {
 type overviewInboxWorkflow struct {
 	State    CareerWorkflowState `json:"state"`
 	WhatToDo string              `json:"what_to_do"`
+	Bucket   string              `json:"bucket,omitempty"`
 }
 
 type overviewInboxItem struct {
@@ -183,7 +184,7 @@ func overviewInboxItemFrom(item CandidateInboxItem) overviewInboxItem {
 			ID: item.Conversation.ID, CompanyName: item.Conversation.CompanyName,
 			VacancyTitle: item.Conversation.VacancyTitle, UpdatedAt: item.Conversation.UpdatedAt,
 		},
-		Workflow: overviewInboxWorkflow{State: item.Workflow.State, WhatToDo: item.Workflow.WhatToDo},
+		Workflow: overviewInboxWorkflow{State: item.Workflow.State, WhatToDo: item.Workflow.WhatToDo, Bucket: item.Bucket},
 	}
 	if item.LatestMessage != nil {
 		result.LatestMessage = &overviewInboxMessage{Text: item.LatestMessage.Text, Timestamp: item.LatestMessage.Timestamp}
