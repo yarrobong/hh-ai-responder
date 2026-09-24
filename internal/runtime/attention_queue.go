@@ -9,6 +9,18 @@ import (
 	"hh-ai-responder/internal/careeragent"
 )
 
+const (
+	dailyAttentionApplicationReady = "application_ready"
+	dailyAttentionVacancyReview    = "vacancy_review"
+	dailyAttentionClarifications   = "clarifications"
+	dailyAttentionNeedsReply       = "needs_reply"
+	dailyAttentionInterviews       = "interviews"
+	dailyAttentionTests            = "tests"
+	dailyAttentionOffers           = "offers"
+	dailyAttentionFollowUps        = "follow_ups"
+	dailyAttentionOther            = "other"
+)
+
 func (s *DashboardServer) buildAttentionQueue(snapshot dashboardSnapshot) ([]careeragent.AttentionItem, error) {
 	items := make([]careeragent.AttentionItem, 0)
 	for _, clarification := range snapshot.clarifications {
@@ -45,22 +57,97 @@ func (s *DashboardServer) buildAttentionQueue(snapshot dashboardSnapshot) ([]car
 			})
 		}
 	}
+	for _, preparation := range snapshot.preparations {
+		if preparation.Status != careeragent.PreparationStatusReady {
+			continue
+		}
+		items = append(items, careeragent.AttentionItem{
+			ID: "preparation:" + preparation.ID, Type: "application_ready", Priority: 1,
+			VacancyID: preparation.VacancyID, Title: "Application preparation ready",
+			Summary: "Read-only application preparation is ready for manual review.",
+			Reason:  "preparation_ready", Risk: "manual_approval_required",
+			NextAction: "Review preparation before any explicit send", CreatedAt: preparation.CreatedAt, UpdatedAt: preparation.UpdatedAt,
+		})
+	}
 	if reader, ok := s.CareerWorkflow.(interface {
 		ListRunItems(context.Context, string, int) ([]careeragent.AgentRunItem, error)
 	}); ok {
+		var latest *careeragent.AgentRun
 		for _, run := range snapshot.careerRuns {
 			if run.RunType != "daily_career_agent" {
 				continue
 			}
-			runItems, err := reader.ListRunItems(context.Background(), run.ID, 1000)
+			candidate := run
+			if latest == nil || candidate.StartedAt.After(latest.StartedAt) {
+				latest = &candidate
+			}
+		}
+		if latest != nil {
+			runItems, err := reader.ListRunItems(context.Background(), latest.ID, 1000)
 			if err != nil {
 				return nil, err
 			}
 			items = append(items, attentionFromRunItems(runItems)...)
-			break
 		}
 	}
 	return careeragent.BuildAttentionQueue(items), nil
+}
+
+func dailyAttentionBreakdown(items []careeragent.AttentionItem) map[string]int {
+	result := map[string]int{
+		dailyAttentionApplicationReady: 0,
+		dailyAttentionVacancyReview:    0,
+		dailyAttentionClarifications:   0,
+		dailyAttentionNeedsReply:       0,
+		dailyAttentionInterviews:       0,
+		dailyAttentionTests:            0,
+		dailyAttentionOffers:           0,
+		dailyAttentionFollowUps:        0,
+		dailyAttentionOther:            0,
+	}
+	for _, item := range careeragent.BuildAttentionQueue(items) {
+		result[dailyAttentionCategory(item)]++
+	}
+	return result
+}
+
+func dailyAttentionCategory(item careeragent.AttentionItem) string {
+	communicationType := strings.ToUpper(strings.TrimSpace(item.Summary))
+	if strings.Contains(item.ID, ":communication_work_item:") {
+		switch communicationType {
+		case "INTERVIEW":
+			return dailyAttentionInterviews
+		case "TEST_TASK":
+			return dailyAttentionTests
+		case "OFFER":
+			return dailyAttentionOffers
+		case "FOLLOW_UP_DUE":
+			return dailyAttentionFollowUps
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(item.Type)) {
+	case "candidate_clarification", "clarification_required":
+		return dailyAttentionClarifications
+	case "review_required", "failed":
+		if strings.Contains(item.ID, ":vacancy:") && item.VacancyID > 0 {
+			return dailyAttentionVacancyReview
+		}
+		return dailyAttentionOther
+	case "new_employer_message", "candidate_action_required", "needs_reply":
+		return dailyAttentionNeedsReply
+	case "interview_detected", "interview":
+		return dailyAttentionInterviews
+	case "external_action_required", "test_task", "test":
+		return dailyAttentionTests
+	case "offer_detected", "offer":
+		return dailyAttentionOffers
+	case "follow_up_available", "follow_up_due":
+		return dailyAttentionFollowUps
+	case "application_ready", "prepared":
+		return dailyAttentionApplicationReady
+	default:
+		return dailyAttentionOther
+	}
 }
 
 func attentionFromRunItems(runItems []careeragent.AgentRunItem) []careeragent.AttentionItem {

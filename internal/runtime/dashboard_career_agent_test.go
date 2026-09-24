@@ -109,6 +109,58 @@ func TestDashboardCareerAttentionAPIIsDerivedAndStable(t *testing.T) {
 	}
 }
 
+func TestDashboardAttentionUsesLatestRunAndExcludesResolvedRunItems(t *testing.T) {
+	server := dashboardTestServer(t)
+	workflow := newDailyWorkflowStoreFixture()
+	server.CareerWorkflow = workflow
+	server.Notifications = nil
+	oldAt := time.Date(2026, 9, 23, 9, 0, 0, 0, time.UTC)
+	newAt := oldAt.Add(24 * time.Hour)
+	oldRun := careeragent.NewAgentRun("daily-old", careeragent.AgentRunStageCareerAgent, oldAt)
+	oldRun.RunType = "daily_career_agent"
+	newRun := careeragent.NewAgentRun("daily-new", careeragent.AgentRunStageCareerAgent, newAt)
+	newRun.RunType = "daily_career_agent"
+	for _, run := range []careeragent.AgentRun{oldRun, newRun} {
+		if err := workflow.StartRun(context.Background(), run); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := workflow.UpsertRunItem(context.Background(), careeragent.AgentRunItem{ID: "old-review", RunID: oldRun.ID, VacancyID: 101, Stage: careeragent.AgentRunStageReview, Status: careeragent.AgentRunItemStatusReviewRequired, DecisionCode: "stale", CreatedAt: oldAt}); err != nil {
+		t.Fatal(err)
+	}
+	if err := workflow.UpsertRunItem(context.Background(), careeragent.AgentRunItem{ID: "new-review", RunID: newRun.ID, VacancyID: 202, Stage: careeragent.AgentRunStageReview, Status: careeragent.AgentRunItemStatusReviewRequired, DecisionCode: "active", CreatedAt: newAt}); err != nil {
+		t.Fatal(err)
+	}
+	if err := workflow.UpsertRunItem(context.Background(), careeragent.AgentRunItem{ID: "new-resolved", RunID: newRun.ID, VacancyID: 303, Stage: careeragent.AgentRunStageReview, Status: careeragent.AgentRunItemStatusCompleted, DecisionCode: "resolved", CreatedAt: newAt}); err != nil {
+		t.Fatal(err)
+	}
+	queue, err := server.buildAttentionQueue(dashboardSnapshot{careerRuns: []careeragent.AgentRun{oldRun, newRun}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(queue) != 1 || queue[0].VacancyID != 202 {
+		t.Fatalf("stale/resolved items leaked into attention queue: %+v", queue)
+	}
+}
+
+func TestDailyAttentionBreakdownUsesDeduplicatedActiveIdentities(t *testing.T) {
+	now := time.Date(2026, 9, 24, 9, 0, 0, 0, time.UTC)
+	items := []careeragent.AttentionItem{
+		{ID: "run-item:daily:vacancy:1", Type: "review_required", VacancyID: 1, UpdatedAt: now},
+		{ID: "run-item:daily:vacancy:1", Type: "review_required", VacancyID: 1, UpdatedAt: now.Add(time.Minute)},
+		{ID: "notification:reply", Type: string(NotificationCandidateActionRequired), UpdatedAt: now},
+		{ID: "notification:interview", Type: string(NotificationInterviewDetected), UpdatedAt: now},
+		{ID: "notification:test", Type: "TEST_TASK", UpdatedAt: now},
+		{ID: "notification:offer", Type: string(NotificationOfferDetected), UpdatedAt: now},
+		{ID: "notification:follow-up", Type: string(NotificationFollowUpAvailable), UpdatedAt: now},
+		{ID: "clarification:q", Type: "candidate_clarification", UpdatedAt: now},
+	}
+	breakdown := dailyAttentionBreakdown(items)
+	if breakdown[dailyAttentionVacancyReview] != 1 || breakdown[dailyAttentionNeedsReply] != 1 || breakdown[dailyAttentionInterviews] != 1 || breakdown[dailyAttentionTests] != 1 || breakdown[dailyAttentionOffers] != 1 || breakdown[dailyAttentionFollowUps] != 1 || breakdown[dailyAttentionClarifications] != 1 {
+		t.Fatalf("unexpected attention breakdown: %+v", breakdown)
+	}
+}
+
 func TestDashboardCareerRouteClassificationIsReadOnly(t *testing.T) {
 	for _, path := range [][]string{{"career", "review-queue"}, {"career", "runs"}, {"career", "vacancies", "42"}} {
 		if got := dashboardRouteMethod(path); got != "GET" || !dashboardReadOnlyPath(path) {

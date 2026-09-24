@@ -19,10 +19,14 @@ func dailyStageResultFromCareerAgentReport(report CareerAgentRunReport, runID st
 	}
 	result := careeragent.DailyStageResult{Items: []careeragent.AgentRunItem{}}
 	result.Summary.Vacancy = careeragent.DailyVacancySummary{
-		Scanned: report.Summary.VacanciesProcessed, Found: report.Summary.VacanciesFetchedRaw,
+		Scanned: report.Summary.VacanciesProcessed, Found: report.Summary.VacanciesFetchedRaw, RawHitsKnown: true, DiagnosticsKnown: true,
 		New: report.Summary.VacanciesAfterDedup, Rejected: report.Summary.Rejected,
 		Matched: report.Summary.Matched, ReviewRequired: report.Summary.ReviewRequired,
 		AIReviewed: report.Summary.AIEvaluated, Prepared: report.Summary.WouldApply,
+		RouteAmbiguous:   report.Summary.RouteReasonCounts[careeragent.RouteReasonAmbiguous],
+		RouteLowEvidence: report.Summary.RouteReasonCounts[careeragent.RouteReasonLowEvidence],
+		NoSuitableResume: report.Summary.RouteReasonCounts[careeragent.RouteReasonNoSuitable],
+		HardUnknown:      dailyHardUnknownCount(report),
 	}
 	result.Summary.AI = careeragent.AIBudgetSummary{Requested: report.Summary.AIEvaluated, Succeeded: report.Summary.AIEvaluated - report.Summary.Errors, Failed: report.Summary.Errors}
 	if result.Summary.AI.Succeeded < 0 {
@@ -47,6 +51,19 @@ func dailyStageResultFromCareerAgentReport(report CareerAgentRunReport, runID st
 	// run items after restart.
 	result.Attention = append(result.Attention, attentionFromRunItems(result.Items)...)
 	return result, nil
+}
+
+func dailyHardUnknownCount(report CareerAgentRunReport) int {
+	count := report.Summary.AIHardUnknown
+	for _, vacancy := range report.Vacancies {
+		if vacancy.AIEvaluated {
+			continue
+		}
+		if vacancy.FinalReasonCode == careeragent.RouteReasonUnknownHard {
+			count++
+		}
+	}
+	return count
 }
 
 func dailyStageResultFromCommunicationReport(report CommunicationRunReport) careeragent.DailyStageResult {
@@ -150,6 +167,20 @@ func (s *DashboardServer) dailyCommunicationStage() DailyCareerAgentStage {
 		result, mapErr := dailyCommunicationStageResult(report, inbox, runID, now)
 		if err != nil {
 			return result, err
+		}
+		// Reuse the dashboard's existing derived queue for active
+		// clarification/notification/preparation items. Run items are omitted
+		// here because the orchestrator persists the current run only after the
+		// stage returns; its own stage attention is merged separately.
+		snapshot, snapshotErr := s.loadDashboardSnapshot()
+		if snapshotErr != nil {
+			return result, fmt.Errorf("load daily attention projection: %w", snapshotErr)
+		}
+		for _, item := range snapshot.attention {
+			if strings.HasPrefix(item.ID, "run-item:") {
+				continue
+			}
+			result.Attention = append(result.Attention, item)
 		}
 		return result, mapErr
 	}

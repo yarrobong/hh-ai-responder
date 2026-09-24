@@ -29,6 +29,8 @@ Approval and sending remain an explicit separate flow through `HHWriteGateway`. 
 
 The daily run id is deterministic: `daily-career-agent-YYYY-MM-DD` in UTC. The workflow store persists the run and every stage item before the terminal result. Repeated calls return a durable replay, and JSON/PostgreSQL coordinators claim the run atomically so separate processes cannot execute the same daily run concurrently. Stale interrupted runs are recovered only after the bounded stale window.
 
+Completed daily runs also persist an immutable typed operator result on the existing `AgentRun`. A replay after process restart restores the original summary and deduplicated Attention Queue instead of re-running stages or returning zero-value counters. Legacy runs created before this payload existed are reconstructed only from durable run items and existing projections: unavailable raw-hit or route/AI diagnostics are reported as `unknown`, never guessed.
+
 Terminal result codes are stable:
 
 - `SUCCESS` — all configured stages completed;
@@ -40,6 +42,8 @@ Errors are redacted before telemetry. No raw secrets, cookies, authorization hea
 ## Attention Queue and Control Center
 
 `AttentionItem` is a deterministic derived read model. It combines pending candidate clarifications, active notifications, and review/failed daily run items. It has no independent lifecycle or authority. Notification dismissal, candidate answers, approval, and HH sending continue to use their existing stores and flows.
+
+The daily CLI prints the same operator-facing categories as JSON: AI reviewed, prepared, rejected, route ambiguous, low evidence, hard unknown, no suitable resume, and an Attention breakdown for application-ready, vacancy review, clarifications, replies, interviews, tests, offers, follow-ups, and other items. Existing backlog items may therefore keep Attention non-zero even when the current run has no new messages; active identities are deduplicated and resolved/dismissed projections are excluded.
 
 ## Storage parity
 

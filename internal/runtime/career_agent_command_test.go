@@ -178,12 +178,28 @@ func TestRenderCareerAgentHumanReportRouteCategories(t *testing.T) {
 func TestRenderDailyCareerAgentStatusIsStableAndExplicitlyReadOnly(t *testing.T) {
 	started := time.Date(2026, 9, 24, 9, 0, 0, 0, time.UTC)
 	run := careeragent.NewAgentRun("daily-career-agent-2026-09-24", careeragent.AgentRunStageCareerAgent, started)
-	result := careeragent.DailyCareerAgentRun{Run: run, Summary: careeragent.DailyCareerAgentSummary{Result: careeragent.DailyResultPartialSuccess, Vacancy: careeragent.DailyVacancySummary{Scanned: 4, Found: 3, Matched: 1, ReviewRequired: 2}, Communication: careeragent.DailyCommunicationSummary{ConversationsSynced: 5, NewMessages: 7, RepliesNeeded: 2, Failures: 1}}, Attention: []careeragent.AttentionItem{{ID: "attention-1"}, {ID: "attention-2"}}}
+	result := careeragent.DailyCareerAgentRun{Run: run, Summary: careeragent.DailyCareerAgentSummary{Result: careeragent.DailyResultPartialSuccess, Vacancy: careeragent.DailyVacancySummary{Scanned: 4, Found: 3, RawHitsKnown: true, DiagnosticsKnown: true, Matched: 1, ReviewRequired: 2}, Communication: careeragent.DailyCommunicationSummary{ConversationsSynced: 5, NewMessages: 7, RepliesNeeded: 2, Failures: 1}}, Attention: []careeragent.AttentionItem{{ID: "attention-1"}, {ID: "attention-2"}}}
 	result.IdempotentReplay = true
 	output := renderDailyCareerAgentStatus(result)
-	for _, expected := range []string{"Career Agent daily: PARTIAL_SUCCESS", "Run: daily-career-agent-2026-09-24", "Vacancies: scanned=4 found=3 matched=1 review=2", "Communication: conversations=5 new_messages=7 replies_needed=2 failures=1", "Attention: 2", "HH writes: 0", "Replay: true"} {
+	for _, expected := range []string{"Career Agent daily: PARTIAL_SUCCESS", "Run: daily-career-agent-2026-09-24", "Vacancies: processed=4 raw_hits=3 matched=1 review=2", "AI reviewed: 0", "Prepared: 0", "Rejected: 0", "Route ambiguous: 0", "Low evidence: 0", "Hard unknown: 0", "No suitable resume: 0", "Attention breakdown: application_ready=0 vacancy_review=0 clarifications=0 needs_reply=0 interviews=0 tests=0 offers=0 follow_ups=0 other=0", "Communication: conversations=5 new_messages=7 replies_needed=2 failures=1", "Attention: 2", "HH writes: 0", "Replay: true"} {
 		if !strings.Contains(output, expected) {
 			t.Fatalf("daily status missing %q:\n%s", expected, output)
+		}
+	}
+}
+
+func TestRenderDailyCareerAgentStatusDoesNotInventLegacyDiagnostics(t *testing.T) {
+	run := careeragent.NewAgentRun("daily-career-agent-legacy", careeragent.AgentRunStageCareerAgent, time.Date(2026, 9, 24, 9, 0, 0, 0, time.UTC))
+	output := renderDailyCareerAgentStatus(careeragent.DailyCareerAgentRun{
+		Run: run,
+		Summary: careeragent.DailyCareerAgentSummary{
+			Result:  careeragent.DailyResultSuccess,
+			Vacancy: careeragent.DailyVacancySummary{Scanned: 32, ReviewRequired: 31, Rejected: 1},
+		},
+	})
+	for _, expected := range []string{"raw_hits=unknown", "AI reviewed: unknown", "Prepared: unknown", "Rejected: 1", "Route ambiguous: unknown", "Low evidence: unknown", "Hard unknown: unknown", "No suitable resume: unknown"} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("legacy daily status missing %q:\n%s", expected, output)
 		}
 	}
 }

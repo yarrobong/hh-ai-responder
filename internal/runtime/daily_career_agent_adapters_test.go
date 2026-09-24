@@ -12,7 +12,12 @@ func TestDailyVacancyStageMapsExistingCareerAgentReport(t *testing.T) {
 	report := CareerAgentRunReport{
 		Summary: RunSummaryResult{
 			VacanciesFetchedRaw: 4, VacanciesAfterDedup: 3, Matched: 1, Rejected: 1,
-			ReviewRequired: 1, AIEvaluated: 2, Errors: 1,
+			ReviewRequired: 1, AIEvaluated: 2, Errors: 1, AIHardUnknown: 1,
+			RouteReasonCounts: map[string]int{
+				careeragent.RouteReasonAmbiguous:   2,
+				careeragent.RouteReasonLowEvidence: 3,
+				careeragent.RouteReasonNoSuitable:  4,
+			},
 		},
 		Vacancies: []CareerAgentVacancyResult{
 			{VacancyID: 101, TerminalOutcome: TerminalAIMatch, ProcessedAt: now},
@@ -24,7 +29,7 @@ func TestDailyVacancyStageMapsExistingCareerAgentReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Summary.Vacancy.Found != 4 || result.Summary.Vacancy.New != 3 || result.Summary.Vacancy.Matched != 1 || result.Summary.Vacancy.ReviewRequired != 1 || result.Summary.AI.Requested != 2 {
+	if result.Summary.Vacancy.Found != 4 || !result.Summary.Vacancy.RawHitsKnown || !result.Summary.Vacancy.DiagnosticsKnown || result.Summary.Vacancy.New != 3 || result.Summary.Vacancy.Matched != 1 || result.Summary.Vacancy.ReviewRequired != 1 || result.Summary.AI.Requested != 2 || result.Summary.Vacancy.RouteAmbiguous != 2 || result.Summary.Vacancy.RouteLowEvidence != 3 || result.Summary.Vacancy.NoSuitableResume != 4 || result.Summary.Vacancy.HardUnknown != 1 {
 		t.Fatalf("summary=%+v", result.Summary)
 	}
 	if len(result.Items) != 3 || result.Items[0].RunID != "daily-run" {

@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -216,11 +217,25 @@ func runCareerAgentDaily(args []string, cfg Config, stdout, stderr io.Writer) er
 
 func renderDailyCareerAgentStatus(result careeragent.DailyCareerAgentRun) string {
 	var builder strings.Builder
-	fmt.Fprintf(&builder, "Career Agent daily: %s\nRun: %s\nVacancies: scanned=%d found=%d matched=%d review=%d\nCommunication: conversations=%d new_messages=%d replies_needed=%d failures=%d\nAttention: %d\nHH writes: %d\n", result.Summary.Result, result.Run.ID, result.Summary.Vacancy.Scanned, result.Summary.Vacancy.Found, result.Summary.Vacancy.Matched, result.Summary.Vacancy.ReviewRequired, result.Summary.Communication.ConversationsSynced, result.Summary.Communication.NewMessages, result.Summary.Communication.RepliesNeeded, result.Summary.Communication.Failures, len(result.Attention), result.Summary.HHWrites)
+	fmt.Fprintf(&builder, "Career Agent daily: %s\nRun: %s\nVacancies: processed=%d raw_hits=%s matched=%d review=%d\nAI reviewed: %s\nPrepared: %s\nRejected: %d\nRoute ambiguous: %s\nLow evidence: %s\nHard unknown: %s\nNo suitable resume: %s\nCommunication: conversations=%d new_messages=%d replies_needed=%d failures=%d\nAttention: %d\nAttention breakdown: application_ready=%d vacancy_review=%d clarifications=%d needs_reply=%d interviews=%d tests=%d offers=%d follow_ups=%d other=%d\nHH writes: %d\n", result.Summary.Result, result.Run.ID, result.Summary.Vacancy.Scanned, dailyRawHitsLabel(result.Summary.Vacancy), result.Summary.Vacancy.Matched, result.Summary.Vacancy.ReviewRequired, dailyVacancyDiagnosticLabel(result.Summary.Vacancy, result.Summary.Vacancy.AIReviewed), dailyVacancyDiagnosticLabel(result.Summary.Vacancy, result.Summary.Vacancy.Prepared), result.Summary.Vacancy.Rejected, dailyVacancyDiagnosticLabel(result.Summary.Vacancy, result.Summary.Vacancy.RouteAmbiguous), dailyVacancyDiagnosticLabel(result.Summary.Vacancy, result.Summary.Vacancy.RouteLowEvidence), dailyVacancyDiagnosticLabel(result.Summary.Vacancy, result.Summary.Vacancy.HardUnknown), dailyVacancyDiagnosticLabel(result.Summary.Vacancy, result.Summary.Vacancy.NoSuitableResume), result.Summary.Communication.ConversationsSynced, result.Summary.Communication.NewMessages, result.Summary.Communication.RepliesNeeded, result.Summary.Communication.Failures, len(result.Attention), result.Summary.AttentionBreakdown["application_ready"], result.Summary.AttentionBreakdown["vacancy_review"], result.Summary.AttentionBreakdown["clarifications"], result.Summary.AttentionBreakdown["needs_reply"], result.Summary.AttentionBreakdown["interviews"], result.Summary.AttentionBreakdown["tests"], result.Summary.AttentionBreakdown["offers"], result.Summary.AttentionBreakdown["follow_ups"], result.Summary.AttentionBreakdown["other"], result.Summary.HHWrites)
 	if result.IdempotentReplay {
 		builder.WriteString("Replay: true\n")
 	}
 	return builder.String()
+}
+
+func dailyRawHitsLabel(summary careeragent.DailyVacancySummary) string {
+	if !summary.RawHitsKnown {
+		return "unknown"
+	}
+	return strconv.Itoa(summary.Found)
+}
+
+func dailyVacancyDiagnosticLabel(summary careeragent.DailyVacancySummary, value int) string {
+	if !summary.DiagnosticsKnown {
+		return "unknown"
+	}
+	return strconv.Itoa(value)
 }
 
 func renderCareerAgentStatus(report CareerAgentRunReport) string {
