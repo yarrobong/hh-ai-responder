@@ -217,11 +217,27 @@ func runCareerAgentDaily(args []string, cfg Config, stdout, stderr io.Writer) er
 
 func renderDailyCareerAgentStatus(result careeragent.DailyCareerAgentRun) string {
 	var builder strings.Builder
-	fmt.Fprintf(&builder, "Career Agent daily: %s\nRun: %s\nVacancies: processed=%d raw_hits=%s matched=%d review=%d\nAI reviewed: %s\nPrepared: %s\nRejected: %d\nRoute ambiguous: %s\nLow evidence: %s\nRole out of scope: %s\nHard unknown: %s\nNo suitable resume: %s\nCommunication: conversations=%d new_messages=%d replies_needed=%d failures=%d\nAttention: %d\nAttention breakdown: application_ready=%d vacancy_review=%d clarifications=%d needs_reply=%d interviews=%d tests=%d offers=%d follow_ups=%d other=%d\nHH writes: %d\n", result.Summary.Result, result.Run.ID, result.Summary.Vacancy.Scanned, dailyRawHitsLabel(result.Summary.Vacancy), result.Summary.Vacancy.Matched, result.Summary.Vacancy.ReviewRequired, dailyVacancyDiagnosticLabel(result.Summary.Vacancy, result.Summary.Vacancy.AIReviewed), dailyVacancyDiagnosticLabel(result.Summary.Vacancy, result.Summary.Vacancy.Prepared), result.Summary.Vacancy.Rejected, dailyVacancyDiagnosticLabel(result.Summary.Vacancy, result.Summary.Vacancy.RouteAmbiguous), dailyVacancyDiagnosticLabel(result.Summary.Vacancy, result.Summary.Vacancy.RouteLowEvidence), dailyVacancyDiagnosticLabel(result.Summary.Vacancy, result.Summary.Vacancy.RoleOutOfScope), dailyVacancyDiagnosticLabel(result.Summary.Vacancy, result.Summary.Vacancy.HardUnknown), dailyVacancyDiagnosticLabel(result.Summary.Vacancy, result.Summary.Vacancy.NoSuitableResume), result.Summary.Communication.ConversationsSynced, result.Summary.Communication.NewMessages, result.Summary.Communication.RepliesNeeded, result.Summary.Communication.Failures, len(result.Attention), result.Summary.AttentionBreakdown["application_ready"], result.Summary.AttentionBreakdown["vacancy_review"], result.Summary.AttentionBreakdown["clarifications"], result.Summary.AttentionBreakdown["needs_reply"], result.Summary.AttentionBreakdown["interviews"], result.Summary.AttentionBreakdown["tests"], result.Summary.AttentionBreakdown["offers"], result.Summary.AttentionBreakdown["follow_ups"], result.Summary.AttentionBreakdown["other"], result.Summary.HHWrites)
+	fmt.Fprintf(&builder, "Career Agent daily: %s\nRun: %s\nVacancies: processed=%d raw_hits=%s matched=%d review=%d\nAI reviewed: %s\nPrepared: %s\nRejected: %d\nRoute ambiguous: %s\nLow evidence: %s\nRole out of scope: %s\nHard unknown: %s\nNo suitable resume: %s\nCommunication: conversations=%d new_messages=%d replies_needed=%d failures=%d\nAttention: %d\nActive attention: %d\nHistorical/suppressed: %d\nAttention suppressed: %s\nAttention breakdown: application_ready=%d vacancy_review=%d clarifications=%d needs_reply=%d interviews=%d tests=%d offers=%d follow_ups=%d other=%d\nHH writes: %d\n", result.Summary.Result, result.Run.ID, result.Summary.Vacancy.Scanned, dailyRawHitsLabel(result.Summary.Vacancy), result.Summary.Vacancy.Matched, result.Summary.Vacancy.ReviewRequired, dailyVacancyDiagnosticLabel(result.Summary.Vacancy, result.Summary.Vacancy.AIReviewed), dailyVacancyDiagnosticLabel(result.Summary.Vacancy, result.Summary.Vacancy.Prepared), result.Summary.Vacancy.Rejected, dailyVacancyDiagnosticLabel(result.Summary.Vacancy, result.Summary.Vacancy.RouteAmbiguous), dailyVacancyDiagnosticLabel(result.Summary.Vacancy, result.Summary.Vacancy.RouteLowEvidence), dailyVacancyDiagnosticLabel(result.Summary.Vacancy, result.Summary.Vacancy.RoleOutOfScope), dailyVacancyDiagnosticLabel(result.Summary.Vacancy, result.Summary.Vacancy.HardUnknown), dailyVacancyDiagnosticLabel(result.Summary.Vacancy, result.Summary.Vacancy.NoSuitableResume), result.Summary.Communication.ConversationsSynced, result.Summary.Communication.NewMessages, result.Summary.Communication.RepliesNeeded, result.Summary.Communication.Failures, len(result.Attention), result.Summary.ActiveAttention, result.Summary.HistoricalAttention, formatAttentionSuppression(result.Summary.AttentionSuppressed), result.Summary.AttentionBreakdown["application_ready"], result.Summary.AttentionBreakdown["vacancy_review"], result.Summary.AttentionBreakdown["clarifications"], result.Summary.AttentionBreakdown["needs_reply"], result.Summary.AttentionBreakdown["interviews"], result.Summary.AttentionBreakdown["tests"], result.Summary.AttentionBreakdown["offers"], result.Summary.AttentionBreakdown["follow_ups"], result.Summary.AttentionBreakdown["other"], result.Summary.HHWrites)
 	if result.IdempotentReplay {
 		builder.WriteString("Replay: true\n")
 	}
 	return builder.String()
+}
+
+func formatAttentionSuppression(values map[string]int) string {
+	if len(values) == 0 {
+		return "none"
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%d", key, values[key]))
+	}
+	return strings.Join(parts, ",")
 }
 
 func dailyRawHitsLabel(summary careeragent.DailyVacancySummary) string {

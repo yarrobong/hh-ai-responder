@@ -55,23 +55,29 @@ type AIBudgetSummary struct {
 }
 
 type DailyCareerAgentSummary struct {
-	Vacancy            DailyVacancySummary       `json:"vacancy"`
-	Communication      DailyCommunicationSummary `json:"communication"`
-	AI                 AIBudgetSummary           `json:"ai"`
-	Attention          int                       `json:"attention"`
-	AttentionBreakdown map[string]int            `json:"attention_breakdown,omitempty"`
-	HHWrites           int                       `json:"hh_writes"`
-	Result             DailyResultCode           `json:"result"`
-	Failures           []string                  `json:"failures,omitempty"`
+	Vacancy             DailyVacancySummary       `json:"vacancy"`
+	Communication       DailyCommunicationSummary `json:"communication"`
+	AI                  AIBudgetSummary           `json:"ai"`
+	Attention           int                       `json:"attention"`
+	AttentionBreakdown  map[string]int            `json:"attention_breakdown,omitempty"`
+	ActiveAttention     int                       `json:"active_attention"`
+	HistoricalAttention int                       `json:"historical_attention"`
+	AttentionSuppressed map[string]int            `json:"attention_suppressed,omitempty"`
+	HHWrites            int                       `json:"hh_writes"`
+	Result              DailyResultCode           `json:"result"`
+	Failures            []string                  `json:"failures,omitempty"`
 }
 
 // DailyStageSummary is returned by one read-only stage. The orchestrator
 // merges it into the run summary; stages do not own AgentRun lifecycle.
 type DailyStageSummary struct {
-	Vacancy       DailyVacancySummary       `json:"vacancy"`
-	Communication DailyCommunicationSummary `json:"communication"`
-	AI            AIBudgetSummary           `json:"ai"`
-	Failures      []string                  `json:"failures,omitempty"`
+	Vacancy             DailyVacancySummary       `json:"vacancy"`
+	Communication       DailyCommunicationSummary `json:"communication"`
+	AI                  AIBudgetSummary           `json:"ai"`
+	ActiveAttention     int                       `json:"active_attention"`
+	HistoricalAttention int                       `json:"historical_attention"`
+	AttentionSuppressed map[string]int            `json:"attention_suppressed,omitempty"`
+	Failures            []string                  `json:"failures,omitempty"`
 }
 
 type AttentionItem struct {
@@ -158,6 +164,16 @@ func mergeDailyStageSummary(dst *DailyCareerAgentSummary, src DailyStageSummary)
 	dst.AI.Succeeded += src.AI.Succeeded
 	dst.AI.Skipped += src.AI.Skipped
 	dst.AI.Failed += src.AI.Failed
+	dst.ActiveAttention += src.ActiveAttention
+	dst.HistoricalAttention += src.HistoricalAttention
+	if len(src.AttentionSuppressed) > 0 {
+		if dst.AttentionSuppressed == nil {
+			dst.AttentionSuppressed = map[string]int{}
+		}
+		for reason, count := range src.AttentionSuppressed {
+			dst.AttentionSuppressed[reason] += count
+		}
+	}
 	dst.Failures = appendUniqueStrings(dst.Failures, src.Failures...)
 }
 

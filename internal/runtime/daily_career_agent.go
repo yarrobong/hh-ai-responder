@@ -153,6 +153,12 @@ func (s *DailyCareerAgentService) Run(ctx context.Context, now time.Time) (caree
 	result.Attention = careeragent.BuildAttentionQueue(result.Attention)
 	result.Summary.Attention = len(result.Attention)
 	result.Summary.AttentionBreakdown = dailyAttentionBreakdown(result.Attention)
+	result.Summary.ActiveAttention = len(result.Attention)
+	result.Summary.AttentionBreakdown["active_attention"] = result.Summary.ActiveAttention
+	result.Summary.AttentionBreakdown["historical_suppressed"] = result.Summary.HistoricalAttention
+	for reason, count := range result.Summary.AttentionSuppressed {
+		result.Summary.AttentionBreakdown["suppressed_"+strings.ToLower(reason)] = count
+	}
 	durable, err := json.Marshal(careeragent.DailyCareerAgentDurableResult{Summary: result.Summary, Attention: result.Attention})
 	if err != nil {
 		return s.failRun(ctx, result, fmt.Errorf("encode daily Career Agent durable result: %w", err))
@@ -194,8 +200,6 @@ func (s *DailyCareerAgentService) dailyReplay(ctx context.Context, run careerage
 		}
 		result.Summary = durable.Summary
 		result.Attention = careeragent.BuildAttentionQueue(durable.Attention)
-		result.Summary.Attention = len(result.Attention)
-		result.Summary.AttentionBreakdown = dailyAttentionBreakdown(result.Attention)
 		return result, nil
 	}
 	// Older completed runs predate the typed projection. Recover the durable

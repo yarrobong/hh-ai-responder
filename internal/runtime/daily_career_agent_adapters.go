@@ -11,6 +11,7 @@ import (
 
 	"hh-ai-responder/internal/careeragent"
 	"hh-ai-responder/internal/ports"
+	"hh-ai-responder/internal/usecase/communicationworkitem"
 )
 
 func dailyStageResultFromCareerAgentReport(report CareerAgentRunReport, runID string, now time.Time) (careeragent.DailyStageResult, error) {
@@ -82,6 +83,10 @@ func dailyStageResultFromCommunicationReport(report CommunicationRunReport) care
 }
 
 func dailyCommunicationStageResult(report CommunicationRunReport, inbox CandidateInbox, runID string, now time.Time) (careeragent.DailyStageResult, error) {
+	return dailyCommunicationStageResultWithState(report, inbox, runID, now, nil, nil)
+}
+
+func dailyCommunicationStageResultWithState(report CommunicationRunReport, inbox CandidateInbox, runID string, now time.Time, applications map[string]JobApplication, vacancies map[int]Vacancy) (careeragent.DailyStageResult, error) {
 	result := dailyStageResultFromCommunicationReport(report)
 	if strings.TrimSpace(runID) == "" {
 		return result, errors.New("daily communication stage requires a run id")
@@ -92,16 +97,48 @@ func dailyCommunicationStageResult(report CommunicationRunReport, inbox Candidat
 			result.Items = append(result.Items, careeragent.AgentRunItem{ID: "communication-item-" + item.Conversation.ID, RunID: runID, TargetType: "communication_conversation", TargetID: item.Conversation.ID, ApplicationID: item.Conversation.ApplicationID, ConversationID: item.Conversation.ID, VacancyID: item.Conversation.VacancyID, Stage: careeragent.AgentRunStageCommunication, Status: careeragent.AgentRunItemStatusPrepared, DecisionCode: item.Bucket, CreatedAt: now})
 			continue
 		}
+		currentItems := append([]communicationworkitem.WorkItem(nil), workItems...)
 		for _, workItem := range workItems {
+			result.Summary.Communication.Interviews += boolInt(workItem.Type == communicationworkitem.TypeInterview)
+			result.Summary.Communication.TestTasks += boolInt(workItem.Type == communicationworkitem.TypeTest)
+			result.Summary.Communication.Offers += boolInt(workItem.Type == communicationworkitem.TypeOffer)
+			result.Summary.Communication.Rejections += boolInt(workItem.Type == communicationworkitem.TypeRejection)
+			result.Summary.Communication.FollowUps += boolInt(workItem.Type == communicationworkitem.TypeFollowUp)
 			id := firstNonEmpty(workItem.ID, item.Conversation.ID)
 			status := careeragent.AgentRunItemStatusPrepared
 			if workItem.RequiresReview {
 				status = careeragent.AgentRunItemStatusReviewRequired
 			}
-			result.Items = append(result.Items, careeragent.AgentRunItem{ID: "communication-item-" + id, RunID: runID, TargetType: "communication_work_item", TargetID: id, ApplicationID: item.Conversation.ApplicationID, ConversationID: item.Conversation.ID, VacancyID: item.Conversation.VacancyID, Stage: careeragent.AgentRunStageCommunication, Status: status, DecisionCode: string(workItem.Type), CreatedAt: now})
-			if workItem.RequiresReview {
-				result.Attention = append(result.Attention, careeragent.AttentionItem{ID: "communication:" + id, Type: string(workItem.Type), Priority: 0, ApplicationID: item.Conversation.ApplicationID, ConversationID: item.Conversation.ID, VacancyID: item.Conversation.VacancyID, Title: "Требуется проверка сообщения", Summary: string(workItem.Type), Reason: "communication_work_item_requires_review", Risk: "manual_reply", NextAction: "Проверить диалог вручную", CreatedAt: now, UpdatedAt: now})
+			telemetry := communicationTelemetryItemFromWorkItem(workItem, item.Conversation)
+			evidence, err := json.Marshal(communicationRunEvidence{Bucket: string(workItem.Type), Type: string(workItem.Type), MessageID: telemetry.MessageID, SourceMessageAt: telemetry.SourceMessageAt, RequiresReview: workItem.RequiresReview, WorkItemStatus: string(workItem.Status), ScheduledDate: workItem.ScheduledDate, ScheduledTime: workItem.ScheduledTime, Timezone: workItem.Timezone, DueAt: workItem.DueAt})
+			if err != nil {
+				return result, fmt.Errorf("encode daily communication item evidence: %w", err)
 			}
+			result.Items = append(result.Items, careeragent.AgentRunItem{ID: "communication-item-" + id, RunID: runID, TargetType: "communication_work_item", TargetID: id, ApplicationID: firstNonEmpty(item.Conversation.ApplicationID, workItem.ApplicationID), ConversationID: item.Conversation.ID, VacancyID: item.Conversation.VacancyID, Stage: careeragent.AgentRunStageCommunication, Status: status, DecisionCode: string(workItem.Type), Evidence: evidence, CreatedAt: now})
+			if !workItem.RequiresReview && workItem.Type != communicationworkitem.TypeFollowUp {
+				continue
+			}
+			application := applications[item.Conversation.ApplicationID]
+			if application.ID == "" {
+				application = applications[workItem.ApplicationID]
+			}
+			vacancy := vacancies[item.Conversation.VacancyID]
+			var vacancyPtr *Vacancy
+			if vacancy.ID != 0 {
+				vacancyCopy := vacancy
+				vacancyPtr = &vacancyCopy
+			}
+			decision := IsCommunicationWorkItemActionable(CommunicationWorkItemActionabilityInput{Item: workItem, Conversation: item.Conversation, Application: application, Vacancy: vacancyPtr, CurrentItems: currentItems, SourceMessageAt: telemetry.SourceMessageAt, Now: now})
+			if !decision.Actionable {
+				result.Summary.HistoricalAttention++
+				if result.Summary.AttentionSuppressed == nil {
+					result.Summary.AttentionSuppressed = map[string]int{}
+				}
+				result.Summary.AttentionSuppressed[string(decision.SuppressionReason)]++
+				continue
+			}
+			result.Summary.ActiveAttention++
+			result.Attention = append(result.Attention, careeragent.AttentionItem{ID: "communication_work_item:" + id, Type: string(workItem.Type), Priority: 0, ApplicationID: firstNonEmpty(item.Conversation.ApplicationID, workItem.ApplicationID), ConversationID: item.Conversation.ID, VacancyID: item.Conversation.VacancyID, Title: "Требуется проверка сообщения", Summary: string(workItem.Type), Reason: "communication_work_item_requires_review", Risk: "manual_reply", NextAction: "Проверить диалог вручную", CreatedAt: workItem.CreatedAt, UpdatedAt: workItem.UpdatedAt})
 		}
 	}
 	return result, nil
@@ -165,7 +202,26 @@ func (s *DashboardServer) dailyCommunicationStage() DailyCareerAgentStage {
 			return careeragent.DailyStageResult{}, errors.New("daily communication dashboard is nil")
 		}
 		report, inbox, err := s.refreshDailyCommunicationSnapshot(ctx, now)
-		result, mapErr := dailyCommunicationStageResult(report, inbox, runID, now)
+		applications, applicationsErr := s.Applications.ListApplicationsForDashboard()
+		if applicationsErr != nil {
+			return careeragent.DailyStageResult{}, fmt.Errorf("load daily communication applications: %w", applicationsErr)
+		}
+		vacancies, vacanciesErr := s.Vacancies.List()
+		if vacanciesErr != nil {
+			return careeragent.DailyStageResult{}, fmt.Errorf("load daily communication vacancies: %w", vacanciesErr)
+		}
+		applicationsByID := make(map[string]JobApplication, len(applications))
+		for _, application := range applications {
+			applicationsByID[application.ID] = application
+			if application.ConversationID != "" {
+				applicationsByID[application.ConversationID] = application
+			}
+		}
+		vacanciesByID := make(map[int]Vacancy, len(vacancies))
+		for _, vacancy := range vacancies {
+			vacanciesByID[vacancy.ID] = vacancy
+		}
+		result, mapErr := dailyCommunicationStageResultWithState(report, inbox, runID, now, applicationsByID, vacanciesByID)
 		if err != nil {
 			return result, err
 		}

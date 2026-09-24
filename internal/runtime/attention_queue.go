@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"hh-ai-responder/internal/careeragent"
+	"hh-ai-responder/internal/usecase/communicationworkitem"
 )
 
 const (
@@ -87,7 +88,7 @@ func (s *DashboardServer) buildAttentionQueue(snapshot dashboardSnapshot) ([]car
 			if err != nil {
 				return nil, err
 			}
-			items = append(items, attentionFromRunItems(runItems)...)
+			items = append(items, attentionFromRunItemsForSnapshot(runItems, snapshot, time.Now().UTC())...)
 		}
 	}
 	return careeragent.BuildAttentionQueue(items), nil
@@ -113,7 +114,7 @@ func dailyAttentionBreakdown(items []careeragent.AttentionItem) map[string]int {
 
 func dailyAttentionCategory(item careeragent.AttentionItem) string {
 	communicationType := strings.ToUpper(strings.TrimSpace(item.Summary))
-	if strings.Contains(item.ID, ":communication_work_item:") {
+	if strings.Contains(item.ID, "communication_work_item:") {
 		switch communicationType {
 		case "INTERVIEW":
 			return dailyAttentionInterviews
@@ -151,8 +152,57 @@ func dailyAttentionCategory(item careeragent.AttentionItem) string {
 }
 
 func attentionFromRunItems(runItems []careeragent.AgentRunItem) []careeragent.AttentionItem {
+	return attentionFromRunItemsForSnapshot(runItems, dashboardSnapshot{}, time.Now().UTC())
+}
+
+func attentionFromRunItemsForSnapshot(runItems []careeragent.AgentRunItem, snapshot dashboardSnapshot, now time.Time) []careeragent.AttentionItem {
+	applications := make(map[string]JobApplication, len(snapshot.applications))
+	for _, application := range snapshot.applications {
+		applications[application.ID] = application
+		if application.ConversationID != "" {
+			applications[application.ConversationID] = application
+		}
+	}
+	vacancies := make(map[int]Vacancy, len(snapshot.vacancies))
+	for _, vacancy := range snapshot.vacancies {
+		vacancies[vacancy.ID] = vacancy
+	}
+	conversations := make(map[string]EmployerConversation, len(snapshot.conversations))
+	currentItems := make(map[string][]communicationworkitem.WorkItem, len(snapshot.conversations))
+	for _, conversation := range snapshot.conversations {
+		conversations[conversation.ID] = conversation
+		application := applications[conversation.ID]
+		projection := classifyCareerWorkflow(application, conversation, nil, now, nil, nil)
+		currentItems[conversation.ID] = projection.CommunicationItems
+	}
 	result := make([]careeragent.AttentionItem, 0)
 	for _, item := range runItems {
+		communication := item.TargetType == "communication_work_item" || item.TargetType == "communication_conversation"
+		workItem, sourceMessageAt := communicationWorkItemFromRunItem(item)
+		if communication {
+			if item.TargetType != "communication_work_item" || (item.Status != careeragent.AgentRunItemStatusReviewRequired && item.Status != careeragent.AgentRunItemStatusFailed && workItem.Type != communicationworkitem.TypeFollowUp) {
+				continue
+			}
+			conversation := conversations[item.ConversationID]
+			application := applications[item.ApplicationID]
+			vacancy := vacancies[item.VacancyID]
+			var vacancyPtr *Vacancy
+			if vacancy.ID != 0 {
+				vacancyCopy := vacancy
+				vacancyPtr = &vacancyCopy
+			}
+			decision := IsCommunicationWorkItemActionable(CommunicationWorkItemActionabilityInput{Item: workItem, Conversation: conversation, Application: application, Vacancy: vacancyPtr, CurrentItems: currentItems[item.ConversationID], SourceMessageAt: sourceMessageAt, Now: now})
+			if !decision.Actionable {
+				continue
+			}
+			result = append(result, careeragent.AttentionItem{
+				ID: "communication_work_item:" + item.TargetID, Type: string(workItem.Type), Priority: 0,
+				VacancyID: item.VacancyID, ApplicationID: item.ApplicationID, ConversationID: item.ConversationID,
+				Title: "Communication item", Summary: string(workItem.Type), Reason: "communication_work_item_requires_review", Risk: "manual_reply",
+				NextAction: "Открыть и проверить вручную", CreatedAt: item.CreatedAt, UpdatedAt: item.CreatedAt,
+			})
+			continue
+		}
 		if item.Status != careeragent.AgentRunItemStatusReviewRequired && item.Status != careeragent.AgentRunItemStatusFailed {
 			continue
 		}

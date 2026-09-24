@@ -13,6 +13,7 @@ import (
 
 	"hh-ai-responder/internal/careeragent"
 	"hh-ai-responder/internal/ports"
+	"hh-ai-responder/internal/usecase/communicationworkitem"
 )
 
 type CommunicationRunReport struct {
@@ -129,7 +130,7 @@ func persistCommunicationRunItems(ctx context.Context, store ports.CareerWorkflo
 	for _, item := range inbox.Items {
 		workItems := make([]communicationTelemetryItem, 0, len(item.Workflow.CommunicationItems))
 		for _, workItem := range item.Workflow.CommunicationItems {
-			workItems = append(workItems, communicationTelemetryItem{ID: workItem.ID, Type: string(workItem.Type), MessageID: workItem.MessageID, RequiresReview: workItem.RequiresReview})
+			workItems = append(workItems, communicationTelemetryItemFromWorkItem(workItem, item.Conversation))
 		}
 		if len(workItems) == 0 {
 			workItems = []communicationTelemetryItem{{ID: item.Conversation.ID, Type: "conversation", Bucket: item.Bucket}}
@@ -139,12 +140,7 @@ func persistCommunicationRunItems(ctx context.Context, store ports.CareerWorkflo
 			if workItem.ID != "" {
 				id, targetID, targetType, bucket, requiresReview = workItem.ID, workItem.ID, "communication_work_item", workItem.Type, workItem.RequiresReview
 			}
-			evidence, err := json.Marshal(struct {
-				Bucket         string `json:"bucket"`
-				Type           string `json:"type"`
-				MessageID      string `json:"message_id,omitempty"`
-				RequiresReview bool   `json:"requires_review"`
-			}{Bucket: bucket, Type: targetType, MessageID: workItem.MessageID, RequiresReview: requiresReview})
+			evidence, err := json.Marshal(communicationRunEvidence{Bucket: bucket, Type: firstNonEmpty(workItem.Type, targetType), MessageID: workItem.MessageID, SourceMessageAt: workItem.SourceMessageAt, RequiresReview: requiresReview, WorkItemStatus: workItem.WorkItemStatus, ScheduledDate: workItem.ScheduledDate, ScheduledTime: workItem.ScheduledTime, Timezone: workItem.Timezone, DueAt: workItem.DueAt})
 			if err != nil {
 				return fmt.Errorf("encode communication telemetry: %w", err)
 			}
@@ -164,9 +160,27 @@ func persistCommunicationRunItems(ctx context.Context, store ports.CareerWorkflo
 }
 
 type communicationTelemetryItem struct {
-	ID             string
-	Type           string
-	MessageID      string
-	Bucket         string
-	RequiresReview bool
+	ID              string
+	Type            string
+	MessageID       string
+	SourceMessageAt *time.Time
+	Bucket          string
+	RequiresReview  bool
+	WorkItemStatus  string
+	ScheduledDate   string
+	ScheduledTime   string
+	Timezone        string
+	DueAt           *time.Time
+}
+
+func communicationTelemetryItemFromWorkItem(workItem communicationworkitem.WorkItem, conversation EmployerConversation) communicationTelemetryItem {
+	var sourceMessageAt *time.Time
+	for _, message := range conversation.Messages {
+		if message.ID == workItem.MessageID {
+			at := message.Timestamp
+			sourceMessageAt = &at
+			break
+		}
+	}
+	return communicationTelemetryItem{ID: workItem.ID, Type: string(workItem.Type), MessageID: workItem.MessageID, SourceMessageAt: sourceMessageAt, RequiresReview: workItem.RequiresReview, WorkItemStatus: string(workItem.Status), ScheduledDate: workItem.ScheduledDate, ScheduledTime: workItem.ScheduledTime, Timezone: workItem.Timezone, DueAt: workItem.DueAt}
 }
