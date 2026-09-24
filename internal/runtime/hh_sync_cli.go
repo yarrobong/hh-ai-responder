@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	jsonstorage "hh-ai-responder/internal/adapters/storage/json"
+	postgresstorage "hh-ai-responder/internal/adapters/storage/postgres"
 	"hh-ai-responder/internal/platform"
 )
 
@@ -797,13 +799,13 @@ func loadHHLocalStoresForBackend(ctx context.Context, cfg Config, wd, profilePat
 	vacancies := NewVacancyStore(filepath.Join(wd, VacanciesFilename))
 	clarifications := NewCandidateClarificationStore(filepath.Join(wd, "candidate_clarifications.json"))
 	drafts := NewAIDraftStore(filepath.Join(wd, "ai_drafts.json"))
-	if err := clarifications.Load(); err != nil {
-		return nil, nil, nil, nil, nil, func() {}, err
-	}
-	if err := drafts.Load(); err != nil {
-		return nil, nil, nil, nil, nil, func() {}, err
-	}
 	if backend == storageBackendJSON {
+		if err := clarifications.Load(); err != nil {
+			return nil, nil, nil, nil, nil, func() {}, err
+		}
+		if err := drafts.Load(); err != nil {
+			return nil, nil, nil, nil, nil, func() {}, err
+		}
 		for _, load := range []func() error{conversations.Load, applications.Load, vacancies.Load} {
 			if err := load(); err != nil {
 				return nil, nil, nil, nil, nil, func() {}, err
@@ -819,6 +821,20 @@ func loadHHLocalStoresForBackend(ctx context.Context, cfg Config, wd, profilePat
 	applications = newApplicationStoreFromRepository(career.Applications)
 	vacancies = newVacancyStoreFromRepository(career.Vacancies)
 	applications.SetConversationStore(conversations)
+	if career.Postgres == nil || career.Postgres.Pool() == nil {
+		closeCareer()
+		return nil, nil, nil, nil, nil, func() {}, errors.New("postgres operational stores require the selected career pool")
+	}
+	clarifications = jsonstorage.NewCandidateClarificationStoreWithBackend(postgresstorage.NewCandidateClarificationRepository(career.Postgres.Pool()))
+	drafts = NewAIDraftStoreWithBackend(postgresstorage.NewAIDraftRepository(career.Postgres.Pool()))
+	if err := clarifications.Load(); err != nil {
+		closeCareer()
+		return nil, nil, nil, nil, nil, func() {}, err
+	}
+	if err := drafts.Load(); err != nil {
+		closeCareer()
+		return nil, nil, nil, nil, nil, func() {}, err
+	}
 	_ = profilePath
 	return conversations, applications, vacancies, clarifications, drafts, closeCareer, nil
 }

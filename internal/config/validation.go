@@ -268,7 +268,7 @@ func Validate(c Config) error {
 	if c.RequestInterval <= 0 {
 		return errors.New("request-interval must be greater than 0")
 	}
-	if c.MonitorInterval <= 0 || c.NotificationCooldown <= 0 || c.ConversationDisplayTTL <= 0 {
+	if c.MonitorInterval <= 0 || c.NotificationCooldown <= 0 || c.ConversationDisplayTTL <= 0 || c.CareerAgentDailyInterval <= 0 {
 		return errors.New("monitor intervals must be greater than 0")
 	}
 	if c.MonitorQuietHours != "" && !ValidQuietHours(c.MonitorQuietHours) {

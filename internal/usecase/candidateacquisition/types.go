@@ -9,6 +9,24 @@ import (
 	"hh-ai-responder/internal/usecase/candidatemutation"
 )
 
+// ClarificationIdentity is the durable relation key used to make repeated
+// read-only workflow passes idempotent. GapKey is preferred because it is the
+// canonical knowledge-gap identity; the relation tuple is the compatibility
+// fallback for older records that predate GapKey.
+func ClarificationIdentity(value CandidateClarificationRequest) string {
+	if key := strings.TrimSpace(value.GapKey); key != "" {
+		return "gap:" + key
+	}
+	return strings.Join([]string{
+		"relation",
+		strings.TrimSpace(value.ConversationID),
+		strings.TrimSpace(value.ApplicationID),
+		strings.TrimSpace(value.VacancyID),
+		strings.TrimSpace(value.EmployerMessageID),
+		strings.TrimSpace(value.Topic),
+	}, "|")
+}
+
 type CandidateKnowledgeGap struct {
 	CandidateID      string      `json:"candidate_id"`
 	SubjectType      string      `json:"subject_type"`

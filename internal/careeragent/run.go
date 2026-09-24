@@ -1,6 +1,7 @@
 package careeragent
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -62,20 +63,21 @@ func (s AgentRunStatus) resultCode() AgentRunResultCode {
 // AgentRun is redacted observability metadata. It does not authorize an
 // application, message, test, resume touch or any other HH mutation.
 type AgentRun struct {
-	ID           string             `json:"id"`
-	RunType      string             `json:"run_type,omitempty"`
-	Stage        AgentRunStage      `json:"stage"`
-	Status       AgentRunStatus     `json:"status"`
-	StartedAt    time.Time          `json:"started_at"`
-	FinishedAt   *time.Time         `json:"finished_at,omitempty"`
-	Result       string             `json:"result,omitempty"`
-	ResultCode   AgentRunResultCode `json:"result_code,omitempty"`
-	Summary      string             `json:"summary,omitempty"`
-	ErrorCode    string             `json:"error_code,omitempty"`
-	ErrorSummary string             `json:"error_summary,omitempty"`
-	CreatedAt    time.Time          `json:"created_at,omitempty"`
-	Errors       []string           `json:"errors,omitempty"`
-	Confidence   *float64           `json:"confidence,omitempty"`
+	ID              string             `json:"id"`
+	RunType         string             `json:"run_type,omitempty"`
+	Stage           AgentRunStage      `json:"stage"`
+	Status          AgentRunStatus     `json:"status"`
+	StartedAt       time.Time          `json:"started_at"`
+	FinishedAt      *time.Time         `json:"finished_at,omitempty"`
+	Result          string             `json:"result,omitempty"`
+	ResultCode      AgentRunResultCode `json:"result_code,omitempty"`
+	Summary         string             `json:"summary,omitempty"`
+	DailyResultJSON json.RawMessage    `json:"daily_result_json,omitempty"`
+	ErrorCode       string             `json:"error_code,omitempty"`
+	ErrorSummary    string             `json:"error_summary,omitempty"`
+	CreatedAt       time.Time          `json:"created_at,omitempty"`
+	Errors          []string           `json:"errors,omitempty"`
+	Confidence      *float64           `json:"confidence,omitempty"`
 }
 
 func NewAgentRun(id string, stage AgentRunStage, startedAt time.Time) AgentRun {

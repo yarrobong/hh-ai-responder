@@ -57,6 +57,21 @@ func TestLoadSafeDefaults(t *testing.T) {
 	if cfg.HHReadConcurrency != 4 || cfg.MonitorInterval != 15*time.Minute || cfg.ConversationDisplayTTL != time.Minute {
 		t.Fatalf("unexpected runtime defaults: concurrency=%d interval=%s ttl=%s", cfg.HHReadConcurrency, cfg.MonitorInterval, cfg.ConversationDisplayTTL)
 	}
+	if cfg.CareerAgentDailySchedulerEnabled || cfg.CareerAgentDailyInterval != DefaultCareerAgentDailyInterval {
+		t.Fatalf("unexpected daily scheduler defaults: enabled=%t interval=%s", cfg.CareerAgentDailySchedulerEnabled, cfg.CareerAgentDailyInterval)
+	}
+}
+
+func TestCareerAgentDailySchedulerConfigurationIsDefaultOffAndCLIOverridesEnv(t *testing.T) {
+	values := map[string]string{"HH_CAREER_AGENT_DAILY_ENABLED": "true", "HH_CAREER_AGENT_DAILY_INTERVAL": "2h"}
+	cfg := loadForTest(t, nil, values)
+	if !cfg.CareerAgentDailySchedulerEnabled || cfg.CareerAgentDailyInterval != 2*time.Hour {
+		t.Fatalf("environment daily scheduler config=%+v", cfg)
+	}
+	cfg = loadForTest(t, []string{"--career-agent-daily-scheduler=false", "--career-agent-daily-interval", "30m"}, values)
+	if cfg.CareerAgentDailySchedulerEnabled || cfg.CareerAgentDailyInterval != 30*time.Minute {
+		t.Fatalf("CLI daily scheduler precedence config=%+v", cfg)
+	}
 }
 
 func TestLoadParsesHHAPIConfiguration(t *testing.T) {

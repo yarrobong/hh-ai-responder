@@ -405,6 +405,29 @@ func runDashboardCommand(args []string, cfg Config, out io.Writer) error {
 	if dashboard.CareerClose != nil {
 		defer dashboard.CareerClose()
 	}
+	// The Run button uses the same application service as CLI and scheduler.
+	// Its vacancy stage is explicitly forced into shadow/read-only mode.
+	dailyCfg := cfg
+	dailyCfg.DryRun, dailyCfg.HHWriteEnabled = true, false
+	dailyCfg.AutoApply, dailyCfg.AutoChat, dailyCfg.AutoTouch, dailyCfg.AutoJobStatus = false, false, false, false
+	dailyCfg.ChatMode = "off"
+	dailyResponder, dailyErr := NewHHAIResponder(ctx, dailyCfg)
+	if dailyErr != nil {
+		return dailyErr
+	}
+	defer dailyResponder.closeResources()
+	dashboard.Daily, dailyErr = NewRuntimeDailyCareerAgentService(dailyResponder, dashboard, dashboard.CareerWorkflow)
+	if dailyErr != nil {
+		return dailyErr
+	}
+	if cfg.CareerAgentDailySchedulerEnabled {
+		schedulerRunner := DailyCareerAgentScheduler{Service: dashboard.Daily, Interval: cfg.CareerAgentDailyInterval, Logger: schedulerLogger{}}
+		go func() {
+			if schedulerErr := schedulerRunner.Run(ctx); schedulerErr != nil && !errors.Is(schedulerErr, context.Canceled) {
+				schedulerLogger{}.Error("Daily Career Agent scheduler stopped: %v", schedulerErr)
+			}
+		}()
+	}
 	dashboard.backgroundContext = ctx
 	dashboard.startBackgroundInboxRefresh(ctx, cfg.MonitorInterval)
 	address := net.JoinHostPort(opts.Host, strconv.Itoa(opts.Port))

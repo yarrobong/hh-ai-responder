@@ -27,3 +27,18 @@ type CareerWorkflowReader interface {
 	GetPreparation(context.Context, int) (careeragent.ApplicationPreparation, error)
 	ListPreparations(context.Context, careeragent.PreparationQuery) ([]careeragent.ApplicationPreparation, error)
 }
+
+// CareerWorkflowRunItemsReader exposes telemetry for derived operator views
+// such as Attention Queue without making run items a second canonical state
+// machine. Legacy test doubles and external readers may omit this optional
+// capability; callers must fail closed when it is unavailable.
+type CareerWorkflowRunItemsReader interface {
+	ListRunItems(context.Context, string, int) ([]careeragent.AgentRunItem, error)
+}
+
+// CareerWorkflowRunCoordinator is the cross-process claim capability used by
+// scheduled daily runs. A false result means another process already owns the
+// deterministic run or the run has already reached a terminal state.
+type CareerWorkflowRunCoordinator interface {
+	AcquireRun(context.Context, careeragent.AgentRun) (bool, error)
+}

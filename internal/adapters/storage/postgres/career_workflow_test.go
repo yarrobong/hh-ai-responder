@@ -53,8 +53,8 @@ func TestScanCareerAgentRunPreservesRedactedTerminalState(t *testing.T) {
 	confidence := 0.8
 	run, err := scanCareerAgentRun(careerWorkflowScanner{values: []any{
 		"run-1", "career_agent", "career_agent", "failed", started,
-		pgtype.Timestamptz{Time: finished, Valid: true}, pgtype.Text{String: "failed", Valid: true},
-		pgtype.Text{String: "interrupted run", Valid: true}, pgtype.Text{String: "INTERRUPTED", Valid: true},
+		pgtype.Timestamptz{Time: finished, Valid: true}, pgtype.Text{String: "failed", Valid: true}, pgtype.Text{String: "interrupted run", Valid: true}, nil,
+		pgtype.Text{String: "INTERRUPTED", Valid: true},
 		pgtype.Text{String: "run interrupted before completion", Valid: true}, pgtype.Float8{Float64: confidence, Valid: true}, started,
 	}})
 	if err != nil {

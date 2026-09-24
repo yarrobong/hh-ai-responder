@@ -305,6 +305,55 @@ func TestCandidateClarificationStoreRoundTripDuplicateAndEvidence(t *testing.T) 
 	}
 }
 
+func TestCandidateClarificationStoreUpsertByIdentityIsIdempotentAcrossReload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "clarifications.json")
+	store := NewCandidateClarificationStore(path)
+	value := candidateacquisition.CandidateClarificationRequest{
+		ConversationID:    "conversation-1",
+		ApplicationID:     "application-1",
+		VacancyID:         "vacancy-1",
+		EmployerMessageID: "message-1",
+		GapKey:            "gap-1",
+		Topic:             "Python",
+		Question:          "Что делали с Python?",
+		Reason:            "fixture",
+		CreatedAt:         time.Date(2026, 9, 24, 8, 0, 0, 0, time.UTC),
+	}
+	first, created, err := store.UpsertByIdentity(value)
+	if err != nil || !created {
+		t.Fatalf("first upsert: value=%+v created=%v err=%v", first, created, err)
+	}
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded := NewCandidateClarificationStore(path)
+	if err := reloaded.Load(); err != nil {
+		t.Fatal(err)
+	}
+	second, created, err := reloaded.UpsertByIdentity(candidateacquisition.CandidateClarificationRequest{
+		ConversationID:    value.ConversationID,
+		ApplicationID:     value.ApplicationID,
+		VacancyID:         value.VacancyID,
+		EmployerMessageID: value.EmployerMessageID,
+		GapKey:            value.GapKey,
+		Topic:             value.Topic,
+		Question:          "Изменённый вопрос не должен породить второй запрос",
+		Reason:            value.Reason,
+		CreatedAt:         value.CreatedAt,
+	})
+	if err != nil || created {
+		t.Fatalf("second upsert: value=%+v created=%v err=%v", second, created, err)
+	}
+	if second.ID != first.ID || second.Question != first.Question {
+		t.Fatalf("idempotent upsert replaced durable clarification: first=%+v second=%+v", first, second)
+	}
+	values, err := reloaded.List()
+	if err != nil || len(values) != 1 {
+		t.Fatalf("expected one durable clarification, values=%+v err=%v", values, err)
+	}
+}
+
 func fileMode(t *testing.T, path string) os.FileMode {
 	t.Helper()
 	info, err := os.Stat(path)

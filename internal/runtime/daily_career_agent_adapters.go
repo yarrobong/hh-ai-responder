@@ -1,0 +1,244 @@
+package runtime
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"hh-ai-responder/internal/careeragent"
+	"hh-ai-responder/internal/ports"
+	"hh-ai-responder/internal/usecase/communicationworkitem"
+)
+
+func dailyStageResultFromCareerAgentReport(report CareerAgentRunReport, runID string, now time.Time) (careeragent.DailyStageResult, error) {
+	if runID == "" {
+		return careeragent.DailyStageResult{}, errors.New("daily vacancy stage requires a run id")
+	}
+	result := careeragent.DailyStageResult{Items: []careeragent.AgentRunItem{}}
+	result.Summary.Vacancy = careeragent.DailyVacancySummary{
+		Scanned: report.Summary.VacanciesProcessed, Found: report.Summary.VacanciesFetchedRaw, RawHitsKnown: true, DiagnosticsKnown: true,
+		New: report.Summary.VacanciesAfterDedup, Rejected: report.Summary.Rejected,
+		Matched: report.Summary.Matched, ReviewRequired: report.Summary.ReviewRequired,
+		AIReviewed: report.Summary.AIEvaluated, Prepared: report.Summary.WouldApply,
+		RouteAmbiguous:   report.Summary.RouteReasonCounts[careeragent.RouteReasonAmbiguous],
+		RouteLowEvidence: report.Summary.RouteReasonCounts[careeragent.RouteReasonLowEvidence],
+		RoleOutOfScope:   report.Summary.RouteReasonCounts[careeragent.RouteReasonOutOfScope],
+		NoSuitableResume: report.Summary.RouteReasonCounts[careeragent.RouteReasonNoSuitable],
+		HardUnknown:      dailyHardUnknownCount(report),
+	}
+	result.Summary.AI = careeragent.AIBudgetSummary{Known: true, Requested: report.Summary.AIEvaluated, Succeeded: report.Summary.AIEvaluated - report.Summary.Errors, Failed: report.Summary.Errors}
+	if result.Summary.AI.Succeeded < 0 {
+		result.Summary.AI.Succeeded = 0
+	}
+	if report.Summary.Errors > 0 {
+		result.Summary.Failures = append(result.Summary.Failures, fmt.Sprintf("vacancy stage reported %d item errors", report.Summary.Errors))
+	}
+	for _, vacancy := range report.Vacancies {
+		item, err := careerAgentRunItem(vacancy, runID)
+		if err != nil {
+			return careeragent.DailyStageResult{}, fmt.Errorf("build daily vacancy item: %w", err)
+		}
+		if item.CreatedAt.IsZero() {
+			item.CreatedAt = now
+		}
+		result.Items = append(result.Items, item)
+	}
+	// Vacancy review/failure items are part of the same derived attention
+	// projection as communication work items. Keep the stage result useful to
+	// CLI callers immediately; the dashboard rebuilds the queue from durable
+	// run items after restart.
+	result.Attention = append(result.Attention, attentionFromRunItems(result.Items)...)
+	return result, nil
+}
+
+func dailyHardUnknownCount(report CareerAgentRunReport) int {
+	count := report.Summary.AIHardUnknown
+	for _, vacancy := range report.Vacancies {
+		if vacancy.AIEvaluated {
+			continue
+		}
+		if vacancy.FinalReasonCode == careeragent.RouteReasonUnknownHard {
+			count++
+		}
+	}
+	return count
+}
+
+func dailyStageResultFromCommunicationReport(report CommunicationRunReport) careeragent.DailyStageResult {
+	result := careeragent.DailyStageResult{}
+	result.Summary.Communication = careeragent.DailyCommunicationSummary{
+		ConversationsSynced: report.Conversations,
+		NewMessages:         report.Sync.Created + report.Sync.Updated,
+		RepliesNeeded:       report.Drafts,
+		Failures:            report.Failures,
+	}
+	if report.Failures > 0 {
+		result.Summary.Failures = append(result.Summary.Failures, fmt.Sprintf("communication stage reported %d persistence failures", report.Failures))
+	}
+	return result
+}
+
+func dailyCommunicationStageResult(report CommunicationRunReport, inbox CandidateInbox, runID string, now time.Time) (careeragent.DailyStageResult, error) {
+	return dailyCommunicationStageResultWithState(report, inbox, runID, now, nil, nil)
+}
+
+func dailyCommunicationStageResultWithState(report CommunicationRunReport, inbox CandidateInbox, runID string, now time.Time, applications map[string]JobApplication, vacancies map[int]Vacancy) (careeragent.DailyStageResult, error) {
+	result := dailyStageResultFromCommunicationReport(report)
+	if strings.TrimSpace(runID) == "" {
+		return result, errors.New("daily communication stage requires a run id")
+	}
+	for _, item := range inbox.Items {
+		workItems := item.Workflow.CommunicationItems
+		if len(workItems) == 0 {
+			result.Items = append(result.Items, careeragent.AgentRunItem{ID: "communication-item-" + item.Conversation.ID, RunID: runID, TargetType: "communication_conversation", TargetID: item.Conversation.ID, ApplicationID: item.Conversation.ApplicationID, ConversationID: item.Conversation.ID, VacancyID: item.Conversation.VacancyID, Stage: careeragent.AgentRunStageCommunication, Status: careeragent.AgentRunItemStatusPrepared, DecisionCode: item.Bucket, CreatedAt: now})
+			continue
+		}
+		currentItems := append([]communicationworkitem.WorkItem(nil), workItems...)
+		for _, workItem := range workItems {
+			result.Summary.Communication.Interviews += boolInt(workItem.Type == communicationworkitem.TypeInterview)
+			result.Summary.Communication.TestTasks += boolInt(workItem.Type == communicationworkitem.TypeTest)
+			result.Summary.Communication.Offers += boolInt(workItem.Type == communicationworkitem.TypeOffer)
+			result.Summary.Communication.Rejections += boolInt(workItem.Type == communicationworkitem.TypeRejection)
+			result.Summary.Communication.FollowUps += boolInt(workItem.Type == communicationworkitem.TypeFollowUp)
+			id := firstNonEmpty(workItem.ID, item.Conversation.ID)
+			status := careeragent.AgentRunItemStatusPrepared
+			if workItem.RequiresReview {
+				status = careeragent.AgentRunItemStatusReviewRequired
+			}
+			telemetry := communicationTelemetryItemFromWorkItem(workItem, item.Conversation)
+			evidence, err := json.Marshal(communicationRunEvidence{Bucket: string(workItem.Type), Type: string(workItem.Type), MessageID: telemetry.MessageID, SourceMessageAt: telemetry.SourceMessageAt, RequiresReview: workItem.RequiresReview, WorkItemStatus: string(workItem.Status), ScheduledDate: workItem.ScheduledDate, ScheduledTime: workItem.ScheduledTime, Timezone: workItem.Timezone, DueAt: workItem.DueAt})
+			if err != nil {
+				return result, fmt.Errorf("encode daily communication item evidence: %w", err)
+			}
+			result.Items = append(result.Items, careeragent.AgentRunItem{ID: "communication-item-" + id, RunID: runID, TargetType: "communication_work_item", TargetID: id, ApplicationID: firstNonEmpty(item.Conversation.ApplicationID, workItem.ApplicationID), ConversationID: item.Conversation.ID, VacancyID: item.Conversation.VacancyID, Stage: careeragent.AgentRunStageCommunication, Status: status, DecisionCode: string(workItem.Type), Evidence: evidence, CreatedAt: now})
+			if !workItem.RequiresReview && workItem.Type != communicationworkitem.TypeFollowUp {
+				continue
+			}
+			application := applications[item.Conversation.ApplicationID]
+			if application.ID == "" {
+				application = applications[workItem.ApplicationID]
+			}
+			vacancy := vacancies[item.Conversation.VacancyID]
+			var vacancyPtr *Vacancy
+			if vacancy.ID != 0 {
+				vacancyCopy := vacancy
+				vacancyPtr = &vacancyCopy
+			}
+			decision := IsCommunicationWorkItemActionable(CommunicationWorkItemActionabilityInput{Item: workItem, Conversation: item.Conversation, Application: application, Vacancy: vacancyPtr, CurrentItems: currentItems, SourceMessageAt: telemetry.SourceMessageAt, Now: now})
+			if !decision.Actionable {
+				result.Summary.HistoricalAttention++
+				if result.Summary.AttentionSuppressed == nil {
+					result.Summary.AttentionSuppressed = map[string]int{}
+				}
+				result.Summary.AttentionSuppressed[string(decision.SuppressionReason)]++
+				continue
+			}
+			result.Summary.ActiveAttention++
+			result.Attention = append(result.Attention, careeragent.AttentionItem{ID: "communication_work_item:" + id, Type: string(workItem.Type), Priority: 0, ApplicationID: firstNonEmpty(item.Conversation.ApplicationID, workItem.ApplicationID), ConversationID: item.Conversation.ID, VacancyID: item.Conversation.VacancyID, Title: "Требуется проверка сообщения", Summary: string(workItem.Type), Reason: "communication_work_item_requires_review", Risk: "manual_reply", NextAction: "Проверить диалог вручную", CreatedAt: workItem.CreatedAt, UpdatedAt: workItem.UpdatedAt})
+		}
+	}
+	return result, nil
+}
+
+// NewRuntimeDailyCareerAgentService composes the shared application service
+// from existing read-only runtime use cases. It deliberately does not accept
+// HHWriteGateway, HHWriteClient, approvals, or send callbacks.
+func NewRuntimeDailyCareerAgentService(responder *HHAIResponder, dashboard *DashboardServer, workflow ports.CareerWorkflowStore) (*DailyCareerAgentService, error) {
+	if workflow == nil && responder != nil {
+		workflow = responder.careerWorkflowStore
+	}
+	if workflow == nil && dashboard != nil {
+		workflow = dashboard.CareerWorkflow
+	}
+	deps := DailyCareerAgentDependencies{Workflow: workflow}
+	if responder != nil {
+		deps.Vacancy = responder.dailyVacancyStage()
+	}
+	if dashboard != nil {
+		deps.Communication = dashboard.dailyCommunicationStage()
+	}
+	return NewDailyCareerAgentService(deps)
+}
+
+func (r *HHAIResponder) dailyVacancyStage() DailyCareerAgentStage {
+	return func(ctx context.Context, now time.Time, runID string) (careeragent.DailyStageResult, error) {
+		if r == nil {
+			return careeragent.DailyStageResult{}, errors.New("daily vacancy responder is nil")
+		}
+		oldContext, oldMode, oldAutoApply := r.ctx, r.careerAgentMode, r.autoApply
+		oldDryRun, oldWriteEnabled := r.dryRun, r.hhWriteEnabled
+		oldAutoChat, oldAutoTouch, oldAutoStatus, oldChatMode := r.autoChat, r.autoTouch, r.autoJobStatus, r.chatMode
+		oldWriter := r.eventWriter
+		defer func() {
+			r.ctx, r.careerAgentMode, r.autoApply = oldContext, oldMode, oldAutoApply
+			r.dryRun, r.hhWriteEnabled = oldDryRun, oldWriteEnabled
+			r.autoChat, r.autoTouch, r.autoJobStatus, r.chatMode = oldAutoChat, oldAutoTouch, oldAutoStatus, oldChatMode
+			r.eventWriter = oldWriter
+		}()
+		r.ctx = ctx
+		r.careerAgentMode, r.autoApply = "shadow", true
+		r.dryRun, r.hhWriteEnabled = true, false
+		r.autoChat, r.autoTouch, r.autoJobStatus, r.chatMode = false, false, false, "off"
+		var events bytes.Buffer
+		r.eventWriter = &events
+		err := r.ApplyVacancies()
+		report := CareerAgentRunReport{Summary: RunSummaryResult{Type: "run_summary"}, Vacancies: []CareerAgentVacancyResult{}, Events: []json.RawMessage{}}
+		collectCareerAgentEvents(&report, events.String())
+		result, mapErr := dailyStageResultFromCareerAgentReport(report, runID, now)
+		if mapErr != nil {
+			return result, mapErr
+		}
+		return result, err
+	}
+}
+
+func (s *DashboardServer) dailyCommunicationStage() DailyCareerAgentStage {
+	return func(ctx context.Context, now time.Time, runID string) (careeragent.DailyStageResult, error) {
+		if s == nil {
+			return careeragent.DailyStageResult{}, errors.New("daily communication dashboard is nil")
+		}
+		report, inbox, err := s.refreshDailyCommunicationSnapshot(ctx, now)
+		applications, applicationsErr := s.Applications.ListApplicationsForDashboard()
+		if applicationsErr != nil {
+			return careeragent.DailyStageResult{}, fmt.Errorf("load daily communication applications: %w", applicationsErr)
+		}
+		vacancies, vacanciesErr := s.Vacancies.List()
+		if vacanciesErr != nil {
+			return careeragent.DailyStageResult{}, fmt.Errorf("load daily communication vacancies: %w", vacanciesErr)
+		}
+		applicationsByID := make(map[string]JobApplication, len(applications))
+		for _, application := range applications {
+			applicationsByID[application.ID] = application
+			if application.ConversationID != "" {
+				applicationsByID[application.ConversationID] = application
+			}
+		}
+		vacanciesByID := make(map[int]Vacancy, len(vacancies))
+		for _, vacancy := range vacancies {
+			vacanciesByID[vacancy.ID] = vacancy
+		}
+		result, mapErr := dailyCommunicationStageResultWithState(report, inbox, runID, now, applicationsByID, vacanciesByID)
+		if err != nil {
+			return result, err
+		}
+		// Reuse the dashboard's existing derived queue for active
+		// clarification/notification/preparation items. Run items are omitted
+		// here because the orchestrator persists the current run only after the
+		// stage returns; its own stage attention is merged separately.
+		snapshot, snapshotErr := s.loadDashboardSnapshot()
+		if snapshotErr != nil {
+			return result, fmt.Errorf("load daily attention projection: %w", snapshotErr)
+		}
+		for _, item := range snapshot.attention {
+			if strings.HasPrefix(item.ID, "run-item:") {
+				continue
+			}
+			result.Attention = append(result.Attention, item)
+		}
+		return result, mapErr
+	}
+}

@@ -8,7 +8,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,6 +33,9 @@ type CareerAgentRunReport struct {
 }
 
 func runCareerAgentCommand(args []string, cfg Config, stdout, stderr io.Writer) error {
+	if len(args) > 0 && args[0] == "daily" {
+		return runCareerAgentDaily(args[1:], cfg, stdout, stderr)
+	}
 	friendlyRun := len(args) > 0 && (args[0] == "run" || args[0] == "autopilot")
 	if len(args) > 0 && args[0] == "browser-session" {
 		return runBrowserSessionCommand(args[1:], cfg, stdout, stderr)
@@ -76,7 +81,7 @@ func runCareerAgentCommand(args []string, cfg Config, stdout, stderr io.Writer) 
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: career-agent --shadow | career-agent --canary | career-agent feedback ... | career-agent resumes | career-agent pilot ...")
+		return errors.New("usage: career-agent daily [--json] | career-agent --shadow | career-agent --canary | career-agent feedback ... | career-agent resumes | career-agent pilot ...")
 	}
 	if !shadow && !canary {
 		shadow = true
@@ -156,6 +161,97 @@ func runCareerAgentCommand(args []string, cfg Config, stdout, stderr io.Writer) 
 	}
 	_, err = stdout.Write(append(raw, '\n'))
 	return err
+}
+
+func runCareerAgentDaily(args []string, cfg Config, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("career-agent daily", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	jsonOutput := fs.Bool("json", false, "emit stable JSON output")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: career-agent daily [--json]")
+	}
+	// Daily orchestration is structurally read-only. These settings are
+	// explicit at the CLI boundary as well as enforced inside the stage adapter.
+	cfg.DryRun = true
+	cfg.HHWriteEnabled = false
+	cfg.AutoApply, cfg.AutoChat, cfg.AutoTouch, cfg.AutoJobStatus = false, false, false, false
+	cfg.ChatMode = "off"
+	wd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	dashboard, err := loadDashboard(context.Background(), wd, cfg)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if dashboard.CareerClose != nil {
+			dashboard.CareerClose()
+		}
+		if dashboard.CandidateClose != nil {
+			dashboard.CandidateClose()
+		}
+	}()
+	responder, err := NewHHAIResponder(context.Background(), cfg)
+	if err != nil {
+		return err
+	}
+	defer responder.closeResources()
+	service, err := NewRuntimeDailyCareerAgentService(responder, dashboard, dashboard.CareerWorkflow)
+	if err != nil {
+		return err
+	}
+	result, runErr := service.Run(context.Background(), time.Now().UTC())
+	if *jsonOutput {
+		if err := writeJSON(stdout, result); err != nil {
+			return err
+		}
+	} else if _, err := io.WriteString(stdout, renderDailyCareerAgentStatus(result)); err != nil {
+		return err
+	}
+	return runErr
+}
+
+func renderDailyCareerAgentStatus(result careeragent.DailyCareerAgentRun) string {
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "Career Agent daily: %s\nRun: %s\nVacancies: processed=%d raw_hits=%s matched=%d review=%d\nAI reviewed: %s\nPrepared: %s\nRejected: %d\nRoute ambiguous: %s\nLow evidence: %s\nRole out of scope: %s\nHard unknown: %s\nNo suitable resume: %s\nCommunication: conversations=%d new_messages=%d replies_needed=%d failures=%d\nAttention: %d\nActive attention: %d\nHistorical/suppressed: %d\nAttention suppressed: %s\nAttention breakdown: application_ready=%d vacancy_review=%d clarifications=%d needs_reply=%d interviews=%d tests=%d offers=%d follow_ups=%d other=%d\nHH writes: %d\n", result.Summary.Result, result.Run.ID, result.Summary.Vacancy.Scanned, dailyRawHitsLabel(result.Summary.Vacancy), result.Summary.Vacancy.Matched, result.Summary.Vacancy.ReviewRequired, dailyVacancyDiagnosticLabel(result.Summary.Vacancy, result.Summary.Vacancy.AIReviewed), dailyVacancyDiagnosticLabel(result.Summary.Vacancy, result.Summary.Vacancy.Prepared), result.Summary.Vacancy.Rejected, dailyVacancyDiagnosticLabel(result.Summary.Vacancy, result.Summary.Vacancy.RouteAmbiguous), dailyVacancyDiagnosticLabel(result.Summary.Vacancy, result.Summary.Vacancy.RouteLowEvidence), dailyVacancyDiagnosticLabel(result.Summary.Vacancy, result.Summary.Vacancy.RoleOutOfScope), dailyVacancyDiagnosticLabel(result.Summary.Vacancy, result.Summary.Vacancy.HardUnknown), dailyVacancyDiagnosticLabel(result.Summary.Vacancy, result.Summary.Vacancy.NoSuitableResume), result.Summary.Communication.ConversationsSynced, result.Summary.Communication.NewMessages, result.Summary.Communication.RepliesNeeded, result.Summary.Communication.Failures, len(result.Attention), result.Summary.ActiveAttention, result.Summary.HistoricalAttention, formatAttentionSuppression(result.Summary.AttentionSuppressed), result.Summary.AttentionBreakdown["application_ready"], result.Summary.AttentionBreakdown["vacancy_review"], result.Summary.AttentionBreakdown["clarifications"], result.Summary.AttentionBreakdown["needs_reply"], result.Summary.AttentionBreakdown["interviews"], result.Summary.AttentionBreakdown["tests"], result.Summary.AttentionBreakdown["offers"], result.Summary.AttentionBreakdown["follow_ups"], result.Summary.AttentionBreakdown["other"], result.Summary.HHWrites)
+	if result.IdempotentReplay {
+		builder.WriteString("Replay: true\n")
+	}
+	return builder.String()
+}
+
+func formatAttentionSuppression(values map[string]int) string {
+	if len(values) == 0 {
+		return "none"
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%d", key, values[key]))
+	}
+	return strings.Join(parts, ",")
+}
+
+func dailyRawHitsLabel(summary careeragent.DailyVacancySummary) string {
+	if !summary.RawHitsKnown {
+		return "unknown"
+	}
+	return strconv.Itoa(summary.Found)
+}
+
+func dailyVacancyDiagnosticLabel(summary careeragent.DailyVacancySummary, value int) string {
+	if !summary.DiagnosticsKnown {
+		return "unknown"
+	}
+	return strconv.Itoa(value)
 }
 
 func renderCareerAgentStatus(report CareerAgentRunReport) string {

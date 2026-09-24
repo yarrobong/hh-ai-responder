@@ -87,6 +87,37 @@ func (r *CareerWorkflowRepository) StartRun(ctx context.Context, run careeragent
 	})
 }
 
+func (r *CareerWorkflowRepository) AcquireRun(ctx context.Context, run careeragent.AgentRun) (bool, error) {
+	if err := workflowContextError(ctx); err != nil {
+		return false, err
+	}
+	if run.Status != careeragent.AgentRunStatusRunning || strings.TrimSpace(run.ID) == "" {
+		return false, errors.New("career workflow acquire requires a running identified run")
+	}
+	if err := run.Validate(); err != nil {
+		return false, err
+	}
+	claimed := false
+	err := r.withLockedFile(func(file *careerWorkflowFile) error {
+		for _, existing := range file.Runs {
+			if existing.ID != run.ID {
+				continue
+			}
+			if existing.StartedAt.Equal(run.StartedAt) && existing.Stage == run.Stage && existing.RunType == run.RunType && existing.Status == careeragent.AgentRunStatusRunning {
+				return nil
+			}
+			if existing.Status == careeragent.AgentRunStatusRunning {
+				return careeragent.ErrWorkflowConflict
+			}
+			return nil
+		}
+		file.Runs = append(file.Runs, run)
+		claimed = true
+		return nil
+	})
+	return claimed, err
+}
+
 func (r *CareerWorkflowRepository) FinishRun(ctx context.Context, run careeragent.AgentRun) error {
 	if err := workflowContextError(ctx); err != nil {
 		return err
@@ -192,6 +223,36 @@ func (r *CareerWorkflowRepository) ListRuns(ctx context.Context, query careerage
 				return result[i].StartedAt.After(result[j].StartedAt)
 			}
 			return result[i].ID < result[j].ID
+		})
+		if len(result) > limit {
+			result = result[:limit]
+		}
+		return nil
+	})
+	return result, err
+}
+
+func (r *CareerWorkflowRepository) ListRunItems(ctx context.Context, runID string, limit int) ([]careeragent.AgentRunItem, error) {
+	if err := workflowContextError(ctx); err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 1000 {
+		limit = 1000
+	}
+	var result []careeragent.AgentRunItem
+	err := r.withLockedFile(func(file *careerWorkflowFile) error {
+		for _, item := range file.Items {
+			item.NormalizeTarget()
+			if runID != "" && item.RunID != runID {
+				continue
+			}
+			result = append(result, item)
+		}
+		sort.SliceStable(result, func(i, j int) bool {
+			if !result[i].CreatedAt.Equal(result[j].CreatedAt) {
+				return result[i].CreatedAt.After(result[j].CreatedAt)
+			}
+			return result[i].TargetKey() < result[j].TargetKey()
 		})
 		if len(result) > limit {
 			result = result[:limit]

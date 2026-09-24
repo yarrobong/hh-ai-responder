@@ -116,6 +116,30 @@ mock parser сами по себе такой семантикой не явля
 явных `HH_DRY_RUN=false` и `HH_WRITE_ENABLED=true`; по умолчанию команда всегда
 работает в shadow mode.
 
+#### Operational daily workflow
+
+Phase 4 объединяет vacancy discovery и employer communication в один durable,
+read-only application service:
+
+```sh
+./hh-ai-responder career-agent daily
+./hh-ai-responder career-agent daily --json
+```
+
+Повторный запуск за UTC-день возвращает durable replay; параллельные процессы не
+запускают одну и ту же daily работу одновременно. Результаты имеют стабильные
+коды `SUCCESS`, `PARTIAL_SUCCESS` или `FAILED`. Dashboard (`./hh-ai-responder
+dashboard`) содержит Career Agent Control Center, unified Attention Queue и
+безопасную кнопку `Run daily`. Ни CLI, ни dashboard, ни scheduler не получают
+`HHWriteGateway`: approval и отправка остаются отдельным ручным flow.
+
+Периодический scheduler в dashboard default-off; для явного включения задайте
+`HH_CAREER_AGENT_DAILY_ENABLED=true` и при необходимости
+`HH_CAREER_AGENT_DAILY_INTERVAL=24h`.
+
+Подробности и PostgreSQL parity описаны в
+[`docs/OPERATIONAL_CAREER_AGENT.md`](docs/OPERATIONAL_CAREER_AGENT.md).
+
 Для контролируемого application pilot используется read-only поиск. `--max-scan`
 ограничивает число unique вакансий, проверенных дешёвыми стадиями, а
 `--max-candidates` — число новых вакансий, допущенных до detail/router/AI:

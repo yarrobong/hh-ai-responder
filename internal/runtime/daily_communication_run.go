@@ -13,6 +13,7 @@ import (
 
 	"hh-ai-responder/internal/careeragent"
 	"hh-ai-responder/internal/ports"
+	"hh-ai-responder/internal/usecase/communicationworkitem"
 )
 
 type CommunicationRunReport struct {
@@ -33,11 +34,54 @@ type CommunicationRunReport struct {
 // the existing HH read sync and Inbox projections, persists only redacted
 // local telemetry, and never receives HHWriteGateway or an HH write client.
 func (s *DashboardServer) RunDailyCommunication(ctx context.Context, now time.Time) (CommunicationRunReport, error) {
+	report, inbox, err := s.refreshDailyCommunicationSnapshot(ctx, now)
+	if err != nil {
+		return report, err
+	}
+	runID := communicationRunID(inbox)
+	run := careeragent.NewAgentRun(runID, careeragent.AgentRunStageCommunication, now.UTC())
+	run.RunType = "daily_communication"
+	report.Run = run
+	if existing, getErr := s.CareerWorkflow.GetRun(ctx, runID); getErr == nil {
+		report.Run = existing
+		report.IdempotentReplay = existing.Status != careeragent.AgentRunStatusRunning
+		return report, nil
+	} else if !errors.Is(getErr, careeragent.ErrAgentRunNotFound) {
+		return report, getErr
+	}
+	if err := s.CareerWorkflow.StartRun(ctx, run); err != nil {
+		return report, err
+	}
+	if err := persistCommunicationRunItems(ctx, s.CareerWorkflow, runID, inbox, now.UTC()); err != nil {
+		report.Failures++
+	}
+	status, result := careeragent.AgentRunStatusCompleted, "communication scan completed"
+	if report.Failures > 0 {
+		status, result = careeragent.AgentRunStatusPartial, "communication scan completed with persistence errors"
+	}
+	if err := report.Run.Finish(status, result, now.UTC(), nil); err != nil {
+		return report, err
+	}
+	if err := s.CareerWorkflow.FinishRun(ctx, report.Run); err != nil {
+		return report, err
+	}
+	return report, nil
+}
+
+// refreshDailyCommunication is the shared read-only stage used by the
+// unified daily Career Agent. It deliberately does not create a second
+// communication AgentRun; the outer daily service owns that lifecycle.
+func (s *DashboardServer) refreshDailyCommunication(ctx context.Context, now time.Time) (CommunicationRunReport, error) {
+	report, _, err := s.refreshDailyCommunicationSnapshot(ctx, now)
+	return report, err
+}
+
+func (s *DashboardServer) refreshDailyCommunicationSnapshot(ctx context.Context, now time.Time) (CommunicationRunReport, CandidateInbox, error) {
 	if s == nil || s.Sync == nil || s.CareerWorkflow == nil {
-		return CommunicationRunReport{}, errors.New("daily communication run is not configured")
+		return CommunicationRunReport{}, CandidateInbox{}, errors.New("daily communication run is not configured")
 	}
 	if ctx == nil {
-		return CommunicationRunReport{}, errors.New("daily communication context is nil")
+		return CommunicationRunReport{}, CandidateInbox{}, errors.New("daily communication context is nil")
 	}
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -45,11 +89,11 @@ func (s *DashboardServer) RunDailyCommunication(ctx context.Context, now time.Ti
 	syncResult, syncErr := s.Sync.RefreshInbox(ctx)
 	report := CommunicationRunReport{Sync: syncResult}
 	if syncErr != nil {
-		return report, syncErr
+		return report, CandidateInbox{}, syncErr
 	}
 	inbox, err := s.inbox()
 	if err != nil {
-		return report, err
+		return report, CandidateInbox{}, err
 	}
 	report.Conversations = len(inbox.Items)
 	for _, item := range inbox.Items {
@@ -66,34 +110,7 @@ func (s *DashboardServer) RunDailyCommunication(ctx context.Context, now time.Ti
 		}
 	}
 
-	runID := communicationRunID(inbox)
-	run := careeragent.NewAgentRun(runID, careeragent.AgentRunStageCommunication, now)
-	run.RunType = "daily_communication"
-	report.Run = run
-	if existing, getErr := s.CareerWorkflow.GetRun(ctx, runID); getErr == nil {
-		report.Run = existing
-		report.IdempotentReplay = existing.Status != careeragent.AgentRunStatusRunning
-		return report, nil
-	} else if !errors.Is(getErr, careeragent.ErrAgentRunNotFound) {
-		return report, getErr
-	}
-	if err := s.CareerWorkflow.StartRun(ctx, run); err != nil {
-		return report, err
-	}
-	if err := persistCommunicationRunItems(ctx, s.CareerWorkflow, runID, inbox, now); err != nil {
-		report.Failures++
-	}
-	status, result := careeragent.AgentRunStatusCompleted, "communication scan completed"
-	if report.Failures > 0 {
-		status, result = careeragent.AgentRunStatusPartial, "communication scan completed with persistence errors"
-	}
-	if err := report.Run.Finish(status, result, now, nil); err != nil {
-		return report, err
-	}
-	if err := s.CareerWorkflow.FinishRun(ctx, report.Run); err != nil {
-		return report, err
-	}
-	return report, nil
+	return report, inbox, nil
 }
 
 func communicationRunID(inbox CandidateInbox) string {
@@ -113,7 +130,7 @@ func persistCommunicationRunItems(ctx context.Context, store ports.CareerWorkflo
 	for _, item := range inbox.Items {
 		workItems := make([]communicationTelemetryItem, 0, len(item.Workflow.CommunicationItems))
 		for _, workItem := range item.Workflow.CommunicationItems {
-			workItems = append(workItems, communicationTelemetryItem{ID: workItem.ID, Type: string(workItem.Type), MessageID: workItem.MessageID, RequiresReview: workItem.RequiresReview})
+			workItems = append(workItems, communicationTelemetryItemFromWorkItem(workItem, item.Conversation))
 		}
 		if len(workItems) == 0 {
 			workItems = []communicationTelemetryItem{{ID: item.Conversation.ID, Type: "conversation", Bucket: item.Bucket}}
@@ -123,12 +140,7 @@ func persistCommunicationRunItems(ctx context.Context, store ports.CareerWorkflo
 			if workItem.ID != "" {
 				id, targetID, targetType, bucket, requiresReview = workItem.ID, workItem.ID, "communication_work_item", workItem.Type, workItem.RequiresReview
 			}
-			evidence, err := json.Marshal(struct {
-				Bucket         string `json:"bucket"`
-				Type           string `json:"type"`
-				MessageID      string `json:"message_id,omitempty"`
-				RequiresReview bool   `json:"requires_review"`
-			}{Bucket: bucket, Type: targetType, MessageID: workItem.MessageID, RequiresReview: requiresReview})
+			evidence, err := json.Marshal(communicationRunEvidence{Bucket: bucket, Type: firstNonEmpty(workItem.Type, targetType), MessageID: workItem.MessageID, SourceMessageAt: workItem.SourceMessageAt, RequiresReview: requiresReview, WorkItemStatus: workItem.WorkItemStatus, ScheduledDate: workItem.ScheduledDate, ScheduledTime: workItem.ScheduledTime, Timezone: workItem.Timezone, DueAt: workItem.DueAt})
 			if err != nil {
 				return fmt.Errorf("encode communication telemetry: %w", err)
 			}
@@ -148,9 +160,27 @@ func persistCommunicationRunItems(ctx context.Context, store ports.CareerWorkflo
 }
 
 type communicationTelemetryItem struct {
-	ID             string
-	Type           string
-	MessageID      string
-	Bucket         string
-	RequiresReview bool
+	ID              string
+	Type            string
+	MessageID       string
+	SourceMessageAt *time.Time
+	Bucket          string
+	RequiresReview  bool
+	WorkItemStatus  string
+	ScheduledDate   string
+	ScheduledTime   string
+	Timezone        string
+	DueAt           *time.Time
+}
+
+func communicationTelemetryItemFromWorkItem(workItem communicationworkitem.WorkItem, conversation EmployerConversation) communicationTelemetryItem {
+	var sourceMessageAt *time.Time
+	for _, message := range conversation.Messages {
+		if message.ID == workItem.MessageID {
+			at := message.Timestamp
+			sourceMessageAt = &at
+			break
+		}
+	}
+	return communicationTelemetryItem{ID: workItem.ID, Type: string(workItem.Type), MessageID: workItem.MessageID, SourceMessageAt: sourceMessageAt, RequiresReview: workItem.RequiresReview, WorkItemStatus: string(workItem.Status), ScheduledDate: workItem.ScheduledDate, ScheduledTime: workItem.ScheduledTime, Timezone: workItem.Timezone, DueAt: workItem.DueAt}
 }
