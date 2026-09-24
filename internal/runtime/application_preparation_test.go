@@ -39,6 +39,7 @@ func validPreparationApprovalFixture(now time.Time) (APIApplicationApproval, car
 		VacancyID:             42,
 		ResumeID:              "resume-hash-7",
 		ResumeProviderID:      "resume-provider-7",
+		ResumeFingerprint:     "resume-hash-7",
 		CandidateID:           "candidate-1",
 		CandidateVersion:      3,
 		CandidateSnapshotHash: "candidate-snapshot-hash",
