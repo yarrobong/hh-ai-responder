@@ -203,3 +203,11 @@ func TestRenderDailyCareerAgentStatusDoesNotInventLegacyDiagnostics(t *testing.T
 		}
 	}
 }
+
+func TestCareerAgentUsageIncludesDailyCommand(t *testing.T) {
+	var stdout, stderr strings.Builder
+	err := runCareerAgentCommand([]string{"--shadow", "unexpected"}, Config{}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "career-agent daily [--json]") {
+		t.Fatalf("usage error=%v, want daily command in usage", err)
+	}
+}

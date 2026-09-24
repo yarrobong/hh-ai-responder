@@ -81,7 +81,7 @@ func runCareerAgentCommand(args []string, cfg Config, stdout, stderr io.Writer) 
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: career-agent --shadow | career-agent --canary | career-agent feedback ... | career-agent resumes | career-agent pilot ...")
+		return errors.New("usage: career-agent daily [--json] | career-agent --shadow | career-agent --canary | career-agent feedback ... | career-agent resumes | career-agent pilot ...")
 	}
 	if !shadow && !canary {
 		shadow = true
