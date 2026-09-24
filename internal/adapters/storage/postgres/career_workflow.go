@@ -57,13 +57,17 @@ func (r *CareerWorkflowRepository) StartRun(ctx context.Context, run careeragent
 	if createdAt.IsZero() {
 		createdAt = run.StartedAt
 	}
-	_, err := r.db.Exec(postgresContext(ctx), `
+	dailyResult, err := workflowNullableJSON(run.DailyResultJSON)
+	if err != nil {
+		return fmt.Errorf("encode daily Career Agent result: %w", err)
+	}
+	_, err = r.db.Exec(postgresContext(ctx), `
 		INSERT INTO agent_runs
-		(id, run_type, stage, status, started_at, result_code, summary, error_code, error_summary, confidence, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		(id, run_type, stage, status, started_at, result_code, summary, daily_result_json, error_code, error_summary, confidence, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12)
 		ON CONFLICT (id) DO NOTHING`,
 		run.ID, run.RunType, run.Stage, run.Status, run.StartedAt, workflowNullableString(string(run.ResultCode)),
-		workflowNullableString(run.Summary), workflowNullableString(run.ErrorCode), workflowNullableString(run.ErrorSummary), workflowNullableFloat(run.Confidence), createdAt)
+		workflowNullableString(run.Summary), dailyResult, workflowNullableString(run.ErrorCode), workflowNullableString(run.ErrorSummary), workflowNullableFloat(run.Confidence), createdAt)
 	if err != nil {
 		return fmt.Errorf("start career agent run: %w", err)
 	}
@@ -87,12 +91,16 @@ func (r *CareerWorkflowRepository) AcquireRun(ctx context.Context, run careerage
 	if err := run.Validate(); err != nil {
 		return false, err
 	}
+	dailyResult, err := workflowNullableJSON(run.DailyResultJSON)
+	if err != nil {
+		return false, fmt.Errorf("encode daily Career Agent result: %w", err)
+	}
 	command, err := r.db.Exec(postgresContext(ctx), `
 		INSERT INTO agent_runs
-		(id, run_type, stage, status, started_at, result_code, summary, error_code, error_summary, confidence, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		(id, run_type, stage, status, started_at, result_code, summary, daily_result_json, error_code, error_summary, confidence, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12)
 		ON CONFLICT (id) DO NOTHING`,
-		run.ID, run.RunType, run.Stage, run.Status, run.StartedAt, workflowNullableString(string(run.ResultCode)), workflowNullableString(run.Summary), workflowNullableString(run.ErrorCode), workflowNullableString(run.ErrorSummary), workflowNullableFloat(run.Confidence), run.CreatedAt)
+		run.ID, run.RunType, run.Stage, run.Status, run.StartedAt, workflowNullableString(string(run.ResultCode)), workflowNullableString(run.Summary), dailyResult, workflowNullableString(run.ErrorCode), workflowNullableString(run.ErrorSummary), workflowNullableFloat(run.Confidence), run.CreatedAt)
 	if err != nil {
 		return false, fmt.Errorf("acquire career agent run: %w", err)
 	}
@@ -131,13 +139,17 @@ func (r *CareerWorkflowRepository) FinishRun(ctx context.Context, run careeragen
 	if errorSummary == "" && len(run.Errors) > 0 {
 		errorSummary = strings.TrimSpace(run.Errors[len(run.Errors)-1])
 	}
+	dailyResult, err := workflowNullableJSON(run.DailyResultJSON)
+	if err != nil {
+		return fmt.Errorf("encode daily Career Agent result: %w", err)
+	}
 	command, err := r.db.Exec(postgresContext(ctx), `
 		UPDATE agent_runs SET
-		status=$2, finished_at=$3, result_code=$4, summary=$5,
-		error_code=$6, error_summary=$7, confidence=$8
+		status=$2, finished_at=$3, result_code=$4, summary=$5, daily_result_json=$6::jsonb,
+		error_code=$7, error_summary=$8, confidence=$9
 		WHERE id=$1 AND status='running'`,
 		run.ID, run.Status, *run.FinishedAt, workflowNullableString(string(resultCode)), workflowNullableString(result),
-		workflowNullableString(run.ErrorCode), workflowNullableString(errorSummary), workflowNullableFloat(run.Confidence))
+		dailyResult, workflowNullableString(run.ErrorCode), workflowNullableString(errorSummary), workflowNullableFloat(run.Confidence))
 	if err != nil {
 		return fmt.Errorf("finish career agent run: %w", err)
 	}
@@ -243,7 +255,7 @@ func (r *CareerWorkflowRepository) GetRun(ctx context.Context, id string) (caree
 	}
 	return scanCareerAgentRun(r.db.QueryRow(postgresContext(ctx), `
 		SELECT id, run_type, stage, status, started_at, finished_at, result_code, summary,
-		       error_code, error_summary, confidence, created_at
+		       daily_result_json, error_code, error_summary, confidence, created_at
 		FROM agent_runs WHERE id=$1`, id))
 }
 
@@ -253,7 +265,7 @@ func (r *CareerWorkflowRepository) ListRuns(ctx context.Context, query careerage
 	}
 	limit := workflowLimit(query.Limit)
 	statement := `SELECT id, run_type, stage, status, started_at, finished_at, result_code, summary,
-		error_code, error_summary, confidence, created_at FROM agent_runs`
+		daily_result_json, error_code, error_summary, confidence, created_at FROM agent_runs`
 	args := make([]any, 0, 3)
 	if query.Status != nil {
 		args = append(args, *query.Status)
@@ -434,11 +446,12 @@ func scanCareerAgentRun(scanner careerAgentRunScanner) (careeragent.AgentRun, er
 		runType, stage, status                       string
 		finishedAt                                   pgtype.Timestamptz
 		resultCode, summary, errorCode, errorSummary pgtype.Text
+		dailyResult                                  []byte
 		confidence                                   pgtype.Float8
 		startedAt, createdAt                         time.Time
 	)
 	if err := scanner.Scan(&run.ID, &runType, &stage, &status, &startedAt, &finishedAt, &resultCode, &summary,
-		&errorCode, &errorSummary, &confidence, &createdAt); err != nil {
+		&dailyResult, &errorCode, &errorSummary, &confidence, &createdAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return careeragent.AgentRun{}, careeragent.ErrAgentRunNotFound
 		}
@@ -455,6 +468,7 @@ func scanCareerAgentRun(scanner careerAgentRunScanner) (careeragent.AgentRun, er
 	if summary.Valid {
 		run.Result, run.Summary = summary.String, summary.String
 	}
+	run.DailyResultJSON = workflowCloneJSON(dailyResult)
 	if errorCode.Valid {
 		run.ErrorCode = errorCode.String
 	}

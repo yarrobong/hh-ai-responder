@@ -17,14 +17,20 @@ const (
 )
 
 type DailyVacancySummary struct {
-	Scanned        int `json:"scanned"`
-	Found          int `json:"found"`
-	New            int `json:"new"`
-	Rejected       int `json:"rejected"`
-	Matched        int `json:"matched"`
-	ReviewRequired int `json:"review_required"`
-	AIReviewed     int `json:"ai_reviewed"`
-	Prepared       int `json:"prepared"`
+	Scanned          int  `json:"scanned"`
+	Found            int  `json:"found"`
+	RawHitsKnown     bool `json:"raw_hits_known"`
+	DiagnosticsKnown bool `json:"diagnostics_known"`
+	New              int  `json:"new"`
+	Rejected         int  `json:"rejected"`
+	Matched          int  `json:"matched"`
+	ReviewRequired   int  `json:"review_required"`
+	AIReviewed       int  `json:"ai_reviewed"`
+	Prepared         int  `json:"prepared"`
+	RouteAmbiguous   int  `json:"route_ambiguous"`
+	RouteLowEvidence int  `json:"route_low_evidence"`
+	HardUnknown      int  `json:"hard_unknown"`
+	NoSuitableResume int  `json:"no_suitable_resume"`
 }
 
 type DailyCommunicationSummary struct {
@@ -47,13 +53,14 @@ type AIBudgetSummary struct {
 }
 
 type DailyCareerAgentSummary struct {
-	Vacancy       DailyVacancySummary       `json:"vacancy"`
-	Communication DailyCommunicationSummary `json:"communication"`
-	AI            AIBudgetSummary           `json:"ai"`
-	Attention     int                       `json:"attention"`
-	HHWrites      int                       `json:"hh_writes"`
-	Result        DailyResultCode           `json:"result"`
-	Failures      []string                  `json:"failures,omitempty"`
+	Vacancy            DailyVacancySummary       `json:"vacancy"`
+	Communication      DailyCommunicationSummary `json:"communication"`
+	AI                 AIBudgetSummary           `json:"ai"`
+	Attention          int                       `json:"attention"`
+	AttentionBreakdown map[string]int            `json:"attention_breakdown,omitempty"`
+	HHWrites           int                       `json:"hh_writes"`
+	Result             DailyResultCode           `json:"result"`
+	Failures           []string                  `json:"failures,omitempty"`
 }
 
 // DailyStageSummary is returned by one read-only stage. The orchestrator
@@ -94,6 +101,16 @@ type DailyCareerAgentRun struct {
 	IdempotentReplay bool                    `json:"idempotent_replay,omitempty"`
 }
 
+// DailyCareerAgentDurableResult is the immutable operator-facing projection
+// persisted with the existing AgentRun. It is not a second workflow state
+// machine: canonical item/preparation/clarification state remains in the
+// existing projections and this payload only makes deterministic replay
+// lossless for run-level counters and the derived queue seen at completion.
+type DailyCareerAgentDurableResult struct {
+	Summary   DailyCareerAgentSummary `json:"summary"`
+	Attention []AttentionItem         `json:"attention,omitempty"`
+}
+
 func DailyRunID(at time.Time) string {
 	return "daily-career-agent-" + at.UTC().Format("2006-01-02")
 }
@@ -118,6 +135,12 @@ func mergeDailyStageSummary(dst *DailyCareerAgentSummary, src DailyStageSummary)
 	dst.Vacancy.ReviewRequired += src.Vacancy.ReviewRequired
 	dst.Vacancy.AIReviewed += src.Vacancy.AIReviewed
 	dst.Vacancy.Prepared += src.Vacancy.Prepared
+	dst.Vacancy.RawHitsKnown = dst.Vacancy.RawHitsKnown || src.Vacancy.RawHitsKnown
+	dst.Vacancy.DiagnosticsKnown = dst.Vacancy.DiagnosticsKnown || src.Vacancy.DiagnosticsKnown
+	dst.Vacancy.RouteAmbiguous += src.Vacancy.RouteAmbiguous
+	dst.Vacancy.RouteLowEvidence += src.Vacancy.RouteLowEvidence
+	dst.Vacancy.HardUnknown += src.Vacancy.HardUnknown
+	dst.Vacancy.NoSuitableResume += src.Vacancy.NoSuitableResume
 	dst.Communication.ConversationsSynced += src.Communication.ConversationsSynced
 	dst.Communication.NewMessages += src.Communication.NewMessages
 	dst.Communication.RepliesNeeded += src.Communication.RepliesNeeded

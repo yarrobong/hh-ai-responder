@@ -2,8 +2,10 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -68,7 +70,7 @@ func (s *DailyCareerAgentService) Run(ctx context.Context, now time.Time) (caree
 
 	if existing, err := s.workflow.GetRun(ctx, runID); err == nil {
 		if existing.Status != careeragent.AgentRunStatusRunning || existing.StartedAt.After(now.Add(-dailyStaleRunAfter)) {
-			return dailyReplay(existing), nil
+			return s.dailyReplay(ctx, existing)
 		}
 		if err := s.workflow.RecoverInterruptedRuns(ctx, now); err != nil {
 			return careeragent.DailyCareerAgentRun{}, fmt.Errorf("recover stale daily Career Agent run: %w", err)
@@ -91,7 +93,7 @@ func (s *DailyCareerAgentService) Run(ctx context.Context, now time.Time) (caree
 			if getErr != nil {
 				return careeragent.DailyCareerAgentRun{}, fmt.Errorf("daily Career Agent run was claimed but cannot be read: %w", getErr)
 			}
-			return dailyReplay(existing), nil
+			return s.dailyReplay(ctx, existing)
 		}
 	} else if err := s.workflow.StartRun(ctx, run); err != nil {
 		return careeragent.DailyCareerAgentRun{}, fmt.Errorf("start daily Career Agent run: %w", err)
@@ -148,7 +150,14 @@ func (s *DailyCareerAgentService) Run(ctx context.Context, now time.Time) (caree
 			return s.failRun(ctx, result, err)
 		}
 	}
+	result.Attention = careeragent.BuildAttentionQueue(result.Attention)
 	result.Summary.Attention = len(result.Attention)
+	result.Summary.AttentionBreakdown = dailyAttentionBreakdown(result.Attention)
+	durable, err := json.Marshal(careeragent.DailyCareerAgentDurableResult{Summary: result.Summary, Attention: result.Attention})
+	if err != nil {
+		return s.failRun(ctx, result, fmt.Errorf("encode daily Career Agent durable result: %w", err))
+	}
+	result.Run.DailyResultJSON = durable
 	if err := s.workflow.FinishRun(ctx, result.Run); err != nil {
 		return careeragent.DailyCareerAgentRun{}, fmt.Errorf("persist daily Career Agent run: %w", err)
 	}
@@ -160,7 +169,7 @@ func (s *DailyCareerAgentService) replayRunning(ctx context.Context, runID strin
 	if err != nil {
 		return careeragent.DailyCareerAgentRun{}, fmt.Errorf("%w: %v", ErrDailyCareerAgentInProgress, err)
 	}
-	return dailyReplay(existing), nil
+	return s.dailyReplay(ctx, existing)
 }
 
 func (s *DailyCareerAgentService) failRun(ctx context.Context, result careeragent.DailyCareerAgentRun, runErr error) (careeragent.DailyCareerAgentRun, error) {
@@ -174,10 +183,101 @@ func (s *DailyCareerAgentService) failRun(ctx context.Context, result careeragen
 	return result, runErr
 }
 
-func dailyReplay(run careeragent.AgentRun) careeragent.DailyCareerAgentRun {
-	return careeragent.DailyCareerAgentRun{
+func (s *DailyCareerAgentService) dailyReplay(ctx context.Context, run careeragent.AgentRun) (careeragent.DailyCareerAgentRun, error) {
+	result := careeragent.DailyCareerAgentRun{
 		Run: run, Summary: careeragent.DailyCareerAgentSummary{Result: careeragent.DailyResultForStatus(run.Status)}, IdempotentReplay: true,
 	}
+	if len(run.DailyResultJSON) > 0 {
+		var durable careeragent.DailyCareerAgentDurableResult
+		if err := json.Unmarshal(run.DailyResultJSON, &durable); err != nil {
+			return careeragent.DailyCareerAgentRun{}, fmt.Errorf("decode daily Career Agent durable result: %w", err)
+		}
+		result.Summary = durable.Summary
+		result.Attention = careeragent.BuildAttentionQueue(durable.Attention)
+		result.Summary.Attention = len(result.Attention)
+		result.Summary.AttentionBreakdown = dailyAttentionBreakdown(result.Attention)
+		return result, nil
+	}
+	// Older completed runs predate the typed projection. Recover the durable
+	// attention/items where possible, but do not invent unavailable raw-hit or
+	// AI counters. New runs always take the lossless path above.
+	if reader, ok := s.workflow.(ports.CareerWorkflowRunItemsReader); ok {
+		items, err := reader.ListRunItems(ctx, run.ID, 1000)
+		if err != nil {
+			return careeragent.DailyCareerAgentRun{}, fmt.Errorf("read legacy daily Career Agent run items: %w", err)
+		}
+		result.Summary = legacyDailySummary(run, items)
+		result.Attention = careeragent.BuildAttentionQueue(attentionFromRunItems(items))
+		result.Summary.Attention = len(result.Attention)
+		result.Summary.AttentionBreakdown = dailyAttentionBreakdown(result.Attention)
+	}
+	return result, nil
+}
+
+type legacyDailyItemEvidence struct {
+	RouteReason string `json:"route_reason_code"`
+	AIEvaluated bool   `json:"ai_evaluated"`
+	WouldApply  bool   `json:"would_apply"`
+}
+
+func legacyDailySummary(run careeragent.AgentRun, items []careeragent.AgentRunItem) careeragent.DailyCareerAgentSummary {
+	result := careeragent.DailyCareerAgentSummary{Result: careeragent.DailyResultForStatus(run.Status)}
+	conversations := map[string]struct{}{}
+	for _, item := range items {
+		if item.TargetType == "communication_work_item" || item.TargetType == "communication_conversation" {
+			if item.ConversationID != "" {
+				conversations[item.ConversationID] = struct{}{}
+			}
+			switch strings.ToUpper(strings.TrimSpace(item.DecisionCode)) {
+			case "INTERVIEW":
+				result.Communication.Interviews++
+			case "TEST_TASK":
+				result.Communication.TestTasks++
+			case "OFFER":
+				result.Communication.Offers++
+			case "REJECTED":
+				result.Communication.Rejections++
+			case "FOLLOW_UP_DUE":
+				result.Communication.FollowUps++
+			}
+			if item.Status == careeragent.AgentRunItemStatusFailed {
+				result.Communication.Failures++
+			}
+			continue
+		}
+		result.Vacancy.Scanned++
+		switch item.Status {
+		case careeragent.AgentRunItemStatusMatched:
+			result.Vacancy.Matched++
+		case careeragent.AgentRunItemStatusRejected:
+			result.Vacancy.Rejected++
+		case careeragent.AgentRunItemStatusReviewRequired:
+			result.Vacancy.ReviewRequired++
+		}
+		var evidence legacyDailyItemEvidence
+		if json.Unmarshal(item.Evidence, &evidence) == nil {
+			if evidence.AIEvaluated {
+				result.Vacancy.AIReviewed++
+				result.AI.Requested++
+				result.AI.Succeeded++
+			}
+			if evidence.WouldApply {
+				result.Vacancy.Prepared++
+			}
+			switch evidence.RouteReason {
+			case careeragent.RouteReasonAmbiguous:
+				result.Vacancy.RouteAmbiguous++
+			case careeragent.RouteReasonLowEvidence:
+				result.Vacancy.RouteLowEvidence++
+			case careeragent.RouteReasonNoSuitable:
+				result.Vacancy.NoSuitableResume++
+			case careeragent.RouteReasonUnknownHard:
+				result.Vacancy.HardUnknown++
+			}
+		}
+	}
+	result.Communication.ConversationsSynced = len(conversations)
+	return result
 }
 
 func boolInt(value bool) int {
