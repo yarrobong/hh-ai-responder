@@ -16,6 +16,7 @@ func TestDailyVacancyStageMapsExistingCareerAgentReport(t *testing.T) {
 			RouteReasonCounts: map[string]int{
 				careeragent.RouteReasonAmbiguous:   2,
 				careeragent.RouteReasonLowEvidence: 3,
+				careeragent.RouteReasonOutOfScope:  5,
 				careeragent.RouteReasonNoSuitable:  4,
 			},
 		},
@@ -29,7 +30,7 @@ func TestDailyVacancyStageMapsExistingCareerAgentReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Summary.Vacancy.Found != 4 || !result.Summary.Vacancy.RawHitsKnown || !result.Summary.Vacancy.DiagnosticsKnown || result.Summary.Vacancy.New != 3 || result.Summary.Vacancy.Matched != 1 || result.Summary.Vacancy.ReviewRequired != 1 || result.Summary.AI.Requested != 2 || result.Summary.Vacancy.RouteAmbiguous != 2 || result.Summary.Vacancy.RouteLowEvidence != 3 || result.Summary.Vacancy.NoSuitableResume != 4 || result.Summary.Vacancy.HardUnknown != 1 {
+	if result.Summary.Vacancy.Found != 4 || !result.Summary.Vacancy.RawHitsKnown || !result.Summary.Vacancy.DiagnosticsKnown || result.Summary.Vacancy.New != 3 || result.Summary.Vacancy.Matched != 1 || result.Summary.Vacancy.ReviewRequired != 1 || result.Summary.AI.Requested != 2 || result.Summary.Vacancy.RouteAmbiguous != 2 || result.Summary.Vacancy.RouteLowEvidence != 3 || result.Summary.Vacancy.RoleOutOfScope != 5 || result.Summary.Vacancy.NoSuitableResume != 4 || result.Summary.Vacancy.HardUnknown != 1 {
 		t.Fatalf("summary=%+v", result.Summary)
 	}
 	if len(result.Items) != 3 || result.Items[0].RunID != "daily-run" {

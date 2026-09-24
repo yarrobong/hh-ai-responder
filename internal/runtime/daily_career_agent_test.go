@@ -267,7 +267,7 @@ func TestDailyCareerAgentCompletedReplayPreservesDurableResultAfterRestart(t *te
 		Vacancy: careeragent.DailyVacancySummary{
 			Scanned: 32, Found: 60, RawHitsKnown: true, DiagnosticsKnown: true, New: 48, Matched: 3, ReviewRequired: 31,
 			AIReviewed: 12, Prepared: 2, RouteAmbiguous: 4, RouteLowEvidence: 9,
-			HardUnknown: 2, NoSuitableResume: 5,
+			RoleOutOfScope: 6, HardUnknown: 2, NoSuitableResume: 5,
 		},
 		AI: careeragent.AIBudgetSummary{Requested: 12, Succeeded: 11, Failed: 1}, Attention: len(wantAttention),
 		Result: careeragent.DailyResultSuccess,
@@ -323,7 +323,7 @@ func TestDailyCareerAgentLegacyReplayRecoversKnownItemCountersWithoutInventingRa
 	if err := store.StartRun(context.Background(), run); err != nil {
 		t.Fatal(err)
 	}
-	evidence := []byte(`{"route_reason_code":"ROUTE_AMBIGUOUS","ai_evaluated":true,"would_apply":false}`)
+	evidence := []byte(`{"final_reason_code":"ROUTE_AMBIGUOUS","ai_evaluated":true,"would_apply":false}`)
 	if err := store.UpsertRunItem(context.Background(), careeragent.AgentRunItem{ID: "legacy-vacancy", RunID: run.ID, VacancyID: 101, Stage: careeragent.AgentRunStageReview, Status: careeragent.AgentRunItemStatusReviewRequired, DecisionCode: "REVIEW_REQUIRED", Evidence: evidence, CreatedAt: started}); err != nil {
 		t.Fatal(err)
 	}

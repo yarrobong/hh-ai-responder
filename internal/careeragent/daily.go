@@ -29,6 +29,7 @@ type DailyVacancySummary struct {
 	Prepared         int  `json:"prepared"`
 	RouteAmbiguous   int  `json:"route_ambiguous"`
 	RouteLowEvidence int  `json:"route_low_evidence"`
+	RoleOutOfScope   int  `json:"role_out_of_scope"`
 	HardUnknown      int  `json:"hard_unknown"`
 	NoSuitableResume int  `json:"no_suitable_resume"`
 }
@@ -139,6 +140,7 @@ func mergeDailyStageSummary(dst *DailyCareerAgentSummary, src DailyStageSummary)
 	dst.Vacancy.DiagnosticsKnown = dst.Vacancy.DiagnosticsKnown || src.Vacancy.DiagnosticsKnown
 	dst.Vacancy.RouteAmbiguous += src.Vacancy.RouteAmbiguous
 	dst.Vacancy.RouteLowEvidence += src.Vacancy.RouteLowEvidence
+	dst.Vacancy.RoleOutOfScope += src.Vacancy.RoleOutOfScope
 	dst.Vacancy.HardUnknown += src.Vacancy.HardUnknown
 	dst.Vacancy.NoSuitableResume += src.Vacancy.NoSuitableResume
 	dst.Communication.ConversationsSynced += src.Communication.ConversationsSynced

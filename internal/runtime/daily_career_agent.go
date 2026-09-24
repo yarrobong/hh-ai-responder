@@ -215,9 +215,10 @@ func (s *DailyCareerAgentService) dailyReplay(ctx context.Context, run careerage
 }
 
 type legacyDailyItemEvidence struct {
-	RouteReason string `json:"route_reason_code"`
-	AIEvaluated bool   `json:"ai_evaluated"`
-	WouldApply  bool   `json:"would_apply"`
+	RouteReason     string `json:"route_reason_code"`
+	FinalReasonCode string `json:"final_reason_code"`
+	AIEvaluated     bool   `json:"ai_evaluated"`
+	WouldApply      bool   `json:"would_apply"`
 }
 
 func legacyDailySummary(run careeragent.AgentRun, items []careeragent.AgentRunItem) careeragent.DailyCareerAgentSummary {
@@ -264,11 +265,17 @@ func legacyDailySummary(run careeragent.AgentRun, items []careeragent.AgentRunIt
 			if evidence.WouldApply {
 				result.Vacancy.Prepared++
 			}
-			switch evidence.RouteReason {
+			reason := strings.TrimSpace(evidence.RouteReason)
+			if reason == "" {
+				reason = strings.TrimSpace(evidence.FinalReasonCode)
+			}
+			switch reason {
 			case careeragent.RouteReasonAmbiguous:
 				result.Vacancy.RouteAmbiguous++
 			case careeragent.RouteReasonLowEvidence:
 				result.Vacancy.RouteLowEvidence++
+			case careeragent.RouteReasonOutOfScope:
+				result.Vacancy.RoleOutOfScope++
 			case careeragent.RouteReasonNoSuitable:
 				result.Vacancy.NoSuitableResume++
 			case careeragent.RouteReasonUnknownHard:

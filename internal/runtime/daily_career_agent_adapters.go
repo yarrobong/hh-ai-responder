@@ -25,6 +25,7 @@ func dailyStageResultFromCareerAgentReport(report CareerAgentRunReport, runID st
 		AIReviewed: report.Summary.AIEvaluated, Prepared: report.Summary.WouldApply,
 		RouteAmbiguous:   report.Summary.RouteReasonCounts[careeragent.RouteReasonAmbiguous],
 		RouteLowEvidence: report.Summary.RouteReasonCounts[careeragent.RouteReasonLowEvidence],
+		RoleOutOfScope:   report.Summary.RouteReasonCounts[careeragent.RouteReasonOutOfScope],
 		NoSuitableResume: report.Summary.RouteReasonCounts[careeragent.RouteReasonNoSuitable],
 		HardUnknown:      dailyHardUnknownCount(report),
 	}
