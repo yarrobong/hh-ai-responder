@@ -63,6 +63,20 @@ func (f *fakeLetter) Generate(context.Context, coverletter.Input) (coverletter.R
 	return coverletter.Result{Letter: "truthful letter"}, f.err
 }
 
+type fallbackFakeLetter struct {
+	result coverletter.Result
+	calls  int
+}
+
+func (f *fallbackFakeLetter) Generate(context.Context, coverletter.Input) (coverletter.Result, error) {
+	return coverletter.Result{}, errors.New("primary generator should not be selected")
+}
+
+func (f *fallbackFakeLetter) GenerateWithFallback(context.Context, coverletter.Input) (coverletter.Result, error) {
+	f.calls++
+	return f.result, nil
+}
+
 type fakeTestAnswer struct {
 	calls  int
 	result testanswer.Result
@@ -159,6 +173,23 @@ func TestPrepareRequiredLetterAndTestPreservesProviderIdentities(t *testing.T) {
 	}
 	if result.Prepared.Test == nil || result.Prepared.Test.Tasks[0].CandidateSolutions[0].ID != "101" || result.Prepared.Test.Answers[0].SolutionID != 101 {
 		t.Fatalf("provider identities changed: %#v", result.Prepared.Test)
+	}
+}
+
+func TestPrepareFallbackLetterRemainsReviewRequiredAndKeepsEvidence(t *testing.T) {
+	reader := &fakeReader{description: "description", applicability: Applicability{LetterRequired: true}}
+	analyzer := &fakeAnalyzer{assessment: vacancyanalysis.Assessment{Apply: true, Score: 90}}
+	letter := &fallbackFakeLetter{result: coverletter.Result{
+		Letter: "Здравствуйте! Меня заинтересовала вакансия.", Status: coverletter.DraftStatusReviewRequired,
+		Evidence: []coverletter.DraftEvidence{{Claim: "vacancy scope", Kind: "vacancy", Reference: "vacancy:7"}},
+	}}
+	service := NewService(Dependencies{Vacancies: reader, Candidate: &fakeCandidate{}, Analyzer: analyzer, CoverLetter: letter, Policy: fakePolicy{decision: DecisionMatch, reconcile: AssessmentReconcile{assessment: analyzer.assessment, decision: DecisionMatch}}})
+	result, err := service.Prepare(context.Background(), baseRequest())
+	if err != nil || result.Outcome != OutcomeManualReview || result.Prepared == nil || letter.calls != 1 {
+		t.Fatalf("fallback preparation=%+v err=%v calls=%d", result, err, letter.calls)
+	}
+	if len(result.Prepared.CoverLetterEvidence) != 1 || result.Prepared.CoverLetterEvidence[0].Reference != "vacancy:7" {
+		t.Fatalf("evidence=%+v", result.Prepared.CoverLetterEvidence)
 	}
 }
 

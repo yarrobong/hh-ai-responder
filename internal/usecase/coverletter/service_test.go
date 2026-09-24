@@ -80,6 +80,92 @@ func TestServiceRejectsEmptyAndProviderErrors(t *testing.T) {
 	}
 }
 
+func TestServiceGenerateWithFallbackReturnsReviewableDeterministicDraft(t *testing.T) {
+	fake := &completionFake{response: llmvalue.CompletionResponse{Content: "   "}}
+	input := baseInput()
+	result, err := NewService(Dependencies{Completion: fake}, Options{}).GenerateWithFallback(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != DraftStatusReviewRequired || result.Confidence != ConfidenceDeterministicFallback {
+		t.Fatalf("status=%q confidence=%q, want review-required deterministic fallback", result.Status, result.Confidence)
+	}
+	if !strings.Contains(result.Letter, input.Vacancy.Name) || strings.Contains(strings.ToLower(result.Letter), "kubernetes") {
+		t.Fatalf("fallback letter=%q", result.Letter)
+	}
+	if result.FallbackReason == "" || len(result.Evidence) == 0 {
+		t.Fatalf("fallback metadata=%+v", result)
+	}
+}
+
+func TestServiceGenerateWithFallbackHandlesMalformedPresentation(t *testing.T) {
+	fake := &completionFake{response: llmvalue.CompletionResponse{Content: "```json\n{\"letter\":\"claim\"}\n```"}}
+	result, err := NewService(Dependencies{Completion: fake}, Options{}).GenerateWithFallback(context.Background(), baseInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != DraftStatusReviewRequired || strings.Contains(result.Letter, "```") {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestServiceEvidenceAlignsWithSelectedResumeAndRelevantStory(t *testing.T) {
+	fake := &completionFake{response: llmvalue.CompletionResponse{Content: "Работал с Django и создавал API."}}
+	input := baseInput()
+	input.Stories = []candidate.CandidateStory{{ID: "bizonvr", Title: "Интеграция CRM", Keywords: []string{"Django"}, Summary: "Нарративный контекст"}}
+	result, err := NewService(Dependencies{Completion: fake}, Options{}).Generate(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != DraftStatusValid || len(result.UsedStoryIDs) != 1 || result.UsedStoryIDs[0] != "bizonvr" {
+		t.Fatalf("result=%+v", result)
+	}
+	if !hasEvidence(result.Evidence, "resume", "resume:"+input.Candidate.ResumeTitle) || !hasEvidence(result.Evidence, "candidate_story", "bizonvr") {
+		t.Fatalf("evidence=%+v", result.Evidence)
+	}
+	for _, item := range result.Evidence {
+		if item.Kind == "candidate_story" && item.Claim != "narrative context only" {
+			t.Fatalf("story evidence overstates provenance: %+v", item)
+		}
+	}
+}
+
+func TestValidateLetterRejectsContradictoryResumeAndKnowledge(t *testing.T) {
+	input := baseInput()
+	input.Candidate.SafeKnowledge.Skills = []candidate.CandidateSkillDetailed{{Name: "Kubernetes", Level: candidate.SkillLevelUnknown, Negative: true}}
+	input.Candidate.Profile.Skills = []candidate.CandidateSkill{{Name: "Kubernetes", Level: candidate.SkillLevelWorking, ProfileFact: candidate.ProfileFact{Source: candidate.CandidateSourceHHResume, Confirmed: true}}}
+	err := ValidateLetter(input.Candidate, "Имею опыт работы с Kubernetes.")
+	if err == nil || !strings.Contains(err.Error(), "contradictory") {
+		t.Fatalf("err=%v, want contradictory-source rejection", err)
+	}
+}
+
+func TestServiceGenerateWithFallbackRejectsUnsupportedDurationClaim(t *testing.T) {
+	fake := &completionFake{response: llmvalue.CompletionResponse{Content: "Есть 5 лет опыта с Django."}}
+	input := baseInput()
+	input.Candidate.TotalExperienceMonthsKnown = true
+	input.Candidate.TotalExperienceMonths = 24
+	_, err := NewService(Dependencies{Completion: fake}, Options{}).GenerateWithFallback(context.Background(), input)
+	if err == nil || !errors.Is(err, ErrUnsupportedCandidateFact) {
+		t.Fatalf("err=%v, want hard unsupported-fact error", err)
+	}
+}
+
+func TestServiceFallbackIsDeterministicForSameInput(t *testing.T) {
+	input := baseInput()
+	first, err := NewService(Dependencies{Completion: &completionFake{response: llmvalue.CompletionResponse{Content: ""}}}, Options{}).GenerateWithFallback(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewService(Dependencies{Completion: &completionFake{response: llmvalue.CompletionResponse{Content: ""}}}, Options{}).GenerateWithFallback(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Letter != second.Letter || first.Fingerprint() != second.Fingerprint() {
+		t.Fatalf("fallback is not idempotent: first=%+v second=%+v", first, second)
+	}
+}
+
 func TestServiceStopsBeforeProviderOnCancellation(t *testing.T) {
 	fake := &completionFake{response: llmvalue.CompletionResponse{Content: "letter"}}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -137,4 +223,13 @@ func withPreferences(value CandidateFacts, relocation, trips string) CandidateFa
 	value.SafeKnowledge.Profile.Relocation = relocation
 	value.SafeKnowledge.Profile.BusinessTrips = trips
 	return value
+}
+
+func hasEvidence(values []DraftEvidence, kind, reference string) bool {
+	for _, value := range values {
+		if value.Kind == kind && value.Reference == reference {
+			return true
+		}
+	}
+	return false
 }
