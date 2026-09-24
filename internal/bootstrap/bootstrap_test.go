@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	appcli "hh-ai-responder/internal/cli"
 )
 
 func testEnv(t *testing.T, handlers Handlers) Env {
@@ -89,6 +91,23 @@ func TestRunDispatchesCommandAndPreservesArguments(t *testing.T) {
 	}
 	if len(got.Invocation.Args) != 2 || got.Invocation.Args[1] != "vacancies" {
 		t.Fatalf("args=%v", got.Invocation.Args)
+	}
+}
+
+func TestRunDispatchesCareerAgentDailyBeforeRuntime(t *testing.T) {
+	var got Request
+	env := testEnv(t, Handlers{CareerAgent: func(request Request) int {
+		got = request
+		return 0
+	}})
+	if gotCode := Run(context.Background(), []string{"career-agent", "daily", "--json"}, env); gotCode != 0 {
+		t.Fatalf("exit code: got %d, want 0; stderr=%q", gotCode, env.Stderr.(*bytes.Buffer).String())
+	}
+	if got.Invocation.Command != appcli.CommandCareerAgent || got.Invocation.Subcommand != "daily" {
+		t.Fatalf("invocation=%+v", got.Invocation)
+	}
+	if len(got.Invocation.Args) != 2 || got.Invocation.Args[0] != "daily" || got.Invocation.Args[1] != "--json" {
+		t.Fatalf("args=%v, want [daily --json]", got.Invocation.Args)
 	}
 }
 

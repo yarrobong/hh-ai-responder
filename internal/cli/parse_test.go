@@ -42,6 +42,8 @@ func TestParseSupportedInvocations(t *testing.T) {
 		{name: "hh api approval review", args: []string{"hh-api", "approval", "review", "--pilot", "pilot.json", "--out", "approval.json", "--letter-file", "letter.txt"}, command: CommandHHAPI, subcommand: "approval", commandArgs: []string{"approval", "review", "--pilot", "pilot.json", "--out", "approval.json", "--letter-file", "letter.txt"}},
 		{name: "career agent shadow", args: []string{"career-agent", "--shadow"}, command: CommandCareerAgent, commandArgs: []string{"--shadow"}},
 		{name: "career agent subcommand shadow", args: []string{"career-agent", "shadow"}, command: CommandCareerAgent, subcommand: "shadow", commandArgs: []string{"shadow"}},
+		{name: "career agent daily", args: []string{"career-agent", "daily"}, command: CommandCareerAgent, subcommand: "daily", commandArgs: []string{"daily"}},
+		{name: "career agent daily json", args: []string{"career-agent", "daily", "--json"}, command: CommandCareerAgent, subcommand: "daily", commandArgs: []string{"daily", "--json"}},
 		{name: "career agent feedback", args: []string{"career-agent", "feedback", "--vacancy", "1"}, command: CommandCareerAgent, subcommand: "feedback", commandArgs: []string{"feedback", "--vacancy", "1"}},
 		{name: "career agent browser session", args: []string{"career-agent", "browser-session", "--status"}, command: CommandCareerAgent, subcommand: "browser-session", commandArgs: []string{"browser-session", "--status"}},
 		{name: "config before command", args: []string{"--ai-model", "fixture", "hh", "workflow"}, command: CommandHH, subcommand: "workflow", leadingArgs: []string{"--ai-model", "fixture"}, commandArgs: []string{"workflow"}},
