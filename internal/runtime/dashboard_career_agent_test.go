@@ -143,6 +143,35 @@ func TestDashboardAttentionUsesLatestRunAndExcludesResolvedRunItems(t *testing.T
 	}
 }
 
+func TestDashboardCareerAttentionDeduplicatesNotificationIdentity(t *testing.T) {
+	server := dashboardTestServer(t)
+	now := time.Date(2026, 9, 24, 9, 0, 0, 0, time.UTC)
+	conversationID := "conversation-duplicate"
+	server.Notifications.notifications = []CandidateNotification{
+		{ID: "old-manual", Type: NotificationManualReviewRequired, RelatedConversationID: conversationID, Fingerprint: "manual-review/old", CreatedAt: now, Lifecycle: NotificationNew},
+		{ID: "new-manual", Type: NotificationManualReviewRequired, RelatedConversationID: conversationID, Fingerprint: "manual-review/new", CreatedAt: now.Add(time.Minute), Lifecycle: NotificationNew},
+		{ID: "reply", Type: NotificationCandidateActionRequired, RelatedConversationID: conversationID, Fingerprint: "reply/current", CreatedAt: now.Add(2 * time.Minute), Lifecycle: NotificationNew},
+	}
+
+	queue, err := server.buildAttentionQueue(dashboardSnapshot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(queue) != 2 {
+		t.Fatalf("notification identities were not deduplicated: %+v", queue)
+	}
+	seen := map[string]string{}
+	for _, item := range queue {
+		seen[item.Type] = item.ID
+	}
+	if seen[string(NotificationManualReviewRequired)] != "notification:new-manual" {
+		t.Fatalf("older manual review notification survived: %+v", queue)
+	}
+	if seen[string(NotificationCandidateActionRequired)] != "notification:reply" {
+		t.Fatalf("distinct notification type was lost: %+v", queue)
+	}
+}
+
 func TestDailyAttentionBreakdownUsesDeduplicatedActiveIdentities(t *testing.T) {
 	now := time.Date(2026, 9, 24, 9, 0, 0, 0, time.UTC)
 	items := []careeragent.AttentionItem{

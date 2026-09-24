@@ -37,7 +37,7 @@ func (s *DashboardServer) buildAttentionQueue(snapshot dashboardSnapshot) ([]car
 		})
 	}
 	if s.Notifications != nil {
-		for _, notification := range s.Notifications.List() {
+		for _, notification := range deduplicateAttentionNotifications(s.Notifications.List()) {
 			if notification.Lifecycle == NotificationResolved || notification.Lifecycle == NotificationDismissed {
 				continue
 			}
@@ -92,6 +92,47 @@ func (s *DashboardServer) buildAttentionQueue(snapshot dashboardSnapshot) ([]car
 		}
 	}
 	return careeragent.BuildAttentionQueue(items), nil
+}
+
+// deduplicateAttentionNotifications collapses repeated notification records
+// only in the derived attention read model. The notification store remains the
+// source of truth for immutable history, fingerprints, and lifecycle changes.
+// A newer notification for the same conversation/type supersedes an older
+// notification without hiding distinct notification types or unrelated items.
+func deduplicateAttentionNotifications(notifications []CandidateNotification) []CandidateNotification {
+	latest := make(map[string]CandidateNotification, len(notifications))
+	order := make([]string, 0, len(notifications))
+	for _, notification := range notifications {
+		identity := attentionNotificationIdentity(notification)
+		previous, exists := latest[identity]
+		if !exists {
+			order = append(order, identity)
+			latest[identity] = notification
+			continue
+		}
+		if !notification.CreatedAt.Before(previous.CreatedAt) {
+			latest[identity] = notification
+		}
+	}
+	result := make([]CandidateNotification, 0, len(order))
+	for _, identity := range order {
+		result = append(result, latest[identity])
+	}
+	return result
+}
+
+func attentionNotificationIdentity(notification CandidateNotification) string {
+	typeName := string(notification.Type)
+	switch {
+	case strings.TrimSpace(notification.RelatedConversationID) != "":
+		return "conversation:" + notification.RelatedConversationID + ":" + typeName
+	case strings.TrimSpace(notification.RelatedApplicationID) != "":
+		return "application:" + notification.RelatedApplicationID + ":" + typeName
+	case notification.RelatedVacancyID > 0:
+		return "vacancy:" + strconv.Itoa(notification.RelatedVacancyID) + ":" + typeName
+	default:
+		return "fingerprint:" + notification.Fingerprint
+	}
 }
 
 func dailyAttentionBreakdown(items []careeragent.AttentionItem) map[string]int {
