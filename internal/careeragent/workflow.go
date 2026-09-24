@@ -142,6 +142,7 @@ type ApplicationPreparation struct {
 	VacancyID             int                `json:"vacancy_id"`
 	ResumeID              string             `json:"resume_id,omitempty"`
 	ResumeProviderID      string             `json:"resume_provider_id,omitempty"`
+	ResumeFingerprint     string             `json:"resume_fingerprint,omitempty"`
 	CandidateID           string             `json:"candidate_id"`
 	CandidateVersion      int                `json:"candidate_version"`
 	CandidateSnapshotHash string             `json:"candidate_snapshot_hash"`
@@ -220,6 +221,7 @@ func PreparationInputFingerprint(p ApplicationPreparation) string {
 		VacancyID             int
 		ResumeID              string
 		ResumeProviderID      string
+		ResumeFingerprint     string
 		CandidateID           string
 		CandidateVersion      int
 		CandidateSnapshotHash string
@@ -231,7 +233,7 @@ func PreparationInputFingerprint(p ApplicationPreparation) string {
 		TestAnswerDrafts      json.RawMessage
 		KnowledgeRequests     []KnowledgeRequest
 	}{
-		VacancyID: p.VacancyID, ResumeID: p.ResumeID, ResumeProviderID: p.ResumeProviderID,
+		VacancyID: p.VacancyID, ResumeID: p.ResumeID, ResumeProviderID: p.ResumeProviderID, ResumeFingerprint: p.ResumeFingerprint,
 		CandidateID: p.CandidateID, CandidateVersion: p.CandidateVersion, CandidateSnapshotHash: p.CandidateSnapshotHash,
 		RouteStatus: p.RouteStatus, RouteConfidence: p.RouteConfidence, Evidence: p.Evidence,
 		StoryIDs: append([]string(nil), p.StoryIDs...), CoverLetterHash: p.CoverLetterHash,

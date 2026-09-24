@@ -942,8 +942,49 @@ func (r *HHAIResponder) buildCareerAgentPilotPreviewFromStateWithSelection(value
 		artifact.Status = applicationpilot.StatusBlocked
 		preview.Status = applicationpilot.StatusBlocked
 	}
+	if r.careerWorkflowStore != nil && (preview.Status == pilotReadyStatus || preview.Status == pilotManualReviewStatus) {
+		preparation, preparationErr := r.persistCareerAgentPilotPreparation(value, selectedResume, selectedProfileID, assessment, artifact)
+		if preparationErr != nil {
+			preview.Reasons = append(preview.Reasons, "durable preparation failed: "+preparationErr.Error())
+			artifact.Status = applicationpilot.StatusBlocked
+			preview.Status = applicationpilot.StatusBlocked
+			artifact.Nonce = ""
+		} else {
+			artifact.PreparationID = preparation.ID
+			artifact.PreparationHash = preparation.InputFingerprint
+		}
+	}
 	preview.Artifact = artifact
 	return preview, nil
+}
+
+func (r *HHAIResponder) persistCareerAgentPilotPreparation(value Vacancy, selectedResume ResumeItem, routeID string, assessment VacancyEvaluation, artifact PilotArtifact) (careeragent.ApplicationPreparation, error) {
+	if r == nil || r.careerWorkflowStore == nil {
+		return careeragent.ApplicationPreparation{}, errors.New("career workflow preparation store is unavailable")
+	}
+	previousMode := r.careerAgentMode
+	if strings.TrimSpace(r.careerAgentMode) == "" {
+		r.careerAgentMode = "pilot"
+	}
+	defer func() { r.careerAgentMode = previousMode }()
+	prepared := applicationprocessing.Result{Prepared: &applicationprocessing.PreparedApplication{
+		VacancyID: artifact.VacancyID, ResumeID: r.resumeIdentifierForValue(selectedResume), ResumeTitle: selectedResume.Title,
+		CoverLetter: artifact.CoverLetter, CoverLetterStatus: artifact.CoverLetterStatus,
+		CoverLetterEvidence: append([]coverletter.DraftEvidence(nil), artifact.CoverLetterEvidence...), Analysis: assessment,
+	}}
+	trace := CareerAgentVacancyResult{
+		VacancyID: artifact.VacancyID, SelectedResume: routeID, SelectedResumeTitle: selectedResume.Title,
+		ResumeConfidence: artifact.RouterConfidence, FinalDecision: artifact.FinalDecision, AIScore: artifact.AIScore,
+		FinalRouteReasonCode: artifact.RouterReasonCode,
+	}
+	preparation, err := r.buildCareerAgentPreparation(value, selectedResume, trace, prepared)
+	if err != nil {
+		return careeragent.ApplicationPreparation{}, err
+	}
+	if err := r.careerWorkflowStore.UpsertPreparation(ctxOrBackground(r.ctx), preparation); err != nil {
+		return careeragent.ApplicationPreparation{}, err
+	}
+	return preparation, nil
 }
 
 func pilotCoverLetterOptional(preflight VacancyPreflight) bool {
@@ -1300,7 +1341,11 @@ func runCareerAgentPilotSend(args []string, cfg Config, stdout, stderr io.Writer
 	if err != nil {
 		return err
 	}
-	if err := applicationpilot.VerifyApproval(applicationpilot.Approval{VacancyID: artifact.VacancyID, ResumeID: artifact.SelectedResumeHash, ContentHash: artifact.ContentHash, Nonce: artifact.Nonce}, current); err != nil {
+	providerResumeID, err := pilotProviderResumeID(artifact)
+	if err != nil {
+		return err
+	}
+	if err := applicationpilot.VerifyApproval(applicationpilot.Approval{VacancyID: artifact.VacancyID, ResumeID: providerResumeID, ContentHash: artifact.ContentHash, Nonce: artifact.Nonce}, current); err != nil {
 		return fmt.Errorf("pilot approval verification failed: %w", err)
 	}
 	if _, _, _, err := responder.activateResume(current.ResumeID); err != nil {
@@ -1309,7 +1354,7 @@ func runCareerAgentPilotSend(args []string, cfg Config, stdout, stderr io.Writer
 	if err := markPilotNonceUsed(path, &artifact); err != nil {
 		return err
 	}
-	result, _, submitErr := responder.submitPreparedApplication(applicationprocessing.PreparedApplication{VacancyID: artifact.VacancyID, Vacancy: artifact.Vacancy, ResumeID: artifact.SelectedResumeHash, ResumeTitle: artifact.SelectedResumeTitle, CoverLetter: artifact.CoverLetter})
+	result, _, submitErr := responder.submitPreparedApplication(applicationprocessing.PreparedApplication{VacancyID: artifact.VacancyID, Vacancy: artifact.Vacancy, ResumeID: providerResumeID, ResumeTitle: artifact.SelectedResumeTitle, CoverLetter: artifact.CoverLetter})
 	status := applicationpilot.OutcomeUnknown
 	if submitErr != nil && result.Execution.Outcome == applicationsubmission.ExecutionRejected {
 		status = applicationpilot.OutcomeFailed

@@ -255,13 +255,18 @@ func (r *HHAIResponder) applicationProcessingRequest(value vacancy.Vacancy, resu
 	if strings.TrimSpace(resume.Area) != "" {
 		selected.Location = resume.Area
 	}
-	if r != nil && strings.TrimSpace(resume.Hash) != "" && r.resumeFactsByHash != nil {
-		if facts, ok := r.resumeFactsByHash[resume.Hash]; ok && strings.TrimSpace(facts.ExperienceText) != "" {
+	if r != nil && r.resumeFactsByHash != nil {
+		resumeFactsKey := r.resumeIdentifierForValue(resume)
+		facts, ok := r.resumeFactsByHash[resumeFactsKey]
+		if !ok && strings.TrimSpace(resume.Hash) != "" {
+			facts, ok = r.resumeFactsByHash[resume.Hash]
+		}
+		if ok && strings.TrimSpace(facts.ExperienceText) != "" {
 			selected.Experience = facts.ExperienceText
 		}
 	}
 	return applicationprocessing.Request{
-		Vacancy: value, ResumeID: resume.Hash, ResumeTitle: resume.Title,
+		Vacancy: value, ResumeID: r.resumeIdentifierForValue(resume), ResumeTitle: resume.Title,
 		Candidate:   vacancyanalysis.CandidateFacts{FullName: selected.FullName, ResumeTitle: selected.ResumeTitle, Salary: selected.Salary, Experience: selected.Experience, Skills: selected.Skills, Location: selected.Location, Contacts: selected.Contacts, EducationKnown: selected.EducationKnown, EducationLevel: selected.EducationLevel, EducationDetails: selected.EducationDetails, TotalExperienceMonthsKnown: selected.TotalExperienceMonthsKnown, TotalExperienceMonths: selected.TotalExperienceMonths, Profile: selected.Profile, SafeContext: selected.SafeContext},
 		LetterFacts: coverLetterCandidateFacts(selected), Stories: append([]CandidateStory(nil), selected.Stories...), Contacts: r.contacts, GitHubURL: r.githubURL,
 		ExtraLetterPrompt: r.extraLetterPrompt, ExtraTestPrompt: r.extraTestSolutionPrompt, ForceLetter: r.forceLetter, IncludeKeywords: append([]string(nil), r.includeKeywords...),
