@@ -29,7 +29,7 @@ func dailyStageResultFromCareerAgentReport(report CareerAgentRunReport, runID st
 		NoSuitableResume: report.Summary.RouteReasonCounts[careeragent.RouteReasonNoSuitable],
 		HardUnknown:      dailyHardUnknownCount(report),
 	}
-	result.Summary.AI = careeragent.AIBudgetSummary{Requested: report.Summary.AIEvaluated, Succeeded: report.Summary.AIEvaluated - report.Summary.Errors, Failed: report.Summary.Errors}
+	result.Summary.AI = careeragent.AIBudgetSummary{Known: true, Requested: report.Summary.AIEvaluated, Succeeded: report.Summary.AIEvaluated - report.Summary.Errors, Failed: report.Summary.Errors}
 	if result.Summary.AI.Succeeded < 0 {
 		result.Summary.AI.Succeeded = 0
 	}

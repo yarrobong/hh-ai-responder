@@ -269,7 +269,7 @@ func TestDailyCareerAgentCompletedReplayPreservesDurableResultAfterRestart(t *te
 			AIReviewed: 12, Prepared: 2, RouteAmbiguous: 4, RouteLowEvidence: 9,
 			RoleOutOfScope: 6, HardUnknown: 2, NoSuitableResume: 5,
 		},
-		AI: careeragent.AIBudgetSummary{Requested: 12, Succeeded: 11, Failed: 1}, Attention: len(wantAttention),
+		AI: careeragent.AIBudgetSummary{Known: true, Requested: 12, Succeeded: 11, Failed: 1}, Attention: len(wantAttention),
 		Result: careeragent.DailyResultSuccess,
 	}
 

@@ -47,10 +47,11 @@ type DailyCommunicationSummary struct {
 }
 
 type AIBudgetSummary struct {
-	Requested int `json:"requested"`
-	Succeeded int `json:"succeeded"`
-	Skipped   int `json:"skipped"`
-	Failed    int `json:"failed"`
+	Known     bool `json:"known"`
+	Requested int  `json:"requested"`
+	Succeeded int  `json:"succeeded"`
+	Skipped   int  `json:"skipped"`
+	Failed    int  `json:"failed"`
 }
 
 type DailyCareerAgentSummary struct {
@@ -153,6 +154,7 @@ func mergeDailyStageSummary(dst *DailyCareerAgentSummary, src DailyStageSummary)
 	dst.Communication.FollowUps += src.Communication.FollowUps
 	dst.Communication.Failures += src.Communication.Failures
 	dst.AI.Requested += src.AI.Requested
+	dst.AI.Known = dst.AI.Known || src.AI.Known
 	dst.AI.Succeeded += src.AI.Succeeded
 	dst.AI.Skipped += src.AI.Skipped
 	dst.AI.Failed += src.AI.Failed
