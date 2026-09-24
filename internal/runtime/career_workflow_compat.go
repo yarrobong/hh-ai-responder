@@ -13,6 +13,7 @@ import (
 	"hh-ai-responder/internal/careeragent"
 	"hh-ai-responder/internal/ports"
 	applicationprocessing "hh-ai-responder/internal/usecase/applicationprocessing"
+	"hh-ai-responder/internal/usecase/coverletter"
 )
 
 func buildCareerWorkflowStore(config Config, backend string, career CareerRepositories) (ports.CareerWorkflowStore, func(), error) {
@@ -185,9 +186,12 @@ func (r *HHAIResponder) persistCareerAgentPreparation(value Vacancy, selectedRes
 		VacancyID: value.ID, ResumeID: selectedResume.Hash, ResumeProviderID: r.resumeIdentifierForValue(selectedResume),
 		CandidateID: r.careerAgentCandidateID, CandidateVersion: r.careerAgentCandidateVersion,
 		CandidateSnapshotHash: r.careerAgentCandidateHash, RouteStatus: careeragent.ResumeRouteMatch,
-		RouteConfidence: boundedWorkflowText(trace.ResumeConfidence), Evidence: workflowPreparationEvidence(trace),
+		RouteConfidence: boundedWorkflowText(trace.ResumeConfidence), Evidence: workflowPreparationEvidence(trace, result.Prepared.CoverLetterStatus, result.Prepared.CoverLetterFallbackReason, result.Prepared.CoverLetterEvidence),
 		CoverLetter: result.Prepared.CoverLetter, TestAnswerDrafts: testDrafts, KnowledgeRequests: requests,
 		Status: careeragent.PreparationStatusReady, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	}
+	if result.Prepared.CoverLetterStatus == coverletter.DraftStatusReviewRequired {
+		preparation.Status = careeragent.PreparationStatusReviewRequired
 	}
 	preparation.CoverLetterHash = preparation.ContentHash()
 	preparation.InputFingerprint = careeragent.PreparationInputFingerprint(preparation)
@@ -212,15 +216,19 @@ func (r *HHAIResponder) rememberCareerAgentCandidate(value Candidate) error {
 	return nil
 }
 
-func workflowPreparationEvidence(trace CareerAgentVacancyResult) json.RawMessage {
+func workflowPreparationEvidence(trace CareerAgentVacancyResult, status coverletter.DraftStatus, fallbackReason string, evidence []coverletter.DraftEvidence) json.RawMessage {
 	raw, _ := json.Marshal(struct {
-		SelectedResume string `json:"selected_resume,omitempty"`
-		RouteReason    string `json:"route_reason_code,omitempty"`
-		Decision       string `json:"decision,omitempty"`
-		AIScore        *int   `json:"ai_score,omitempty"`
+		SelectedResume      string                      `json:"selected_resume,omitempty"`
+		RouteReason         string                      `json:"route_reason_code,omitempty"`
+		Decision            string                      `json:"decision,omitempty"`
+		AIScore             *int                        `json:"ai_score,omitempty"`
+		CoverLetterStatus   coverletter.DraftStatus     `json:"cover_letter_status,omitempty"`
+		CoverLetterFallback string                      `json:"cover_letter_fallback_reason,omitempty"`
+		CoverLetterEvidence []coverletter.DraftEvidence `json:"cover_letter_evidence,omitempty"`
 	}{
 		SelectedResume: boundedWorkflowText(trace.SelectedResume), RouteReason: boundedWorkflowText(trace.FinalRouteReasonCode),
-		Decision: boundedWorkflowText(trace.FinalDecision), AIScore: boundedWorkflowScore(trace.AIScore),
+		Decision: boundedWorkflowText(trace.FinalDecision), AIScore: boundedWorkflowScore(trace.AIScore), CoverLetterStatus: status,
+		CoverLetterFallback: boundedWorkflowText(fallbackReason), CoverLetterEvidence: append([]coverletter.DraftEvidence(nil), evidence...),
 	})
 	return raw
 }

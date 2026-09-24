@@ -101,6 +101,13 @@ func (a rootApplicationCoverLetter) Generate(ctx context.Context, input coverlet
 	return coverletter.NewService(coverletter.Dependencies{Completion: a.client.provider}, coverletter.Options{Model: a.client.model, MaxTokens: 512, Temperature: 0.5}).Generate(ctx, input)
 }
 
+func (a rootApplicationCoverLetter) GenerateWithFallback(ctx context.Context, input coverletter.Input) (coverletter.Result, error) {
+	if a.client == nil {
+		return coverletter.Result{}, errors.New("AI completion provider is not configured")
+	}
+	return coverletter.NewService(coverletter.Dependencies{Completion: a.client.provider}, coverletter.Options{Model: a.client.model, MaxTokens: 512, Temperature: 0.5}).GenerateWithFallback(ctx, input)
+}
+
 type rootApplicationTestAnswer struct{ client *AIClient }
 
 func (a rootApplicationTestAnswer) Generate(ctx context.Context, input testanswer.Input) (testanswer.Result, error) {

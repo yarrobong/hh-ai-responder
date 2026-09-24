@@ -78,14 +78,17 @@ type PreparedTest struct {
 // not contain approval, current-state proof, transport status, or delivery
 // evidence. R11/R12.4b must preflight again immediately before a write.
 type PreparedApplication struct {
-	VacancyID        int
-	Vacancy          vacancy.Vacancy
-	ResumeID         string
-	ResumeTitle      string
-	CoverLetter      string
-	Test             *PreparedTest
-	Analysis         vacancyanalysis.Assessment
-	CandidateContext candidatecontext.CandidateContext
+	VacancyID                 int
+	Vacancy                   vacancy.Vacancy
+	ResumeID                  string
+	ResumeTitle               string
+	CoverLetter               string
+	CoverLetterStatus         coverletter.DraftStatus
+	CoverLetterEvidence       []coverletter.DraftEvidence
+	CoverLetterFallbackReason string
+	Test                      *PreparedTest
+	Analysis                  vacancyanalysis.Assessment
+	CandidateContext          candidatecontext.CandidateContext
 }
 
 type Request struct {
@@ -121,6 +124,10 @@ type VacancyAnalyzer interface {
 
 type CoverLetterGenerator interface {
 	Generate(context.Context, coverletter.Input) (coverletter.Result, error)
+}
+
+type FallbackCoverLetterGenerator interface {
+	GenerateWithFallback(context.Context, coverletter.Input) (coverletter.Result, error)
 }
 
 type TestAnswerGenerator interface {

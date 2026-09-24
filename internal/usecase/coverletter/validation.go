@@ -11,6 +11,7 @@ import (
 var (
 	experienceDurationClaimPattern    = regexp.MustCompile(`(?i)(?:[0-9]+(?:[.,][0-9]+)?\s*)?(?:год(?:а|ов)?|лет|year(?:s)?)\s*(?:опыта|experience)?`)
 	approximateExperienceClaimPattern = regexp.MustCompile(`(?i)(?:около|примерно|приблизительно|about|approximately)\s+(?:[0-9]+(?:[.,][0-9]+)?\s*)?(?:год(?:а|ов)?|лет|year(?:s)?)`)
+	technologyDurationClaimPattern    = regexp.MustCompile(`(?i)[0-9]+(?:[.,][0-9]+)?\s*(?:год(?:а|ов)?|лет|year(?:s)?)[^.!?\n]{0,35}\b(?:python|django|fastapi|flask|kubernetes|k8s|docker|kafka|celery|php|sql|postgres(?:ql)?)\b`)
 )
 
 // ValidateLetter applies cover-letter-specific deterministic checks. It is
@@ -42,7 +43,26 @@ func ValidateLetter(value CandidateFacts, letter string) error {
 	return nil
 }
 
+// ValidatePreview checks presentation-only constraints shared by pilot
+// preview and manual approval. ValidateLetter remains the fact-safety gate.
+func ValidatePreview(letter string) error {
+	text := strings.ToLower(strings.TrimSpace(letter))
+	if text == "" {
+		return ErrEmptyLetter
+	}
+	if strings.Contains(text, "приветствуйте") || strings.Contains(text, "career agent") || strings.Contains(text, "ai automation") || strings.Contains(text, "автоматизацией отклика") {
+		return fmt.Errorf("cover letter contains a placeholder or internal automation reference")
+	}
+	if strings.Contains(text, "```") || strings.Contains(text, "\n-") || strings.HasPrefix(text, "{") {
+		return fmt.Errorf("cover letter contains markdown or structured-output noise")
+	}
+	return nil
+}
+
 func validateExperience(value CandidateFacts, letter string) error {
+	if technologyDurationClaimPattern.MatchString(letter) {
+		return fmt.Errorf("%w: technology-specific experience duration is not confirmed", ErrUnsupportedCandidateFact)
+	}
 	if !value.TotalExperienceMonthsKnown || value.TotalExperienceMonths%12 == 0 {
 		return nil
 	}
@@ -52,7 +72,7 @@ func validateExperience(value CandidateFacts, letter string) error {
 	}
 	approximateClaims := approximateExperienceClaimPattern.FindAllStringIndex(letter, -1)
 	if len(approximateClaims) < len(claims) {
-		return fmt.Errorf("generated letter rounds structured experience of %d months to years", value.TotalExperienceMonths)
+		return fmt.Errorf("%w: generated letter rounds structured experience of %d months to years", ErrUnsupportedCandidateFact, value.TotalExperienceMonths)
 	}
 	return nil
 }
@@ -61,6 +81,9 @@ func validateTechnologyClaims(value CandidateFacts, text string) error {
 	for _, technology := range []string{"kubernetes", "k8s", "kafka", "celery", "docker"} {
 		if !strings.Contains(text, technology) || !positiveClaim(text, technology) {
 			continue
+		}
+		if hasSkillContradiction(value, technology) {
+			return fmt.Errorf("%w: contradictory %s sources", ErrUnsupportedCandidateFact, technology)
 		}
 		if technology == "k8s" && hasKnownSkill(value, "kubernetes") {
 			continue
@@ -80,6 +103,32 @@ func validateTechnologyClaims(value CandidateFacts, text string) error {
 		}
 	}
 	return nil
+}
+
+func hasSkillContradiction(value CandidateFacts, technology string) bool {
+	canonical := normalize(technology)
+	var positive, negative bool
+	for _, skill := range value.SafeKnowledge.Skills {
+		if normalize(skill.Name) != canonical {
+			continue
+		}
+		if skill.Negative {
+			negative = true
+		} else if skill.Level != candidate.SkillLevelUnknown && skill.Level != candidate.SkillLevelHeardOf {
+			positive = true
+		}
+	}
+	for _, skill := range value.Profile.Skills {
+		if normalize(skill.Name) != canonical || !skill.ProfileFact.Confirmed || !candidate.SourceTrustedForEmployerCommunication(skill.ProfileFact.Source) {
+			continue
+		}
+		if skill.Negative {
+			negative = true
+		} else if skill.Level != candidate.SkillLevelUnknown && skill.Level != candidate.SkillLevelHeardOf {
+			positive = true
+		}
+	}
+	return positive && negative
 }
 
 func positiveClaim(text, technology string) bool {

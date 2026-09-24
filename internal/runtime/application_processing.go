@@ -408,6 +408,21 @@ func (r *HHAIResponder) ApplyVacancies() error {
 			r.writeApplicationReview(value, vacancyURL, prep, prep.Reason)
 			finish(trace, TerminalReviewRequired, prep.Reason)
 			continue
+		case applicationprocessing.OutcomeManualReview:
+			trace.FinalDecision = string(VacancyReviewRequired)
+			trace.SelectedResume = firstNonEmpty(trace.SelectedResume, selectedResume.Hash)
+			trace.SelectedResumeTitle = firstNonEmpty(trace.SelectedResumeTitle, selectedResume.Title)
+			summary.ReviewRequired++
+			if prep.Prepared != nil {
+				trace.CoverLetterGenerated = strings.TrimSpace(prep.Prepared.CoverLetter) != ""
+				if err := r.persistCareerAgentPreparation(value, selectedResume, trace, prep); err != nil {
+					summary.Errors++
+					logger.Warn("Could not persist review-required Career Agent preparation for vacancy %d: %v", value.ID, err)
+				}
+			}
+			r.writeApplicationReview(value, vacancyURL, prep, prep.Reason)
+			finish(trace, TerminalReviewRequired, prep.Reason)
+			continue
 		case applicationprocessing.OutcomeSkipped, applicationprocessing.OutcomeAlreadyResponded, applicationprocessing.OutcomeUnavailable:
 			if prep.Reason == "per-run application limit reached" && prep.Analysis != nil {
 				evaluation := *prep.Analysis
