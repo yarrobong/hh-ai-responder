@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	llmvalue "hh-ai-responder/internal/llm"
 	llmport "hh-ai-responder/internal/ports/llm"
@@ -72,7 +73,47 @@ func (s *Service) Generate(ctx context.Context, input Input) (Result, error) {
 	if err := ValidateLetter(input.Candidate, response.Content); err != nil {
 		return Result{}, err
 	}
-	return Result{Letter: response.Content}, nil
+	stories := selectRelevantStories(input.Stories, input.Vacancy, input.Description)
+	return Result{
+		Letter: response.Content, Evidence: draftEvidence(input, stories), UsedStoryIDs: storyIDs(stories),
+		Status: DraftStatusValid, Confidence: ConfidenceValidationOnly,
+	}, nil
+}
+
+// GenerateWithFallback keeps a provider or presentation failure from turning
+// a suitable vacancy into a hard application failure. A hard candidate-fact
+// validation error never falls back.
+func (s *Service) GenerateWithFallback(ctx context.Context, input Input) (Result, error) {
+	if s == nil || s.completion == nil {
+		return Result{}, errors.New("cover letter completion provider is not configured")
+	}
+	result, err := s.Generate(ctx, input)
+	if err == nil {
+		if presentationErr := ValidatePreview(result.Letter); presentationErr != nil {
+			err = presentationErr
+		} else {
+			return result, nil
+		}
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return Result{}, ctx.Err()
+	}
+	if errors.Is(err, ErrUnsupportedCandidateFact) {
+		return Result{}, err
+	}
+	fallback := deterministicFallback(input)
+	if validationErr := ValidateLetter(input.Candidate, fallback); validationErr != nil {
+		return Result{}, fmt.Errorf("safe cover letter fallback failed validation: %w", validationErr)
+	}
+	if presentationErr := ValidatePreview(fallback); presentationErr != nil {
+		return Result{}, fmt.Errorf("safe cover letter fallback failed presentation validation: %w", presentationErr)
+	}
+	stories := selectRelevantStories(input.Stories, input.Vacancy, input.Description)
+	return Result{
+		Letter: fallback, Evidence: draftEvidence(input, stories), UsedStoryIDs: storyIDs(stories),
+		Status: DraftStatusReviewRequired, Confidence: ConfidenceDeterministicFallback,
+		FallbackReason: fallbackReason(err),
+	}, nil
 }
 
 // GenerateLetter is a descriptive alias for callers that prefer the domain
@@ -90,4 +131,15 @@ func isWhitespaceOnly(value string) bool {
 		}
 	}
 	return true
+}
+
+func fallbackReason(err error) string {
+	if err == nil {
+		return "primary cover-letter draft unavailable"
+	}
+	value := strings.TrimSpace(err.Error())
+	if len(value) > 300 {
+		return value[:300] + "…"
+	}
+	return value
 }

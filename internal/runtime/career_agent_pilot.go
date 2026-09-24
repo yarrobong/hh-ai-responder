@@ -26,6 +26,7 @@ import (
 	applicationprocessing "hh-ai-responder/internal/usecase/applicationprocessing"
 	applicationreconciliation "hh-ai-responder/internal/usecase/applicationreconciliation"
 	"hh-ai-responder/internal/usecase/applicationsubmission"
+	coverletter "hh-ai-responder/internal/usecase/coverletter"
 	"hh-ai-responder/internal/usecase/vacancyanalysis"
 	"hh-ai-responder/internal/vacancy"
 )
@@ -75,6 +76,10 @@ type PilotArtifact struct {
 	FinalReason               string                      `json:"final_reason,omitempty"`
 	Preflight                 PilotPreflightSnapshot      `json:"preflight"`
 	CoverLetter               string                      `json:"cover_letter,omitempty"`
+	CoverLetterStatus         coverletter.DraftStatus     `json:"cover_letter_status,omitempty"`
+	CoverLetterFailureReason  string                      `json:"cover_letter_failure_reason,omitempty"`
+	CoverLetterEvidence       []coverletter.DraftEvidence `json:"cover_letter_evidence,omitempty"`
+	CoverLetterUsedStoryIDs   []string                    `json:"cover_letter_used_story_ids,omitempty"`
 	ContentHash               string                      `json:"content_hash,omitempty"`
 	PreparationID             string                      `json:"preparation_id,omitempty"`
 	PreparationHash           string                      `json:"preparation_hash,omitempty"`
@@ -131,6 +136,10 @@ type PilotSearchStats struct {
 	AlreadyRespondedEvidenceCounts map[string]int        `json:"already_responded_evidence_counts,omitempty"`
 	PreflightAudits                []PilotPreflightAudit `json:"preflight_audits,omitempty"`
 	BlockedReasonCounts            map[string]int        `json:"blocked_reason_counts,omitempty"`
+	CoverLettersAttempted          int                   `json:"cover_letters_attempted,omitempty"`
+	CoverLettersValid              int                   `json:"cover_letters_valid,omitempty"`
+	CoverLettersReviewRequired     int                   `json:"cover_letters_review_required,omitempty"`
+	CoverLetterFailures            int                   `json:"cover_letter_failures,omitempty"`
 }
 
 type PilotPreflightAudit struct {
@@ -184,6 +193,10 @@ func runCareerAgentPilotCommand(args []string, cfg Config, stdout, stderr io.Wri
 	}
 	if err != nil {
 		return err
+	}
+	if !search {
+		recordPilotCoverLetterStats(&preview.SearchStats, preview)
+		preview.Artifact.SearchStats = preview.SearchStats
 	}
 	if err := savePilotArtifact(careerAgentPilotPath(cfg), preview.Artifact); err != nil {
 		return err
@@ -493,6 +506,7 @@ func (r *HHAIResponder) findFirstCareerAgentPilotCandidate(maxScan, maxCandidate
 			block(candidate, pilotErrorReason(previewErr))
 			return nil, false, nil
 		}
+		recordPilotCoverLetterStats(&stats, preview)
 		if preview.Artifact.AIScore != nil {
 			stats.AIEvaluations++
 		}
@@ -564,6 +578,21 @@ func (r *HHAIResponder) finishPilotSearchPreview(preview PilotPreview, stats Pil
 	preview.Artifact.BlockedCandidates = append([]PilotBlockedCandidate(nil), blocked...)
 	preview.Artifact.SearchStats = stats
 	return preview
+}
+
+func recordPilotCoverLetterStats(stats *PilotSearchStats, preview PilotPreview) {
+	if stats == nil || preview.Artifact.CoverLetterStatus == "" {
+		return
+	}
+	stats.CoverLettersAttempted++
+	switch preview.Artifact.CoverLetterStatus {
+	case coverletter.DraftStatusValid:
+		stats.CoverLettersValid++
+	case coverletter.DraftStatusReviewRequired:
+		stats.CoverLettersReviewRequired++
+	case coverletter.DraftStatusHardInvalid:
+		stats.CoverLetterFailures++
+	}
 }
 
 func pilotSearchPeriods(current int) []int {
@@ -832,11 +861,19 @@ func (r *HHAIResponder) buildCareerAgentPilotPreviewFromStateWithSelection(value
 	}
 
 	letterInput := coverLetterInput(value, description, candidate, &assessment, strings.TrimSpace(strings.Join([]string{r.extraLetterPrompt, pilotCoverLetterPrompt}, "\n")), r.coverLetterSemanticExamples(value, description, assessment, resolver))
-	letter, letterErr := rootApplicationCoverLetter{client: r.ai}.Generate(ctx, letterInput)
+	letter, letterErr := rootApplicationCoverLetter{client: r.ai}.GenerateWithFallback(ctx, letterInput)
 	if letterErr != nil {
+		artifact.CoverLetterStatus = coverletter.DraftStatusHardInvalid
+		artifact.CoverLetterFailureReason = letterErr.Error()
 		preview.Reasons = append(preview.Reasons, "cover-letter preview failed: "+letterErr.Error())
 	} else {
+		artifact.CoverLetterStatus = letter.Status
+		artifact.CoverLetterFailureReason = letter.FallbackReason
+		artifact.CoverLetterEvidence = append([]coverletter.DraftEvidence(nil), letter.Evidence...)
+		artifact.CoverLetterUsedStoryIDs = append([]string(nil), letter.UsedStoryIDs...)
 		if qualityErr := validatePilotCoverLetter(letter.Letter); qualityErr != nil {
+			artifact.CoverLetterStatus = coverletter.DraftStatusHardInvalid
+			artifact.CoverLetterFailureReason = qualityErr.Error()
 			preview.Reasons = append(preview.Reasons, "cover-letter preview failed: "+qualityErr.Error())
 		} else {
 			artifact.CoverLetter = letter.Letter
@@ -869,6 +906,11 @@ func (r *HHAIResponder) buildCareerAgentPilotPreviewFromStateWithSelection(value
 		artifact.FinalDecision = string(applicationprocessing.DecisionReviewRequired)
 		preview.Status = pilotManualReviewStatus
 		preview.Reasons = append(preview.Reasons, "operator-selected resume requires manual review before send")
+	} else if artifact.CoverLetterStatus == coverletter.DraftStatusReviewRequired && artifact.ContentHash != "" {
+		artifact.Status = pilotManualReviewStatus
+		artifact.FinalDecision = string(applicationprocessing.DecisionReviewRequired)
+		preview.Status = pilotManualReviewStatus
+		preview.Reasons = append(preview.Reasons, "cover-letter fallback requires manual review")
 	} else if pilotReadyForExplicitSend(assessment, decision, r.minMatchScore) && len(artifact.HardMissing) == 0 && len(artifact.HardUnknown) == 0 && preflight.ArchivedKnown && !preflight.Archived && respondedEvidence.Value == AlreadyRespondedNo && preflight.CanApplyKnown && preflight.CanApply && preflight.TestPresentKnown && !preflight.TestPresent && preflight.LetterRequiredKnown && artifact.ContentHash != "" {
 		artifact.Nonce, err = generateUUIDv4()
 		if err != nil {
@@ -1042,17 +1084,7 @@ func pilotPreflightSnapshot(value VacancyPreflight) PilotPreflightSnapshot {
 }
 
 func validatePilotCoverLetter(letter string) error {
-	text := strings.ToLower(strings.TrimSpace(letter))
-	if text == "" {
-		return errors.New("empty cover-letter preview")
-	}
-	if strings.Contains(text, "приветствуйте") || strings.Contains(text, "career agent") || strings.Contains(text, "ai automation") || strings.Contains(text, "автоматизацией отклика") {
-		return errors.New("contains a placeholder or internal automation reference")
-	}
-	if strings.Contains(text, "```") || strings.Contains(text, "\n-") || strings.HasPrefix(text, "{") {
-		return errors.New("contains markdown or structured-output noise")
-	}
-	return nil
+	return coverletter.ValidatePreview(letter)
 }
 
 func savePilotArtifact(path string, artifact PilotArtifact) error {
@@ -1099,7 +1131,7 @@ func renderCareerAgentPilotPreview(preview PilotPreview) string {
 	a := preview.Artifact
 	if preview.Status != pilotReadyStatus && a.VacancyID == 0 {
 		stats := preview.SearchStats
-		lines := []string{"PILOT: NO_ELIGIBLE_CANDIDATE", fmt.Sprintf("Scanned: %d", stats.Scanned), fmt.Sprintf("Known responded: %d", stats.KnownRespondedSkipped), fmt.Sprintf("Fresh AlreadyResponded: %d", stats.FreshAlreadyRespondedSkipped), fmt.Sprintf("Preflight unknown: %d", stats.PreflightUnknown), fmt.Sprintf("Fresh unresponded: %d", stats.FreshUnresponded), fmt.Sprintf("Evidence distribution: %s", formatPilotEvidenceCounts(stats.AlreadyRespondedEvidenceCounts)), fmt.Sprintf("CanApply false: %d", stats.BlockedReasonCounts["CAN_APPLY_FALSE"]), fmt.Sprintf("Route ambiguous: %d", stats.BlockedReasonCounts["ROUTE_AMBIGUOUS"]), fmt.Sprintf("Hard missing: %d", stats.BlockedReasonCounts["HARD_REQUIREMENT_MISSING"]), fmt.Sprintf("Hard unknown: %d", stats.BlockedReasonCounts["HARD_REQUIREMENT_UNKNOWN"]), fmt.Sprintf("Score below threshold: %d", stats.BlockedReasonCounts["SCORE_BELOW_THRESHOLD"]), fmt.Sprintf("Unsupported test: %d", stats.BlockedReasonCounts["TEST_REQUIRED_UNSUPPORTED"]), fmt.Sprintf("Inactive: %d", stats.BlockedReasonCounts["VACANCY_INACTIVE"]), fmt.Sprintf("Other: %d", pilotOtherBlockedCount(stats)), fmt.Sprintf("Unresponded candidates actually evaluated: %d", stats.UnrespondedEvaluated), fmt.Sprintf("Detail reads: %d", stats.DetailReads), fmt.Sprintf("AI evaluations: %d", stats.AIEvaluations)}
+		lines := []string{"PILOT: NO_ELIGIBLE_CANDIDATE", fmt.Sprintf("Scanned: %d", stats.Scanned), fmt.Sprintf("Known responded: %d", stats.KnownRespondedSkipped), fmt.Sprintf("Fresh AlreadyResponded: %d", stats.FreshAlreadyRespondedSkipped), fmt.Sprintf("Preflight unknown: %d", stats.PreflightUnknown), fmt.Sprintf("Fresh unresponded: %d", stats.FreshUnresponded), fmt.Sprintf("Evidence distribution: %s", formatPilotEvidenceCounts(stats.AlreadyRespondedEvidenceCounts)), fmt.Sprintf("CanApply false: %d", stats.BlockedReasonCounts["CAN_APPLY_FALSE"]), fmt.Sprintf("Route ambiguous: %d", stats.BlockedReasonCounts["ROUTE_AMBIGUOUS"]), fmt.Sprintf("Hard missing: %d", stats.BlockedReasonCounts["HARD_REQUIREMENT_MISSING"]), fmt.Sprintf("Hard unknown: %d", stats.BlockedReasonCounts["HARD_REQUIREMENT_UNKNOWN"]), fmt.Sprintf("Score below threshold: %d", stats.BlockedReasonCounts["SCORE_BELOW_THRESHOLD"]), fmt.Sprintf("Unsupported test: %d", stats.BlockedReasonCounts["TEST_REQUIRED_UNSUPPORTED"]), fmt.Sprintf("Inactive: %d", stats.BlockedReasonCounts["VACANCY_INACTIVE"]), fmt.Sprintf("Other: %d", pilotOtherBlockedCount(stats)), fmt.Sprintf("Unresponded candidates actually evaluated: %d", stats.UnrespondedEvaluated), fmt.Sprintf("Detail reads: %d", stats.DetailReads), fmt.Sprintf("AI evaluations: %d", stats.AIEvaluations), fmt.Sprintf("Cover letters attempted: %d", stats.CoverLettersAttempted), fmt.Sprintf("Cover letters valid: %d", stats.CoverLettersValid), fmt.Sprintf("Cover letters review-required: %d", stats.CoverLettersReviewRequired), fmt.Sprintf("Cover letter failures: %d", stats.CoverLetterFailures)}
 		if len(preview.BlockedCandidates) > 0 {
 			lines = append(lines, "Blocked candidates:")
 			for _, candidate := range preview.BlockedCandidates {
@@ -1144,7 +1176,7 @@ func renderCareerAgentPilotPreview(preview PilotPreview) string {
 		published = a.Vacancy.PublishedAt.UTC().Format(time.RFC3339)
 	}
 	stats := preview.SearchStats
-	lines := []string{"PILOT: " + status, "Vacancy ID: " + fmt.Sprint(a.VacancyID), "Title: " + firstNonEmpty(a.Vacancy.Title, a.Vacancy.Name, "unknown"), "Company: " + company, "URL: " + url, "Published: " + published, "Resume selection basis: " + firstNonEmpty(a.ResumeSelectionBasis, "unknown"), "Selected resume: " + firstNonEmpty(a.SelectedResumeTitle, "unknown"), "Resume ID: " + resumeID, "Router status: " + firstNonEmpty(a.RouterStatus, "unknown"), "Router selected resume: " + firstNonEmpty(a.RouterSelectedResumeTitle, a.RouterSelectedResumeID, "none"), "Router reason code: " + firstNonEmpty(a.RouterReasonCode, "unknown"), "Router score: " + firstNonEmpty(fmt.Sprint(a.RouterScore), "unknown"), "AI score: " + aiScore, "AI recommendation: " + firstNonEmpty(a.AIRecommendation, "unknown"), "Local decision: " + localDecision, "Hard missing: " + joinOrUnknown(a.HardMissing), "Hard unknown: " + joinOrUnknown(a.HardUnknown), "Active: " + pointerWord(a.Preflight.Active), "Already responded: " + pointerWord(a.Preflight.AlreadyResponded), "Can apply: " + pointerWord(a.Preflight.CanApply), "Test required: " + pointerWord(a.Preflight.TestRequired), "Cover letter required: " + pointerWord(a.Preflight.CoverLetterRequired), "Cover letter allowed: " + pointerWord(a.Preflight.CoverLetterAllowed), "Content hash: " + firstNonEmpty(a.ContentHash, "none"), "Nonce status: " + nonceStatus, "Freshness: " + freshness, fmt.Sprintf("Scanned: %d", stats.Scanned), fmt.Sprintf("Known responded skipped: %d", stats.KnownRespondedSkipped), fmt.Sprintf("Fresh preflight responded skipped: %d", stats.FreshAlreadyRespondedSkipped), fmt.Sprintf("Unresponded evaluated: %d", stats.UnrespondedEvaluated), fmt.Sprintf("Detail reads: %d", stats.DetailReads), fmt.Sprintf("AI evaluations: %d", stats.AIEvaluations), "Real HH reads: YES", "Real HH writes: 0", "HH writes = 0", "Application POST: 0", "Shadow writes: 0"}
+	lines := []string{"PILOT: " + status, "Vacancy ID: " + fmt.Sprint(a.VacancyID), "Title: " + firstNonEmpty(a.Vacancy.Title, a.Vacancy.Name, "unknown"), "Company: " + company, "URL: " + url, "Published: " + published, "Resume selection basis: " + firstNonEmpty(a.ResumeSelectionBasis, "unknown"), "Selected resume: " + firstNonEmpty(a.SelectedResumeTitle, "unknown"), "Resume ID: " + resumeID, "Router status: " + firstNonEmpty(a.RouterStatus, "unknown"), "Router selected resume: " + firstNonEmpty(a.RouterSelectedResumeTitle, a.RouterSelectedResumeID, "none"), "Router reason code: " + firstNonEmpty(a.RouterReasonCode, "unknown"), "Router score: " + firstNonEmpty(fmt.Sprint(a.RouterScore), "unknown"), "AI score: " + aiScore, "AI recommendation: " + firstNonEmpty(a.AIRecommendation, "unknown"), "Local decision: " + localDecision, "Hard missing: " + joinOrUnknown(a.HardMissing), "Hard unknown: " + joinOrUnknown(a.HardUnknown), "Active: " + pointerWord(a.Preflight.Active), "Already responded: " + pointerWord(a.Preflight.AlreadyResponded), "Can apply: " + pointerWord(a.Preflight.CanApply), "Test required: " + pointerWord(a.Preflight.TestRequired), "Cover letter required: " + pointerWord(a.Preflight.CoverLetterRequired), "Cover letter allowed: " + pointerWord(a.Preflight.CoverLetterAllowed), "Cover letter status: " + firstNonEmpty(string(a.CoverLetterStatus), "none"), "Cover letter failure reason: " + firstNonEmpty(a.CoverLetterFailureReason, "none"), "Content hash: " + firstNonEmpty(a.ContentHash, "none"), "Nonce status: " + nonceStatus, "Freshness: " + freshness, fmt.Sprintf("Scanned: %d", stats.Scanned), fmt.Sprintf("Known responded skipped: %d", stats.KnownRespondedSkipped), fmt.Sprintf("Fresh preflight responded skipped: %d", stats.FreshAlreadyRespondedSkipped), fmt.Sprintf("Unresponded evaluated: %d", stats.UnrespondedEvaluated), fmt.Sprintf("Detail reads: %d", stats.DetailReads), fmt.Sprintf("AI evaluations: %d", stats.AIEvaluations), fmt.Sprintf("Cover letters attempted: %d", stats.CoverLettersAttempted), fmt.Sprintf("Cover letters valid: %d", stats.CoverLettersValid), fmt.Sprintf("Cover letters review-required: %d", stats.CoverLettersReviewRequired), fmt.Sprintf("Cover letter failures: %d", stats.CoverLetterFailures), "Real HH reads: YES", "Real HH writes: 0", "HH writes = 0", "Application POST: 0", "Shadow writes: 0"}
 	if a.CoverLetter != "" {
 		lines = append(lines, "Cover letter:", a.CoverLetter)
 	}

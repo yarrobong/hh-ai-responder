@@ -123,6 +123,7 @@ func (s *Service) Prepare(ctx context.Context, input Request) (Result, error) {
 	}
 
 	letter := ""
+	var letterResult coverletter.Result
 	if applicability.LetterRequired || input.ForceLetter {
 		if s.deps.CoverLetter == nil {
 			return Result{}, errors.New("cover letter preparation is not configured")
@@ -133,11 +134,17 @@ func (s *Service) Prepare(ctx context.Context, input Request) (Result, error) {
 				semanticHints = hints
 			}
 		}
-		letterResult, err := s.deps.CoverLetter.Generate(ctx, coverletter.Input{
+		letterInput := coverletter.Input{
 			Candidate: input.LetterFacts, Stories: append([]candidate.CandidateStory(nil), input.Stories...),
 			Vacancy: input.Vacancy, Description: description, Assessment: &assessment,
 			SemanticHints: semanticHints, ExtraPrompt: input.ExtraLetterPrompt,
-		})
+		}
+		var err error
+		if fallbackGenerator, ok := s.deps.CoverLetter.(FallbackCoverLetterGenerator); ok {
+			letterResult, err = fallbackGenerator.GenerateWithFallback(ctx, letterInput)
+		} else {
+			letterResult, err = s.deps.CoverLetter.Generate(ctx, letterInput)
+		}
 		if err != nil {
 			return Result{}, fmt.Errorf("prepare cover letter: %w", err)
 		}
@@ -172,7 +179,13 @@ func (s *Service) Prepare(ctx context.Context, input Request) (Result, error) {
 	result.Outcome = OutcomePrepared
 	result.Prepared = &PreparedApplication{
 		VacancyID: input.Vacancy.ID, Vacancy: input.Vacancy, ResumeID: input.ResumeID, ResumeTitle: input.ResumeTitle,
-		CoverLetter: letter, Test: preparedTest, Analysis: assessment, CandidateContext: resolved,
+		CoverLetter: letter, CoverLetterStatus: letterResult.Status, CoverLetterEvidence: append([]coverletter.DraftEvidence(nil), letterResult.Evidence...), CoverLetterFallbackReason: letterResult.FallbackReason,
+		Test: preparedTest, Analysis: assessment, CandidateContext: resolved,
+	}
+	if letterResult.Status == coverletter.DraftStatusReviewRequired {
+		result.Outcome = OutcomeManualReview
+		result.Reason = "cover letter requires manual review: " + letterResult.FallbackReason
+		return result, nil
 	}
 	return result, nil
 }

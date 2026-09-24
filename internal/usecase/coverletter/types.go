@@ -1,6 +1,8 @@
 package coverletter
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 
 	"hh-ai-responder/internal/candidate"
@@ -12,6 +14,14 @@ import (
 var (
 	ErrEmptyLetter              = errors.New("cover letter completion is empty")
 	ErrUnsupportedCandidateFact = errors.New("cover letter contains an unsupported candidate fact")
+)
+
+type DraftStatus string
+
+const (
+	DraftStatusValid          DraftStatus = "VALID_DRAFT"
+	DraftStatusReviewRequired DraftStatus = "REVIEW_REQUIRED"
+	DraftStatusHardInvalid    DraftStatus = "HARD_INVALID"
 )
 
 // CandidateFacts is the bounded, prompt-facing candidate projection. Profile
@@ -68,5 +78,26 @@ type MatchContext struct {
 // Result is a validated draft only. It cannot be approved, persisted, or
 // delivered by this package.
 type Result struct {
-	Letter string
+	Letter         string          `json:"letter"`
+	Evidence       []DraftEvidence `json:"evidence,omitempty"`
+	UsedStoryIDs   []string        `json:"used_story_ids,omitempty"`
+	Status         DraftStatus     `json:"status"`
+	Confidence     string          `json:"confidence"`
+	FallbackReason string          `json:"fallback_reason,omitempty"`
+}
+
+type DraftEvidence struct {
+	Claim     string `json:"claim,omitempty"`
+	Kind      string `json:"kind"`
+	Reference string `json:"reference"`
+}
+
+const (
+	ConfidenceValidationOnly        = "VALIDATION_ONLY"
+	ConfidenceDeterministicFallback = "DETERMINISTIC_FALLBACK"
+)
+
+func (r Result) Fingerprint() string {
+	hash := sha256.Sum256([]byte(r.Letter))
+	return hex.EncodeToString(hash[:])
 }
