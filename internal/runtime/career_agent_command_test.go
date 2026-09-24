@@ -12,6 +12,7 @@ import (
 	"hh-ai-responder/internal/ports"
 	applicationprocessing "hh-ai-responder/internal/usecase/applicationprocessing"
 	"hh-ai-responder/internal/usecase/candidatecontext"
+	"hh-ai-responder/internal/usecase/coverletter"
 )
 
 func TestCareerAgentRunReportCarriesTypedRunTelemetry(t *testing.T) {
@@ -138,6 +139,35 @@ func TestCareerAgentPreparationIsPersistedBeforeSubmissionDataLeavesProcessing(t
 	preparation := store.preparations[0]
 	if preparation.Status != careeragent.PreparationStatusReady || preparation.CoverLetterHash != preparation.ContentHash() || len(preparation.KnowledgeRequests) != 1 || preparation.ResumeProviderID != "provider-resume-1" {
 		t.Fatalf("preparation=%+v", preparation)
+	}
+}
+
+func TestCareerAgentPreparationPersistsOptionalNoLetterWithCanonicalEmptyHash(t *testing.T) {
+	store := &durableWorkflowStoreFixture{}
+	responder := &HHAIResponder{
+		careerWorkflowStore:         store,
+		careerAgentMode:             "shadow",
+		careerAgentCandidateID:      "candidate-optional-letter",
+		careerAgentCandidateVersion: 5,
+		careerAgentCandidateHash:    strings.Repeat("b", 64),
+	}
+	result := applicationprocessing.Result{Prepared: &applicationprocessing.PreparedApplication{
+		VacancyID: 778, ResumeID: "resume-optional", ResumeTitle: "Технический специалист",
+		CoverLetter: "", CoverLetterStatus: coverletter.DraftStatusHardInvalid,
+	}}
+	trace := CareerAgentVacancyResult{VacancyID: 778, SelectedResume: "resume-optional", FinalDecision: string(VacancyMatch), ResumeConfidence: "high"}
+	if err := responder.persistCareerAgentPreparation(Vacancy{ID: 778}, ResumeItem{Hash: "resume-optional", ProviderID: "provider-optional"}, trace, result); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.preparations) != 1 {
+		t.Fatalf("preparations=%d, want 1", len(store.preparations))
+	}
+	preparation := store.preparations[0]
+	if preparation.CoverLetter != "" || preparation.CoverLetterHash != preparation.ContentHash() || preparation.CoverLetterHash != contentHash("") {
+		t.Fatalf("optional no-letter hash was not canonical: %+v", preparation)
+	}
+	if err := preparation.Validate(); err != nil {
+		t.Fatalf("optional no-letter preparation failed validation: %v", err)
 	}
 }
 

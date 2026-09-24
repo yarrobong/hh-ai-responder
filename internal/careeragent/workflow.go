@@ -173,7 +173,7 @@ func (p ApplicationPreparation) Validate() error {
 		return errors.New("invalid application preparation identity or status")
 	}
 	if len(p.CoverLetter) == 0 {
-		if strings.TrimSpace(p.CoverLetterHash) != "" {
+		if hash := strings.TrimSpace(p.CoverLetterHash); hash != "" && hash != contentHash("") {
 			return ErrPreparationContentHash
 		}
 	} else if contentHash(p.CoverLetter) != strings.TrimSpace(p.CoverLetterHash) {

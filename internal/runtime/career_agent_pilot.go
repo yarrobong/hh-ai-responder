@@ -39,7 +39,7 @@ const (
 	pilotCoverLetterPrompt               = `Для этого контролируемого pilot-preview подготовь короткое письмо под эту вакансию.
 Используй только явно подтверждённые факты из canonical employer-safe context и выбранного резюме.
 Не заявляй длительность или уровень коммерческого опыта, production-опыт, технологии, проекты или обязанности, если они прямо не подтверждены.
-Не называй неподтверждённые технологии даже в контексте готовности их изучить; в частности, не упоминай FastAPI, если он не подтверждён.
+Неподтверждённую технологию можно назвать только как безопасное намерение: "готов изучить", "готов освоить", "интересно развиваться в" или "при необходимости изучу". Не выдавай такое намерение за опыт и не обещай нереалистично быстрое освоение.
 Не упоминай Career Agent, AI, автоматизацию отклика, оценки или внутренние решения.
 Не добавляй технические пояснения, метакомментарии, приветствие-плейсхолдер или markdown.`
 )
@@ -865,7 +865,13 @@ func (r *HHAIResponder) buildCareerAgentPilotPreviewFromStateWithSelection(value
 	if letterErr != nil {
 		artifact.CoverLetterStatus = coverletter.DraftStatusHardInvalid
 		artifact.CoverLetterFailureReason = letterErr.Error()
-		preview.Reasons = append(preview.Reasons, "cover-letter preview failed: "+letterErr.Error())
+		if pilotCoverLetterOptional(preflight) {
+			// Optional cover-letter failures are observable review metadata, not
+			// application blockers. Never retain the invalid provider output.
+			preview.Reasons = append(preview.Reasons, "optional cover-letter draft discarded: "+letterErr.Error())
+		} else {
+			preview.Reasons = append(preview.Reasons, "cover-letter preview failed: "+letterErr.Error())
+		}
 	} else {
 		artifact.CoverLetterStatus = letter.Status
 		artifact.CoverLetterFailureReason = letter.FallbackReason
@@ -874,12 +880,21 @@ func (r *HHAIResponder) buildCareerAgentPilotPreviewFromStateWithSelection(value
 		if qualityErr := validatePilotCoverLetter(letter.Letter); qualityErr != nil {
 			artifact.CoverLetterStatus = coverletter.DraftStatusHardInvalid
 			artifact.CoverLetterFailureReason = qualityErr.Error()
-			preview.Reasons = append(preview.Reasons, "cover-letter preview failed: "+qualityErr.Error())
+			if pilotCoverLetterOptional(preflight) {
+				preview.Reasons = append(preview.Reasons, "optional cover-letter draft discarded: "+qualityErr.Error())
+			} else {
+				preview.Reasons = append(preview.Reasons, "cover-letter preview failed: "+qualityErr.Error())
+			}
 		} else {
 			artifact.CoverLetter = letter.Letter
 			hash := sha256.Sum256([]byte(letter.Letter))
 			artifact.ContentHash = hex.EncodeToString(hash[:])
 		}
+	}
+	if pilotCoverLetterOptional(preflight) && artifact.CoverLetter == "" {
+		// The empty optional content is still hashed canonically so the pilot
+		// artifact and any later preparation reference remain deterministic.
+		artifact.ContentHash = contentHash("")
 	}
 
 	if preflight.ArchivedKnown && preflight.Archived {
@@ -911,7 +926,7 @@ func (r *HHAIResponder) buildCareerAgentPilotPreviewFromStateWithSelection(value
 		artifact.FinalDecision = string(applicationprocessing.DecisionReviewRequired)
 		preview.Status = pilotManualReviewStatus
 		preview.Reasons = append(preview.Reasons, "cover-letter fallback requires manual review")
-	} else if pilotReadyForExplicitSend(assessment, decision, r.minMatchScore) && len(artifact.HardMissing) == 0 && len(artifact.HardUnknown) == 0 && preflight.ArchivedKnown && !preflight.Archived && respondedEvidence.Value == AlreadyRespondedNo && preflight.CanApplyKnown && preflight.CanApply && preflight.TestPresentKnown && !preflight.TestPresent && preflight.LetterRequiredKnown && artifact.ContentHash != "" {
+	} else if pilotReadyForExplicitSend(assessment, decision, r.minMatchScore) && len(artifact.HardMissing) == 0 && len(artifact.HardUnknown) == 0 && preflight.ArchivedKnown && !preflight.Archived && respondedEvidence.Value == AlreadyRespondedNo && preflight.CanApplyKnown && preflight.CanApply && preflight.TestPresentKnown && !preflight.TestPresent && preflight.LetterRequiredKnown && pilotCoverLetterContentReady(preflight, artifact.ContentHash) {
 		artifact.Nonce, err = generateUUIDv4()
 		if err != nil {
 			return PilotPreview{}, fmt.Errorf("pilot nonce generation failed: %w", err)
@@ -929,6 +944,14 @@ func (r *HHAIResponder) buildCareerAgentPilotPreviewFromStateWithSelection(value
 	}
 	preview.Artifact = artifact
 	return preview, nil
+}
+
+func pilotCoverLetterOptional(preflight VacancyPreflight) bool {
+	return preflight.LetterRequiredKnown && !preflight.LetterRequired
+}
+
+func pilotCoverLetterContentReady(preflight VacancyPreflight, hash string) bool {
+	return strings.TrimSpace(hash) != "" || pilotCoverLetterOptional(preflight)
 }
 
 func pilotExplicitResumePreflightBlockReason(preflight VacancyPreflight) string {

@@ -265,6 +265,25 @@ func TestUnknownKubernetesCreatesDeduplicatedPendingQuestion(t *testing.T) {
 	}
 }
 
+func TestUnknownAPIAuthorizationCreatesSpecificPendingQuestion(t *testing.T) {
+	now := time.Now()
+	r := &HHAIResponder{candidateProfile: NewCandidateProfile(now)}
+	requirement := HardRequirementEvaluation{
+		Requirement:     "API authorization",
+		Category:        hardRequirementCategorySkill,
+		Status:          hardRequirementStatusUnknown,
+		VacancyEvidence: "Настройка API authorization, GET/POST, JSON и webhooks",
+	}
+	r.addPendingQuestionForRequirement(Vacancy{ID: 303}, requirement)
+	if len(r.candidateProfile.UnknownPendingFacts) != 1 {
+		t.Fatalf("API authorization question was not created: %+v", r.candidateProfile.UnknownPendingFacts)
+	}
+	question := r.candidateProfile.UnknownPendingFacts[0].Question
+	if !strings.Contains(question, "API keys") || !strings.Contains(question, "Bearer tokens") || !strings.Contains(question, "OAuth") {
+		t.Fatalf("question is not specific enough: %q", question)
+	}
+}
+
 func TestAnsweringPendingQuestionChangesFutureEvaluation(t *testing.T) {
 	now := time.Now()
 	profile := NewCandidateProfile(now)

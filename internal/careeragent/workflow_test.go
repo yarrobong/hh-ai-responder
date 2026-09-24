@@ -72,6 +72,37 @@ func TestApplicationPreparationRequiresExactCoverLetterHash(t *testing.T) {
 	}
 }
 
+func TestApplicationPreparationAllowsSafelyOmittedOptionalCoverLetter(t *testing.T) {
+	preparation := validPreparationFixture()
+	preparation.CoverLetter = ""
+	preparation.CoverLetterHash = preparation.ContentHash()
+	if preparation.CoverLetterHash != contentHash("") {
+		t.Fatalf("empty optional letter did not receive deterministic empty-content hash: %q", preparation.CoverLetterHash)
+	}
+	if err := preparation.Validate(); err != nil {
+		t.Fatalf("optional no-letter preparation rejected: %v", err)
+	}
+}
+
+func TestApplicationPreparationHashOwnershipIsDeterministicForFinalContent(t *testing.T) {
+	first := validPreparationFixture()
+	first.CoverLetter = "Final validated letter."
+	first.CoverLetterHash = first.ContentHash()
+	first.InputFingerprint = PreparationInputFingerprint(first)
+	second := first
+	second.CoverLetterHash = second.ContentHash()
+	second.InputFingerprint = PreparationInputFingerprint(second)
+	if first.CoverLetterHash != second.CoverLetterHash || first.InputFingerprint != second.InputFingerprint {
+		t.Fatalf("identical final content was not deterministic: first=%+v second=%+v", first, second)
+	}
+	second.CoverLetter = "Transformed final validated letter."
+	second.CoverLetterHash = second.ContentHash()
+	second.InputFingerprint = PreparationInputFingerprint(second)
+	if first.CoverLetterHash == second.CoverLetterHash || first.InputFingerprint == second.InputFingerprint {
+		t.Fatal("content transformation did not change canonical hashes")
+	}
+}
+
 func TestApplicationPreparationRejectsMalformedEvidenceAndTracksStaleState(t *testing.T) {
 	preparation := validPreparationFixture()
 	preparation.Evidence = json.RawMessage(`{"unclosed":`)
