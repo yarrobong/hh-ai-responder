@@ -163,14 +163,33 @@ func (r *HHAIResponder) persistCareerAgentPreparation(value Vacancy, selectedRes
 	if r == nil || r.careerWorkflowStore == nil || result.Prepared == nil || strings.TrimSpace(r.careerAgentMode) == "" {
 		return nil
 	}
+	preparation, err := r.buildCareerAgentPreparation(value, selectedResume, trace, result)
+	if err != nil {
+		return err
+	}
+	return r.careerWorkflowStore.UpsertPreparation(ctxOrBackground(r.ctx), preparation)
+}
+
+func (r *HHAIResponder) buildCareerAgentPreparation(value Vacancy, selectedResume ResumeItem, trace CareerAgentVacancyResult, result applicationprocessing.Result) (careeragent.ApplicationPreparation, error) {
+	if r == nil || result.Prepared == nil || strings.TrimSpace(r.careerAgentMode) == "" {
+		return careeragent.ApplicationPreparation{}, nil
+	}
 	if r.careerAgentCandidateVersion <= 0 || strings.TrimSpace(r.careerAgentCandidateID) == "" || strings.TrimSpace(r.careerAgentCandidateHash) == "" {
-		return errors.New("candidate snapshot identity is unavailable")
+		return careeragent.ApplicationPreparation{}, errors.New("candidate snapshot identity is unavailable")
+	}
+	internalResumeID, providerResumeID, err := r.canonicalResumeBinding(selectedResume, trace.SelectedResume)
+	if err != nil {
+		return careeragent.ApplicationPreparation{}, err
+	}
+	preparedResumeID := strings.TrimSpace(result.Prepared.ResumeID)
+	if preparedResumeID == "" || (preparedResumeID != providerResumeID && preparedResumeID != strings.TrimSpace(selectedResume.Hash) && preparedResumeID != internalResumeID) {
+		return careeragent.ApplicationPreparation{}, errors.New("prepared application resume identity does not match selected resume")
 	}
 	testDrafts := json.RawMessage(nil)
 	if result.Prepared.Test != nil && len(result.Prepared.Test.Answers) > 0 {
 		raw, err := json.Marshal(result.Prepared.Test.Answers)
 		if err != nil {
-			return fmt.Errorf("encode preparation test drafts: %w", err)
+			return careeragent.ApplicationPreparation{}, fmt.Errorf("encode preparation test drafts: %w", err)
 		}
 		testDrafts = raw
 	}
@@ -182,13 +201,14 @@ func (r *HHAIResponder) persistCareerAgentPreparation(value Vacancy, selectedRes
 		}
 		requests = append(requests, careeragent.KnowledgeRequest{Topic: "candidate_context", Question: question, Status: "pending"})
 	}
+	now := time.Now().UTC()
 	preparation := careeragent.ApplicationPreparation{
-		VacancyID: value.ID, ResumeID: selectedResume.Hash, ResumeProviderID: r.resumeIdentifierForValue(selectedResume),
+		VacancyID: value.ID, ResumeID: internalResumeID, ResumeProviderID: providerResumeID, ResumeFingerprint: strings.TrimSpace(selectedResume.Hash),
 		CandidateID: r.careerAgentCandidateID, CandidateVersion: r.careerAgentCandidateVersion,
 		CandidateSnapshotHash: r.careerAgentCandidateHash, RouteStatus: careeragent.ResumeRouteMatch,
 		RouteConfidence: boundedWorkflowText(trace.ResumeConfidence), Evidence: workflowPreparationEvidence(trace, result.Prepared.CoverLetterStatus, result.Prepared.CoverLetterFallbackReason, result.Prepared.CoverLetterEvidence),
 		CoverLetter: result.Prepared.CoverLetter, TestAnswerDrafts: testDrafts, KnowledgeRequests: requests,
-		Status: careeragent.PreparationStatusReady, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+		Status: careeragent.PreparationStatusReady, CreatedAt: now, UpdatedAt: now,
 	}
 	if result.Prepared.CoverLetterStatus == coverletter.DraftStatusReviewRequired {
 		preparation.Status = careeragent.PreparationStatusReviewRequired
@@ -197,9 +217,43 @@ func (r *HHAIResponder) persistCareerAgentPreparation(value Vacancy, selectedRes
 	preparation.InputFingerprint = careeragent.PreparationInputFingerprint(preparation)
 	preparation.ID = fmt.Sprintf("preparation-vacancy-%d-%s", value.ID, preparation.InputFingerprint[:12])
 	if err := preparation.Validate(); err != nil {
-		return err
+		return careeragent.ApplicationPreparation{}, err
 	}
-	return r.careerWorkflowStore.UpsertPreparation(ctxOrBackground(r.ctx), preparation)
+	return preparation, nil
+}
+
+func (r *HHAIResponder) canonicalResumeBinding(selected ResumeItem, routeID string) (string, string, error) {
+	providerID := strings.TrimSpace(r.resumeIdentifierForValue(selected))
+	if providerID == "" {
+		return "", "", errors.New("selected resume provider identity is unavailable")
+	}
+
+	for _, profile := range r.careerAgentResumes {
+		profileProviderID := strings.TrimSpace(profile.ProviderID)
+		matches := false
+		if strings.TrimSpace(selected.ProviderID) != "" && profileProviderID != "" {
+			matches = profileProviderID == providerID
+		} else {
+			matches = (strings.TrimSpace(profile.Hash) != "" && strings.TrimSpace(profile.Hash) == strings.TrimSpace(selected.Hash)) ||
+				(profile.HHID > 0 && profile.HHID == selected.Id)
+		}
+		if !matches {
+			continue
+		}
+		internalID := strings.TrimSpace(profile.ID)
+		if internalID == "" {
+			return "", "", errors.New("selected resume internal identity is unavailable")
+		}
+		if route := strings.TrimSpace(routeID); route != "" && route != internalID && route != strings.TrimSpace(profile.ProviderID) && route != strings.TrimSpace(profile.Hash) {
+			return "", "", errors.New("selected resume route identity does not match current resume")
+		}
+		return internalID, providerID, nil
+	}
+
+	if route := strings.TrimSpace(routeID); route != "" {
+		return route, providerID, nil
+	}
+	return careeragent.StableResumeID(selected.Hash, selected.Id, selected.Title), providerID, nil
 }
 
 func (r *HHAIResponder) rememberCareerAgentCandidate(value Candidate) error {

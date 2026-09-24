@@ -39,7 +39,7 @@ const (
 	pilotCoverLetterPrompt               = `Для этого контролируемого pilot-preview подготовь короткое письмо под эту вакансию.
 Используй только явно подтверждённые факты из canonical employer-safe context и выбранного резюме.
 Не заявляй длительность или уровень коммерческого опыта, production-опыт, технологии, проекты или обязанности, если они прямо не подтверждены.
-Не называй неподтверждённые технологии даже в контексте готовности их изучить; в частности, не упоминай FastAPI, если он не подтверждён.
+Неподтверждённую технологию можно назвать только как безопасное намерение: "готов изучить", "готов освоить", "интересно развиваться в" или "при необходимости изучу". Не выдавай такое намерение за опыт и не обещай нереалистично быстрое освоение.
 Не упоминай Career Agent, AI, автоматизацию отклика, оценки или внутренние решения.
 Не добавляй технические пояснения, метакомментарии, приветствие-плейсхолдер или markdown.`
 )
@@ -865,7 +865,13 @@ func (r *HHAIResponder) buildCareerAgentPilotPreviewFromStateWithSelection(value
 	if letterErr != nil {
 		artifact.CoverLetterStatus = coverletter.DraftStatusHardInvalid
 		artifact.CoverLetterFailureReason = letterErr.Error()
-		preview.Reasons = append(preview.Reasons, "cover-letter preview failed: "+letterErr.Error())
+		if pilotCoverLetterOptional(preflight) {
+			// Optional cover-letter failures are observable review metadata, not
+			// application blockers. Never retain the invalid provider output.
+			preview.Reasons = append(preview.Reasons, "optional cover-letter draft discarded: "+letterErr.Error())
+		} else {
+			preview.Reasons = append(preview.Reasons, "cover-letter preview failed: "+letterErr.Error())
+		}
 	} else {
 		artifact.CoverLetterStatus = letter.Status
 		artifact.CoverLetterFailureReason = letter.FallbackReason
@@ -874,12 +880,21 @@ func (r *HHAIResponder) buildCareerAgentPilotPreviewFromStateWithSelection(value
 		if qualityErr := validatePilotCoverLetter(letter.Letter); qualityErr != nil {
 			artifact.CoverLetterStatus = coverletter.DraftStatusHardInvalid
 			artifact.CoverLetterFailureReason = qualityErr.Error()
-			preview.Reasons = append(preview.Reasons, "cover-letter preview failed: "+qualityErr.Error())
+			if pilotCoverLetterOptional(preflight) {
+				preview.Reasons = append(preview.Reasons, "optional cover-letter draft discarded: "+qualityErr.Error())
+			} else {
+				preview.Reasons = append(preview.Reasons, "cover-letter preview failed: "+qualityErr.Error())
+			}
 		} else {
 			artifact.CoverLetter = letter.Letter
 			hash := sha256.Sum256([]byte(letter.Letter))
 			artifact.ContentHash = hex.EncodeToString(hash[:])
 		}
+	}
+	if pilotCoverLetterOptional(preflight) && artifact.CoverLetter == "" {
+		// The empty optional content is still hashed canonically so the pilot
+		// artifact and any later preparation reference remain deterministic.
+		artifact.ContentHash = contentHash("")
 	}
 
 	if preflight.ArchivedKnown && preflight.Archived {
@@ -911,7 +926,7 @@ func (r *HHAIResponder) buildCareerAgentPilotPreviewFromStateWithSelection(value
 		artifact.FinalDecision = string(applicationprocessing.DecisionReviewRequired)
 		preview.Status = pilotManualReviewStatus
 		preview.Reasons = append(preview.Reasons, "cover-letter fallback requires manual review")
-	} else if pilotReadyForExplicitSend(assessment, decision, r.minMatchScore) && len(artifact.HardMissing) == 0 && len(artifact.HardUnknown) == 0 && preflight.ArchivedKnown && !preflight.Archived && respondedEvidence.Value == AlreadyRespondedNo && preflight.CanApplyKnown && preflight.CanApply && preflight.TestPresentKnown && !preflight.TestPresent && preflight.LetterRequiredKnown && artifact.ContentHash != "" {
+	} else if pilotReadyForExplicitSend(assessment, decision, r.minMatchScore) && len(artifact.HardMissing) == 0 && len(artifact.HardUnknown) == 0 && preflight.ArchivedKnown && !preflight.Archived && respondedEvidence.Value == AlreadyRespondedNo && preflight.CanApplyKnown && preflight.CanApply && preflight.TestPresentKnown && !preflight.TestPresent && preflight.LetterRequiredKnown && pilotCoverLetterContentReady(preflight, artifact.ContentHash) {
 		artifact.Nonce, err = generateUUIDv4()
 		if err != nil {
 			return PilotPreview{}, fmt.Errorf("pilot nonce generation failed: %w", err)
@@ -927,8 +942,57 @@ func (r *HHAIResponder) buildCareerAgentPilotPreviewFromStateWithSelection(value
 		artifact.Status = applicationpilot.StatusBlocked
 		preview.Status = applicationpilot.StatusBlocked
 	}
+	if r.careerWorkflowStore != nil && (preview.Status == pilotReadyStatus || preview.Status == pilotManualReviewStatus) {
+		preparation, preparationErr := r.persistCareerAgentPilotPreparation(value, selectedResume, selectedProfileID, assessment, artifact)
+		if preparationErr != nil {
+			preview.Reasons = append(preview.Reasons, "durable preparation failed: "+preparationErr.Error())
+			artifact.Status = applicationpilot.StatusBlocked
+			preview.Status = applicationpilot.StatusBlocked
+			artifact.Nonce = ""
+		} else {
+			artifact.PreparationID = preparation.ID
+			artifact.PreparationHash = preparation.InputFingerprint
+		}
+	}
 	preview.Artifact = artifact
 	return preview, nil
+}
+
+func (r *HHAIResponder) persistCareerAgentPilotPreparation(value Vacancy, selectedResume ResumeItem, routeID string, assessment VacancyEvaluation, artifact PilotArtifact) (careeragent.ApplicationPreparation, error) {
+	if r == nil || r.careerWorkflowStore == nil {
+		return careeragent.ApplicationPreparation{}, errors.New("career workflow preparation store is unavailable")
+	}
+	previousMode := r.careerAgentMode
+	if strings.TrimSpace(r.careerAgentMode) == "" {
+		r.careerAgentMode = "pilot"
+	}
+	defer func() { r.careerAgentMode = previousMode }()
+	prepared := applicationprocessing.Result{Prepared: &applicationprocessing.PreparedApplication{
+		VacancyID: artifact.VacancyID, ResumeID: r.resumeIdentifierForValue(selectedResume), ResumeTitle: selectedResume.Title,
+		CoverLetter: artifact.CoverLetter, CoverLetterStatus: artifact.CoverLetterStatus,
+		CoverLetterEvidence: append([]coverletter.DraftEvidence(nil), artifact.CoverLetterEvidence...), Analysis: assessment,
+	}}
+	trace := CareerAgentVacancyResult{
+		VacancyID: artifact.VacancyID, SelectedResume: routeID, SelectedResumeTitle: selectedResume.Title,
+		ResumeConfidence: artifact.RouterConfidence, FinalDecision: artifact.FinalDecision, AIScore: artifact.AIScore,
+		FinalRouteReasonCode: artifact.RouterReasonCode,
+	}
+	preparation, err := r.buildCareerAgentPreparation(value, selectedResume, trace, prepared)
+	if err != nil {
+		return careeragent.ApplicationPreparation{}, err
+	}
+	if err := r.careerWorkflowStore.UpsertPreparation(ctxOrBackground(r.ctx), preparation); err != nil {
+		return careeragent.ApplicationPreparation{}, err
+	}
+	return preparation, nil
+}
+
+func pilotCoverLetterOptional(preflight VacancyPreflight) bool {
+	return preflight.LetterRequiredKnown && !preflight.LetterRequired
+}
+
+func pilotCoverLetterContentReady(preflight VacancyPreflight, hash string) bool {
+	return strings.TrimSpace(hash) != "" || pilotCoverLetterOptional(preflight)
 }
 
 func pilotExplicitResumePreflightBlockReason(preflight VacancyPreflight) string {
@@ -1277,7 +1341,11 @@ func runCareerAgentPilotSend(args []string, cfg Config, stdout, stderr io.Writer
 	if err != nil {
 		return err
 	}
-	if err := applicationpilot.VerifyApproval(applicationpilot.Approval{VacancyID: artifact.VacancyID, ResumeID: artifact.SelectedResumeHash, ContentHash: artifact.ContentHash, Nonce: artifact.Nonce}, current); err != nil {
+	providerResumeID, err := pilotProviderResumeID(artifact)
+	if err != nil {
+		return err
+	}
+	if err := applicationpilot.VerifyApproval(applicationpilot.Approval{VacancyID: artifact.VacancyID, ResumeID: providerResumeID, ContentHash: artifact.ContentHash, Nonce: artifact.Nonce}, current); err != nil {
 		return fmt.Errorf("pilot approval verification failed: %w", err)
 	}
 	if _, _, _, err := responder.activateResume(current.ResumeID); err != nil {
@@ -1286,7 +1354,7 @@ func runCareerAgentPilotSend(args []string, cfg Config, stdout, stderr io.Writer
 	if err := markPilotNonceUsed(path, &artifact); err != nil {
 		return err
 	}
-	result, _, submitErr := responder.submitPreparedApplication(applicationprocessing.PreparedApplication{VacancyID: artifact.VacancyID, Vacancy: artifact.Vacancy, ResumeID: artifact.SelectedResumeHash, ResumeTitle: artifact.SelectedResumeTitle, CoverLetter: artifact.CoverLetter})
+	result, _, submitErr := responder.submitPreparedApplication(applicationprocessing.PreparedApplication{VacancyID: artifact.VacancyID, Vacancy: artifact.Vacancy, ResumeID: providerResumeID, ResumeTitle: artifact.SelectedResumeTitle, CoverLetter: artifact.CoverLetter})
 	status := applicationpilot.OutcomeUnknown
 	if submitErr != nil && result.Execution.Outcome == applicationsubmission.ExecutionRejected {
 		status = applicationpilot.OutcomeFailed

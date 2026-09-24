@@ -50,7 +50,7 @@ func (r *HHAIResponder) submitPreparedApplication(prepared applicationprocessing
 	}
 	input := applicationsubmission.Input{
 		Prepared:               applicationSubmissionPrepared(prepared),
-		CurrentResumeID:        r.resumeHash,
+		CurrentResumeID:        r.currentResumeProviderID(),
 		RequireCurrentResumeID: true,
 		ResponseURL:            r.ResolveURL(fmt.Sprintf("/applicant/vacancy_response?vacancyId=%d&startedWithQuestion=false&hhtmFrom=vacancy", prepared.VacancyID)),
 	}
@@ -62,6 +62,23 @@ func (r *HHAIResponder) submitPreparedApplication(prepared applicationprocessing
 		}
 	}
 	return result, solutions, err
+}
+
+// currentResumeProviderID returns the identity used by the selected HH
+// transport. Browser transport exposes the legacy hash; API transport exposes
+// the provider resume ID. These are representations of the same resume, not
+// interchangeable IDs.
+func (r *HHAIResponder) currentResumeProviderID() string {
+	if r == nil {
+		return ""
+	}
+	if current := r.GetCurrentResume(); current != nil {
+		return r.resumeIdentifierForValue(*current)
+	}
+	if r.transport == transportAPI {
+		return strings.TrimSpace(r.resumeIdentifier)
+	}
+	return strings.TrimSpace(r.resumeHash)
 }
 
 // persistApplicationProjection records the local career aggregate after an

@@ -146,10 +146,17 @@ func (s *Service) Prepare(ctx context.Context, input Request) (Result, error) {
 			letterResult, err = s.deps.CoverLetter.Generate(ctx, letterInput)
 		}
 		if err != nil {
-			return Result{}, fmt.Errorf("prepare cover letter: %w", err)
+			if applicability.LetterRequiredKnown && !applicability.LetterRequired {
+				// An optional draft is never an application prerequisite. Discard
+				// the unsafe/invalid provider output and continue without a letter;
+				// the invalid text must not be copied to PreparedApplication.
+				letterResult = coverletter.Result{Status: coverletter.DraftStatusHardInvalid, FallbackReason: err.Error()}
+			} else {
+				return Result{}, fmt.Errorf("prepare cover letter: %w", err)
+			}
 		}
 		letter = letterResult.Letter
-		if strings.TrimSpace(letter) == "" {
+		if strings.TrimSpace(letter) == "" && !(applicability.LetterRequiredKnown && !applicability.LetterRequired) {
 			return Result{}, errors.New("prepare cover letter returned empty letter")
 		}
 	}

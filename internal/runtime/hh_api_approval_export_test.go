@@ -112,7 +112,7 @@ func TestPilotProviderResumeIDResolvesBrowserIdentityWithoutUsingHHID(t *testing
 				SelectedResumeID:   "hh-resume-provider-id-resume-provider-7",
 				SelectedResumeHash: resumeHash,
 			},
-			wantError: true,
+			want: "resume-provider-7",
 		},
 	}
 	for _, test := range tests {
@@ -157,8 +157,8 @@ func TestPilotProviderResumeIDKeepsLegacyRouterHashResolution(t *testing.T) {
 		ResumeSelectionBasis:     pilotResumeSelectionRouter,
 	}
 	got, err := pilotProviderResumeID(artifact)
-	if err != nil || got != "hash-7" {
-		t.Fatalf("pilotProviderResumeID()=%q error=%v, want legacy hash-7", got, err)
+	if err != nil || got != "provider-7" {
+		t.Fatalf("pilotProviderResumeID()=%q error=%v, want provider-7", got, err)
 	}
 }
 
@@ -206,7 +206,10 @@ func TestValidateManualPilotArtifactAcceptsValidAIAdvisoryAndRejectsSafetyBlocke
 		{name: "can apply unknown", mutate: func(value *PilotArtifact) { value.Preflight.CanApply = nil }},
 		{name: "can apply false", mutate: func(value *PilotArtifact) { canApply := false; value.Preflight.CanApply = &canApply }},
 		{name: "missing provider resume", mutate: func(value *PilotArtifact) { value.SelectedResumeID = "" }},
-		{name: "conflicting provider and hash resume", mutate: func(value *PilotArtifact) { value.SelectedResumeHash = "other-resume-hash" }},
+		{name: "conflicting provider resume", mutate: func(value *PilotArtifact) {
+			value.SelectedResumeProviderID = "resume-provider-7"
+			value.SelectedResumeID = "hh-resume-provider-id-other-resume"
+		}},
 		{name: "stale preview", mutate: func(value *PilotArtifact) {
 			value.PreviewFreshAt = now.Add(-apiApplicationApprovalMaxAge - time.Nanosecond)
 		}},
@@ -446,7 +449,10 @@ func TestPilotArtifactToAPIApplicationApprovalFailsClosedForIdentityAndState(t *
 		{name: "not ready", mutate: func(value *PilotArtifact) { value.Status = "BLOCKED" }},
 		{name: "not match", mutate: func(value *PilotArtifact) { value.FinalDecision = "REVIEW_REQUIRED" }},
 		{name: "unknown resume representation", mutate: func(value *PilotArtifact) { value.SelectedResumeID = "hh-resume-hash-only" }},
-		{name: "resume identity conflict", mutate: func(value *PilotArtifact) { value.SelectedResumeHash = "other-resume-hash" }},
+		{name: "resume identity conflict", mutate: func(value *PilotArtifact) {
+			value.SelectedResumeProviderID = "resume-provider-7"
+			value.SelectedResumeID = "hh-resume-provider-id-other-resume"
+		}},
 		{name: "used nonce", mutate: func(value *PilotArtifact) { used := now; value.NonceUsedAt = &used }},
 		{name: "content hash mismatch", mutate: func(value *PilotArtifact) { value.ContentHash = strings.Repeat("0", 64) }},
 		{name: "invalid cover letter", mutate: func(value *PilotArtifact) { value.CoverLetter = "```json\n{}\n```" }},

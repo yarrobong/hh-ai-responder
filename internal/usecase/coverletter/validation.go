@@ -1,18 +1,36 @@
 package coverletter
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"hh-ai-responder/internal/candidate"
 )
 
 var (
-	experienceDurationClaimPattern    = regexp.MustCompile(`(?i)(?:[0-9]+(?:[.,][0-9]+)?\s*)?(?:год(?:а|ов)?|лет|year(?:s)?)\s*(?:опыта|experience)?`)
-	approximateExperienceClaimPattern = regexp.MustCompile(`(?i)(?:около|примерно|приблизительно|about|approximately)\s+(?:[0-9]+(?:[.,][0-9]+)?\s*)?(?:год(?:а|ов)?|лет|year(?:s)?)`)
-	technologyDurationClaimPattern    = regexp.MustCompile(`(?i)[0-9]+(?:[.,][0-9]+)?\s*(?:год(?:а|ов)?|лет|year(?:s)?)[^.!?\n]{0,35}\b(?:python|django|fastapi|flask|kubernetes|k8s|docker|kafka|celery|php|sql|postgres(?:ql)?)\b`)
+	experienceDurationClaimPattern = regexp.MustCompile(`(?i)(?:[0-9]+(?:[.,][0-9]+)?\s*)?(?:год(?:а|ов)?|лет|месяц(?:а|ев|ы)?|year(?:s)?|month(?:s)?)\s*(?:опыта|experience)?`)
+	experienceNumberUnitPattern    = regexp.MustCompile(`(?i)([0-9]+(?:[.,][0-9]+)?)?\s*(год(?:а|ов)?|лет|месяц(?:а|ев|ы)?|year(?:s)?|month(?:s)?)`)
+	technologyDurationClaimPattern = regexp.MustCompile(`(?i)[0-9]+(?:[.,][0-9]+)?\s*(?:год(?:а|ов)?|лет|year(?:s)?)[^.!?\n]{0,35}\b(?:python|django|fastapi|flask|kubernetes|k8s|docker|kafka|celery|php|sql|postgres(?:ql)?)\b`)
 )
+
+// TechnologyClaimKind makes the distinction explicit for callers and tests:
+// a safe learning intention is not candidate evidence, while a factual claim
+// still requires trusted evidence.
+type TechnologyClaimKind string
+
+const (
+	TechnologyClaimNeutral      TechnologyClaimKind = "NEUTRAL"
+	TechnologyClaimFactual      TechnologyClaimKind = "FACTUAL_CLAIM"
+	TechnologyClaimSafeIntent   TechnologyClaimKind = "SAFE_INTENT"
+	TechnologyClaimUnsafeIntent TechnologyClaimKind = "UNSAFE_INTENT"
+)
+
+var namedServiceClaims = []string{
+	"cdek", "cloudflare", "turnstile", "bitrix24", "amo", "kommo", "albato", "zapier", "n8n", "make",
+}
 
 // ValidateLetter applies cover-letter-specific deterministic checks. It is
 // intentionally conservative: relevance hints and unknown facts never grant
@@ -26,6 +44,9 @@ func ValidateLetter(value CandidateFacts, letter string) error {
 	}
 	text := strings.ToLower(letter)
 	if err := validateTechnologyClaims(value, text); err != nil {
+		return err
+	}
+	if err := validateNamedServiceClaims(value, letter); err != nil {
 		return err
 	}
 	if err := validateSeniority(value, text); err != nil {
@@ -63,23 +84,48 @@ func validateExperience(value CandidateFacts, letter string) error {
 	if technologyDurationClaimPattern.MatchString(letter) {
 		return fmt.Errorf("%w: technology-specific experience duration is not confirmed", ErrUnsupportedCandidateFact)
 	}
-	if !value.TotalExperienceMonthsKnown || value.TotalExperienceMonths%12 == 0 {
+	if !value.TotalExperienceMonthsKnown {
 		return nil
 	}
-	claims := experienceDurationClaimPattern.FindAllStringIndex(letter, -1)
-	if len(claims) == 0 {
-		return nil
-	}
-	approximateClaims := approximateExperienceClaimPattern.FindAllStringIndex(letter, -1)
-	if len(approximateClaims) < len(claims) {
-		return fmt.Errorf("%w: generated letter rounds structured experience of %d months to years", ErrUnsupportedCandidateFact, value.TotalExperienceMonths)
+	for _, claim := range experienceDurationClaimPattern.FindAllString(letter, -1) {
+		match := experienceNumberUnitPattern.FindStringSubmatch(claim)
+		if len(match) != 3 {
+			return fmt.Errorf("%w: generated letter does not preserve exact structured experience of %d months", ErrUnsupportedCandidateFact, value.TotalExperienceMonths)
+		}
+		amount := 0
+		if strings.TrimSpace(match[1]) != "" {
+			if strings.Contains(match[1], ".") || strings.Contains(match[1], ",") {
+				return fmt.Errorf("%w: generated letter contains a fractional experience duration", ErrUnsupportedCandidateFact)
+			}
+			parsed, err := strconv.Atoi(match[1])
+			if err != nil {
+				return fmt.Errorf("%w: generated letter contains an unverifiable experience duration", ErrUnsupportedCandidateFact)
+			}
+			amount = parsed
+		}
+		unit := strings.ToLower(match[2])
+		if strings.Contains(unit, "месяц") || strings.Contains(unit, "month") {
+			if amount == 0 || amount != value.TotalExperienceMonths {
+				return fmt.Errorf("%w: generated letter does not preserve exact structured experience of %d months", ErrUnsupportedCandidateFact, value.TotalExperienceMonths)
+			}
+			continue
+		}
+		if amount == 0 || amount*12 != value.TotalExperienceMonths {
+			return fmt.Errorf("%w: generated letter rounds structured experience of %d months to years", ErrUnsupportedCandidateFact, value.TotalExperienceMonths)
+		}
 	}
 	return nil
 }
 
 func validateTechnologyClaims(value CandidateFacts, text string) error {
-	for _, technology := range []string{"kubernetes", "k8s", "kafka", "celery", "docker"} {
+	for _, technology := range []string{"python", "django", "fastapi", "flask", "postgresql", "postgres", "rest api", "redis", "kubernetes", "k8s", "kafka", "celery", "docker", "linux", "typescript", "javascript", "node.js", "react", "php", "laravel", "bitrix24", "webhooks"} {
 		if !strings.Contains(text, technology) || !positiveClaim(text, technology) {
+			if strings.Contains(text, technology) && technologyClaimKind(text, technology) == TechnologyClaimUnsafeIntent {
+				return fmt.Errorf("%w: unsafe learning promise for %s", ErrUnsupportedCandidateFact, technology)
+			}
+			continue
+		}
+		if technologyClaimKind(text, technology) == TechnologyClaimSafeIntent {
 			continue
 		}
 		if hasSkillContradiction(value, technology) {
@@ -103,6 +149,61 @@ func validateTechnologyClaims(value CandidateFacts, text string) error {
 		}
 	}
 	return nil
+}
+
+// ClassifyTechnologyClaim exposes the deterministic distinction used by the
+// validator without treating a safe intention as evidence of experience.
+func ClassifyTechnologyClaim(letter, technology string) TechnologyClaimKind {
+	return technologyClaimKind(strings.ToLower(letter), strings.ToLower(technology))
+}
+
+func technologyClaimKind(text, technology string) TechnologyClaimKind {
+	position := strings.Index(text, technology)
+	if position < 0 {
+		return TechnologyClaimNeutral
+	}
+	prefix := text[maxInt(0, position-90):position]
+	if safeIntentPrefix(prefix) {
+		return TechnologyClaimSafeIntent
+	}
+	if unsafeIntentPrefix(prefix) {
+		return TechnologyClaimUnsafeIntent
+	}
+	if positiveClaim(text, technology) {
+		return TechnologyClaimFactual
+	}
+	return TechnologyClaimNeutral
+}
+
+func safeIntentPrefix(prefix string) bool {
+	return strings.Contains(prefix, "готов изуч") || strings.Contains(prefix, "готов осво") || strings.Contains(prefix, "интересно развиваться в") || strings.Contains(prefix, "при необходимости изуч")
+}
+
+func unsafeIntentPrefix(prefix string) bool {
+	return strings.Contains(prefix, "быстро осво") || strings.Contains(prefix, "легко осво") || strings.Contains(prefix, "сразу осво") || strings.Contains(prefix, "за день") || strings.Contains(prefix, "за неделю") || strings.Contains(prefix, "гарантированно осво")
+}
+
+func validateNamedServiceClaims(value CandidateFacts, letter string) error {
+	trusted := strings.ToLower(strings.Join([]string{
+		value.Skills, value.Experience, strings.Join(value.SafeContext.AllowedFacts, "\n"), trustedKnowledgeText(value),
+	}, "\n"))
+	for _, service := range namedServiceClaims {
+		if !strings.Contains(strings.ToLower(letter), service) {
+			continue
+		}
+		if !strings.Contains(trusted, service) {
+			return fmt.Errorf("%w: named service %s has no trusted provenance", ErrUnsupportedCandidateFact, service)
+		}
+	}
+	return nil
+}
+
+func trustedKnowledgeText(value CandidateFacts) string {
+	raw, err := json.Marshal(value.SafeKnowledge)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
 }
 
 func hasSkillContradiction(value CandidateFacts, technology string) bool {
@@ -137,7 +238,7 @@ func positiveClaim(text, technology string) bool {
 		return false
 	}
 	prefix := text[maxInt(0, position-55):position]
-	if strings.Contains(prefix, "готов изуч") || strings.Contains(prefix, "готов осво") || strings.Contains(prefix, "изучу") || strings.Contains(prefix, "не использовал") || strings.Contains(prefix, "не работал") || strings.Contains(prefix, "нет опыта") || strings.Contains(prefix, "не знаком") || strings.Contains(prefix, "unknown") {
+	if safeIntentPrefix(prefix) || strings.Contains(prefix, "изучу") || strings.Contains(prefix, "не использовал") || strings.Contains(prefix, "не работал") || strings.Contains(prefix, "нет опыта") || strings.Contains(prefix, "не знаком") || strings.Contains(prefix, "unknown") {
 		return false
 	}
 	return strings.Contains(prefix, "опыт") || strings.Contains(prefix, "работ") || strings.Contains(prefix, "использ") || strings.Contains(prefix, "влад") || strings.Contains(prefix, "знаю") || strings.Contains(prefix, "умею") || strings.Contains(prefix, "выполн") || strings.Contains(prefix, "production") || strings.Contains(prefix, "продакш") || strings.Contains(prefix, "коммерч") || strings.Contains(prefix, "развёрт") || strings.Contains(prefix, "разверт") || strings.Contains(prefix, "настро") || strings.Contains(prefix, "реализ")

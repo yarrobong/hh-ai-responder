@@ -208,6 +208,80 @@ func TestValidateLetterSafetyRegressions(t *testing.T) {
 	}
 }
 
+func TestValidateLetterKeepsExperienceDurationCanonical(t *testing.T) {
+	value := withMonths(baseInput().Candidate, 11)
+	for _, test := range []struct {
+		name   string
+		letter string
+		valid  bool
+	}{
+		{name: "exact months", letter: "Подтверждённый опыт — 11 месяцев.", valid: true},
+		{name: "rounded year", letter: "У меня 1 год коммерческого опыта.", valid: false},
+		{name: "employer range", letter: "У меня опыт 1–3 года.", valid: false},
+		{name: "omitted duration", letter: "Готов обсуждать задачи вакансии.", valid: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := ValidateLetter(value, test.letter)
+			if test.valid && err != nil {
+				t.Fatalf("exact-safe letter rejected: %v", err)
+			}
+			if !test.valid && (err == nil || !errors.Is(err, ErrUnsupportedCandidateFact)) {
+				t.Fatalf("unsafe duration accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateLetterDistinguishesFactualClaimsFromSafeIntent(t *testing.T) {
+	value := baseInput().Candidate
+	for _, test := range []struct {
+		name    string
+		letter  string
+		kind    TechnologyClaimKind
+		wantErr bool
+	}{
+		{name: "factual claim", letter: "Работал с Kubernetes.", kind: TechnologyClaimFactual, wantErr: true},
+		{name: "safe intent", letter: "Готов изучить Kubernetes.", kind: TechnologyClaimSafeIntent, wantErr: false},
+		{name: "unsafe promise", letter: "Быстро освою Kubernetes за день.", kind: TechnologyClaimUnsafeIntent, wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := ClassifyTechnologyClaim(test.letter, "Kubernetes"); got != test.kind {
+				t.Fatalf("claim kind=%q, want %q", got, test.kind)
+			}
+			err := ValidateLetter(value, test.letter)
+			if test.wantErr && (err == nil || !errors.Is(err, ErrUnsupportedCandidateFact)) {
+				t.Fatalf("unsafe claim accepted: %v", err)
+			}
+			if !test.wantErr && err != nil {
+				t.Fatalf("safe intent rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateLetterRequiresNamedServiceProvenance(t *testing.T) {
+	value := baseInput().Candidate
+	if err := ValidateLetter(value, "Работал с интеграцией CDEK."); err == nil || !strings.Contains(err.Error(), "named service cdek") {
+		t.Fatalf("unproven named service was accepted: %v", err)
+	}
+	value.SafeContext.AllowedFacts = []string{"CDEK подтверждён в candidate knowledge"}
+	if err := ValidateLetter(value, "Работал с интеграцией CDEK."); err != nil {
+		t.Fatalf("proven named service was rejected: %v", err)
+	}
+}
+
+func TestStoryTextCannotAuthorizeUnprovenNamedIntegration(t *testing.T) {
+	input := baseInput()
+	input.Stories = []candidate.CandidateStory{{
+		ID: "story-cdek", Title: "Интеграции", Summary: "Интегрировал CDEK в проекте.", Keywords: []string{"CDEK"},
+	}}
+	fake := &completionFake{response: llmvalue.CompletionResponse{Content: "Работал с интеграцией CDEK."}}
+	_, err := NewService(Dependencies{Completion: fake}, Options{}).Generate(context.Background(), input)
+	if err == nil || !strings.Contains(err.Error(), "named service cdek") {
+		t.Fatalf("story text incorrectly authorized named integration: %v", err)
+	}
+}
+
 func withDockerBasic(value CandidateFacts) CandidateFacts {
 	value.SafeKnowledge.Skills = []candidate.CandidateSkillDetailed{{Name: "Docker", Level: candidate.SkillLevelBasic}}
 	return value

@@ -3,6 +3,7 @@ package applicationprocessing
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"hh-ai-responder/internal/usecase/candidatecontext"
@@ -173,6 +174,60 @@ func TestPrepareRequiredLetterAndTestPreservesProviderIdentities(t *testing.T) {
 	}
 	if result.Prepared.Test == nil || result.Prepared.Test.Tasks[0].CandidateSolutions[0].ID != "101" || result.Prepared.Test.Answers[0].SolutionID != 101 {
 		t.Fatalf("provider identities changed: %#v", result.Prepared.Test)
+	}
+}
+
+func TestPrepareOptionalInvalidLetterIsDiscardedAndPreparationContinues(t *testing.T) {
+	reader := &fakeReader{description: "description", applicability: Applicability{
+		LetterRequired: false, LetterRequiredKnown: true, TestPresent: false, TestPresentKnown: true,
+	}}
+	analyzer := &fakeAnalyzer{assessment: vacancyanalysis.Assessment{Apply: true, Score: 90}}
+	letter := &fakeLetter{err: errors.New("cover letter contains unsupported candidate fact")}
+	service := NewService(Dependencies{
+		Vacancies: reader, Candidate: &fakeCandidate{}, Analyzer: analyzer, CoverLetter: letter,
+		Policy: fakePolicy{decision: DecisionMatch, reconcile: AssessmentReconcile{assessment: analyzer.assessment, decision: DecisionMatch}},
+	})
+	request := baseRequest()
+	request.ForceLetter = true
+	result, err := service.Prepare(context.Background(), request)
+	if err != nil || result.Outcome != OutcomePrepared || result.Prepared == nil {
+		t.Fatalf("optional invalid letter blocked preparation: result=%+v err=%v", result, err)
+	}
+	if result.Prepared.CoverLetter != "" || result.Prepared.CoverLetterStatus != coverletter.DraftStatusHardInvalid {
+		t.Fatalf("unsafe optional letter was retained: %+v", result.Prepared)
+	}
+	if strings.Contains(result.Prepared.CoverLetter, "unsupported") {
+		t.Fatal("invalid letter reached prepared application")
+	}
+}
+
+func TestPrepareRequiredInvalidLetterRemainsBlocked(t *testing.T) {
+	reader := &fakeReader{description: "description", applicability: Applicability{LetterRequired: true, LetterRequiredKnown: true}}
+	analyzer := &fakeAnalyzer{assessment: vacancyanalysis.Assessment{Apply: true, Score: 90}}
+	letter := &fakeLetter{err: errors.New("cover letter contains unsupported candidate fact")}
+	service := NewService(Dependencies{
+		Vacancies: reader, Candidate: &fakeCandidate{}, Analyzer: analyzer, CoverLetter: letter,
+		Policy: fakePolicy{decision: DecisionMatch, reconcile: AssessmentReconcile{assessment: analyzer.assessment, decision: DecisionMatch}},
+	})
+	result, err := service.Prepare(context.Background(), baseRequest())
+	if err == nil || result.Prepared != nil || !strings.Contains(err.Error(), "prepare cover letter") {
+		t.Fatalf("required invalid letter was not blocked: result=%+v err=%v", result, err)
+	}
+}
+
+func TestPrepareOptionalValidLetterMayBeIncluded(t *testing.T) {
+	reader := &fakeReader{description: "description", applicability: Applicability{LetterRequired: false, LetterRequiredKnown: true}}
+	analyzer := &fakeAnalyzer{assessment: vacancyanalysis.Assessment{Apply: true, Score: 90}}
+	letter := &fakeLetter{}
+	service := NewService(Dependencies{
+		Vacancies: reader, Candidate: &fakeCandidate{}, Analyzer: analyzer, CoverLetter: letter,
+		Policy: fakePolicy{decision: DecisionMatch, reconcile: AssessmentReconcile{assessment: analyzer.assessment, decision: DecisionMatch}},
+	})
+	request := baseRequest()
+	request.ForceLetter = true
+	result, err := service.Prepare(context.Background(), request)
+	if err != nil || result.Prepared == nil || result.Prepared.CoverLetter != "truthful letter" {
+		t.Fatalf("valid optional letter was not retained: result=%+v err=%v", result, err)
 	}
 }
 

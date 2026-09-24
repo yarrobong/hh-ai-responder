@@ -162,7 +162,7 @@ func pilotProviderResumeID(artifact PilotArtifact) (string, error) {
 	selectedID := strings.TrimSpace(artifact.SelectedResumeID)
 	selectedHash := strings.TrimSpace(artifact.SelectedResumeHash)
 	selectedProvider := strings.TrimSpace(artifact.SelectedResumeProviderID)
-	if selectedProvider != "" && artifact.ResumeSelectionBasis == pilotResumeSelectionOperatorExplicit {
+	if selectedProvider != "" {
 		providerID, ok := normalizeProviderResumeID(selectedProvider)
 		if !ok {
 			return "", errors.New("pilot artifact provider resume ID is invalid")
@@ -173,24 +173,16 @@ func pilotProviderResumeID(artifact PilotArtifact) (string, error) {
 				return "", errors.New("pilot artifact selected resume identities conflict")
 			}
 		}
-		if selectedHash != "" {
-			hashProviderID, hashOK := normalizeProviderResumeID(selectedHash)
-			if !hashOK || hashProviderID != providerID {
-				return "", errors.New("pilot artifact selected resume identities conflict")
-			}
-		}
+		// SelectedResumeHash is an optional content/version fingerprint. It is
+		// intentionally not compared with providerID: those values belong to
+		// different namespaces and a content update must not look like a
+		// different HH resume.
 		return providerID, nil
 	}
 	if strings.HasPrefix(selectedID, pilotProviderResumePrefix) {
 		providerID, ok := normalizeProviderResumeID(selectedID)
 		if !ok {
 			return "", errors.New("pilot artifact provider resume ID is invalid")
-		}
-		if selectedHash != "" {
-			hashProviderID, hashOK := normalizeProviderResumeID(selectedHash)
-			if !hashOK || hashProviderID != providerID {
-				return "", errors.New("pilot artifact selected resume identities conflict")
-			}
 		}
 		return providerID, nil
 	}

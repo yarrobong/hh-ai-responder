@@ -2354,6 +2354,8 @@ func (r *HHAIResponder) addPendingQuestionForRequirement(vacancy Vacancy, requir
 		question = "Подходят ли тебе условия/локация из требования: " + topic + "?"
 	} else if requirement.Category == hardRequirementCategoryLanguage {
 		question = "Какой у тебя подтверждённый уровень языка/языков для требования: " + topic + "?"
+	} else if apiAuthorizationRequirement(topic, requirement.VacancyEvidence) {
+		question = "Есть ли у кандидата практический опыт настройки авторизации API: API keys, Bearer tokens, OAuth или аналогичных схем? Укажи только подтверждённые варианты и контекст использования."
 	}
 	if r.candidateMutations != nil {
 		if current, err := r.candidateRepository.CurrentCandidate(r.ctx); err == nil {
@@ -2387,6 +2389,11 @@ func (r *HHAIResponder) addPendingQuestionForRequirement(vacancy Vacancy, requir
 	if logger != nil {
 		logger.Info("Profile question added for unknown requirement %q", topic)
 	}
+}
+
+func apiAuthorizationRequirement(requirement, evidence string) bool {
+	text := strings.ToLower(strings.Join([]string{requirement, evidence}, " "))
+	return strings.Contains(text, "api") && (strings.Contains(text, "авториза") || strings.Contains(text, "authorization") || strings.Contains(text, "bearer") || strings.Contains(text, "oauth") || strings.Contains(text, "api key") || strings.Contains(text, "ключ") || strings.Contains(text, "token") || strings.Contains(text, "токен"))
 }
 
 func joinNonEmptyStrings(separator string, values ...string) string {
