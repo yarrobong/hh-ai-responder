@@ -6,12 +6,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"sort"
 	"strings"
 	"time"
 
 	"hh-ai-responder/internal/browsersession"
+	"hh-ai-responder/internal/hhwebsession"
 )
 
 func runBrowserDoctorCommand(args []string, cfg Config, stdout, stderr io.Writer) error {
@@ -47,68 +49,117 @@ func runBrowserDoctorCommand(args []string, cfg Config, stdout, stderr io.Writer
 	if cookiePath == "" {
 		cookiePath = "cookies.txt"
 	}
-	cookies, err := browsersession.LoadNetscapeCookies(cookiePath, time.Now())
+	base := browserDoctorBaseURL(cfg.SearchURL)
+	session, err := hhwebsession.New(cookiePath, hhwebsession.Options{BaseURL: base, AllowedHosts: []string{"hh.ru", base.Hostname()}, UserAgent: userAgent})
 	if err != nil {
 		return fmt.Errorf("AUTH_REQUIRED: replace cookies.txt with a fresh authenticated export and run again: %w", err)
 	}
-	cookies = hhCookiesOnly(cookies)
-	if len(cookies) == 0 {
-		return errors.New("AUTH_REQUIRED: cookies.txt contains no active hh.ru cookies; replace cookies.txt and run again")
-	}
-	base := browserDoctorBaseURL(cfg.SearchURL)
-	adapter, err := browsersession.NewPlaywrightAdapter(context.Background(), browsersession.PlaywrightOptions{CookiePath: cookiePath, Headless: headless, HHURL: base.String()})
-	if err != nil {
-		return err
-	}
-	defer adapter.Close()
-
+	metadata := session.SafeMetadata(time.Now())
 	fmt.Fprintln(stdout, "HH Browser Doctor")
-	fmt.Fprintf(stdout, "Browser transport: PLAYWRIGHT\nMode: %s\nCookie count: %d\nCookie domains: %s\nCookie names: %s\nCookie values logged: NO\n", browserModeName(headless), len(cookies), browserCookieDomains(cookies), browserCookieNames(cookies))
-
-	homeState, err := adapter.GetPage(context.Background(), base.String())
+	fmt.Fprintf(stdout, "Browser transport: COOKIE_WEB\nMode: GET-only\nCookie count: %d\nCookie values logged: NO\n", len(metadata.Cookies))
+	home, err := cookieDoctorGet(context.Background(), session, base)
 	if err != nil {
-		return err
+		return reportCookieDoctorFailure(stdout, err)
 	}
-	resumeState, err := adapter.GetPage(context.Background(), joinDoctorURL(base, "/applicant/my_resumes"))
+	resume, err := cookieDoctorGet(context.Background(), session, base.ResolveReference(&url.URL{Path: "/applicant/my_resumes"}))
 	if err != nil {
-		return err
+		return reportCookieDoctorFailure(stdout, err)
 	}
-	if status := browserDoctorPageStatus(homeState, cookies); status != browsersession.DoctorAuthOK {
+	if status := classifyCookieDoctorResponse(home); status != browsersession.DoctorAuthOK {
 		return reportBrowserDoctorFailure(stdout, status)
 	}
-	if status := browserDoctorPageStatus(resumeState, cookies); status != browsersession.DoctorAuthOK {
+	if status := classifyCookieDoctorResponse(resume); status != browsersession.DoctorAuthOK {
 		return reportBrowserDoctorFailure(stdout, status)
+	}
+	if cfg.HHWriteEnabled {
+		if _, err := session.XSRFToken(base); err != nil {
+			fmt.Fprintln(stdout, "XSRF: MISSING")
+			return errors.New("AUTH_REQUIRED: authenticated cookie session has no XSRF cookie")
+		}
+		fmt.Fprintln(stdout, "XSRF: PRESENT")
 	}
 
 	if vacancyURL == "" {
-		searchURL := base.ResolveReference(&url.URL{Path: "/search/vacancy", RawQuery: "items_on_page=1&search_period=1&order_by=publication_time"}).String()
-		searchState, searchErr := adapter.GetPage(context.Background(), searchURL)
+		searchURL := base.ResolveReference(&url.URL{Path: "/search/vacancy", RawQuery: "items_on_page=1&search_period=1&order_by=publication_time"})
+		search, searchErr := cookieDoctorGet(context.Background(), session, searchURL)
 		if searchErr != nil {
-			return searchErr
+			return reportCookieDoctorFailure(stdout, searchErr)
 		}
-		if status := browserDoctorPageStatus(searchState, cookies); status != browsersession.DoctorAuthOK {
-			return reportBrowserDoctorFailure(stdout, status)
+		if classifyCookieDoctorResponse(search) != browsersession.DoctorAuthOK {
+			return reportBrowserDoctorFailure(stdout, classifyCookieDoctorResponse(search))
 		}
-		vacancyURL, err = adapter.Evaluate(context.Background(), `(function(){for (const a of document.querySelectorAll('a[href]')) { const raw=a.getAttribute('href')||""; try { const u=new URL(raw, location.href); if (u.protocol === "https:" && /(^|\.)hh\.ru$/i.test(u.hostname) && /^\/vacancy\/[^/?#]+/.test(u.pathname)) return u.href; } catch (_) {} } return ""})()`)
-		if err != nil || strings.TrimSpace(vacancyURL) == "" {
-			fmt.Fprintln(stdout, "Vacancy page: UNKNOWN")
-			fmt.Fprintln(stdout, "Overall: UNKNOWN")
-			return errors.New("UNKNOWN: no bounded vacancy link found on search page")
-		}
+		fmt.Fprintln(stdout, "Vacancy page: NOT_CHECKED (provide --vacancy-url for a bounded vacancy probe)")
+		fmt.Fprintln(stdout, "Overall: AUTH_OK")
+		return nil
 	}
 	validatedVacancyURL, err := normalizeDoctorVacancyURL(vacancyURL, base)
 	if err != nil {
 		return err
 	}
-	vacancyState, err := adapter.GetPage(context.Background(), validatedVacancyURL)
+	vacancyState, err := cookieDoctorGet(context.Background(), session, mustParseDoctorURL(validatedVacancyURL))
 	if err != nil {
-		return err
+		return reportCookieDoctorFailure(stdout, err)
 	}
-	if status := browserDoctorPageStatus(vacancyState, cookies); status != browsersession.DoctorAuthOK {
+	if status := classifyCookieDoctorResponse(vacancyState); status != browsersession.DoctorAuthOK {
 		return reportBrowserDoctorFailure(stdout, status)
 	}
 	fmt.Fprintf(stdout, "Home: AUTH_OK\nMy resumes: AUTH_OK\nVacancy: AUTH_OK\nOverall: %s\n", browsersession.DoctorAuthOK)
 	return nil
+}
+
+type cookieDoctorResponse struct {
+	Status   int
+	FinalURL string
+	Body     []byte
+}
+
+func cookieDoctorGet(ctx context.Context, session *hhwebsession.Session, target *url.URL) (cookieDoctorResponse, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
+	if err != nil {
+		return cookieDoctorResponse{}, err
+	}
+	response, err := session.ReadClient().Do(request)
+	if err != nil {
+		return cookieDoctorResponse{}, err
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, 512*1024))
+	if err != nil {
+		return cookieDoctorResponse{}, err
+	}
+	finalURL := target.String()
+	if response.Request != nil && response.Request.URL != nil {
+		finalURL = response.Request.URL.String()
+	}
+	return cookieDoctorResponse{Status: response.StatusCode, FinalURL: finalURL, Body: body}, nil
+}
+
+func classifyCookieDoctorResponse(response cookieDoctorResponse) browsersession.DoctorStatus {
+	finalURL := strings.ToLower(response.FinalURL)
+	body := strings.ToLower(string(response.Body))
+	if strings.Contains(finalURL, "/account/captcha") || strings.Contains(body, "captcha") || strings.Contains(body, "challenge") {
+		return browsersession.DoctorChallenge
+	}
+	if strings.Contains(finalURL, "/account/login") || response.Status == http.StatusUnauthorized || response.Status == http.StatusForbidden && strings.Contains(body, "login") {
+		return browsersession.DoctorSessionExpired
+	}
+	if response.Status < 200 || response.Status >= 400 {
+		return browsersession.DoctorUnknown
+	}
+	return browsersession.DoctorAuthOK
+}
+
+func reportCookieDoctorFailure(stdout io.Writer, err error) error {
+	if errors.Is(err, hhwebsession.ErrExternalRedirect) {
+		fmt.Fprintln(stdout, "Overall: UNKNOWN")
+		return errors.New("UNKNOWN: external redirect rejected")
+	}
+	return err
+}
+
+func mustParseDoctorURL(raw string) *url.URL {
+	parsed, _ := url.Parse(raw)
+	return parsed
 }
 
 func normalizeDoctorVacancyURL(raw string, base *url.URL) (string, error) {

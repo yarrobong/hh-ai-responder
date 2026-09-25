@@ -29,6 +29,7 @@ import (
 	"hh-ai-responder/internal/browsersession"
 	"hh-ai-responder/internal/careeragent"
 	appconfig "hh-ai-responder/internal/config"
+	"hh-ai-responder/internal/hhwebsession"
 	"hh-ai-responder/internal/ports"
 	attemptport "hh-ai-responder/internal/ports/applicationattempt"
 	autochatattemptport "hh-ai-responder/internal/ports/autochatattempt"
@@ -1129,6 +1130,7 @@ type HHAIResponder struct {
 	maxResponses   int
 	client         *http.Client
 	jar            *MemoryPersistentJar
+	webSession     *hhwebsession.Session
 	requester      *HHRequester
 	resumeHash     string
 	// resumeIdentifier is the canonical provider resume ID for read-only
@@ -1839,9 +1841,20 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 		responder.baseURL = &url.URL{Scheme: "https", Host: host}
 	}
 	logger.Debug("baseURL resolved to %s", responder.baseURL.String())
+	var webSession *hhwebsession.Session
+	if transportMode == "browser" || transportMode == "auto" {
+		allowedHosts := []string{"hh.ru", responder.baseURL.Hostname()}
+		webSession, err = hhwebsession.New(cfg.CookiesPath, hhwebsession.Options{BaseURL: responder.baseURL, AllowedHosts: allowedHosts, UserAgent: userAgent})
+		if err != nil && transportMode == "browser" {
+			return nil, fmt.Errorf("initialize HH cookie session: %w", err)
+		}
+		if err == nil {
+			responder.webSession = webSession
+		}
+	}
 	var browserReadSource hhreadports.HHReadSource
 	var browserDoctor func(context.Context) (string, error)
-	if (transportMode == "browser" || transportMode == "auto") && shouldUseBrowserTransport(cfg, responder.baseURL) {
+	if transportMode == "auto" && shouldUseBrowserTransport(cfg, responder.baseURL) {
 		browser, browserErr := browsersession.NewPlaywrightAdapter(ctx, browsersession.PlaywrightOptions{CookiePath: cfg.CookiesPath, Headless: cfg.BrowserHeadless, HHURL: responder.baseURL.String()})
 		if browserErr != nil {
 			return nil, fmt.Errorf("initialize BrowserHHClient: %w", browserErr)
@@ -1859,6 +1872,7 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 		if err != nil {
 			return nil, err
 		}
+		browserDoctor = cookieBrowserDoctorForSession(responder.webSession, responder.baseURL)
 	}
 
 	var apiReadSource apiTransportSource
@@ -2128,6 +2142,12 @@ func (r *HHAIResponder) GetFullName() string {
 }
 
 func (r *HHAIResponder) XSRFToken() string {
+	if r != nil && r.webSession != nil {
+		token, err := r.webSession.XSRFToken(r.baseURL)
+		if err == nil {
+			return token
+		}
+	}
 	if r == nil || r.jar == nil || r.baseURL == nil {
 		return ""
 	}
