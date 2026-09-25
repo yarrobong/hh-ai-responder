@@ -421,7 +421,7 @@ func (s *controlledApplicationService) Execute(ctx context.Context, approvalPath
 	if err := consumeAPIApplicationApprovalNonce(approvalPath, approval, approval.VacancyID, providerResumeID, now); err != nil {
 		return result, err
 	}
-	executor := attemptusecase.NewExecutor(s.store, apiApplicationExecutor{gateway: s.gateway}, s.now)
+	executor := attemptusecase.NewExecutor(s.store, controlledApplicationExecutor{gateway: s.gateway, prepared: preparedContext}, s.now)
 	submissionService := applicationsubmission.NewService(applicationsubmission.Dependencies{Vacancies: apiApplicationApplicabilityReader{preflight: preflight}, Executor: executor}, applicationsubmission.Options{WriteEnabled: s.write, DryRun: false, RequireAvailabilityEvidence: true})
 	submission, submitErr := submissionService.Submit(ctx, input)
 	result.Submission = submission
@@ -523,6 +523,42 @@ func (e apiApplicationExecutor) SubmitApplication(ctx context.Context, request a
 		return applicationsubmission.ExecutionResult{Outcome: applicationsubmission.ExecutionNotSent}, errors.New("HH API application write gateway is unavailable")
 	}
 	result, err := e.gateway.SubmitVacancyResponse(ctx, hhwritegateway.VacancyResponseRequest{VacancyID: request.VacancyID, ProviderResumeID: request.ResumeID, Letter: request.Letter})
+	execution := applicationsubmission.ExecutionResult{ApplicationClass: result.ApplicationClass, ProviderID: result.ProviderID, ProviderStatus: result.ProviderStatus, Metadata: result.Metadata, TransportTried: result.TransportAttempted}
+	switch result.Outcome {
+	case hhwritegateway.OutcomeAccepted:
+		execution.Outcome = applicationsubmission.ExecutionAccepted
+	case hhwritegateway.OutcomeDeliveryUncertain, hhwritegateway.OutcomePersistenceUncertain:
+		execution.Outcome = applicationsubmission.ExecutionDeliveryUncertain
+	case hhwritegateway.OutcomeRejected:
+		if result.ApplicationClass == hhwrite.ApplicationResultAlreadyApplied {
+			execution.Outcome = applicationsubmission.ExecutionDeliveryUncertain
+		} else {
+			execution.Outcome = applicationsubmission.ExecutionRejected
+		}
+	default:
+		execution.Outcome = applicationsubmission.ExecutionNotSent
+	}
+	return execution, err
+}
+
+// controlledApplicationExecutor keeps the shared application-attempt and
+// gateway orchestration transport-neutral. API writers use ProviderResumeID;
+// cookie-web writers additionally consume the exact browser hash and standard
+// vacancy referer prepared by their transport adapter. The gateway remains
+// the only mutation policy boundary for both transports.
+type controlledApplicationExecutor struct {
+	gateway  *hhwritegateway.Service
+	prepared controlledApplicationContext
+}
+
+func (e controlledApplicationExecutor) SubmitApplication(ctx context.Context, request applicationsubmission.ApplicationRequest) (applicationsubmission.ExecutionResult, error) {
+	if e.gateway == nil {
+		return applicationsubmission.ExecutionResult{Outcome: applicationsubmission.ExecutionNotSent}, errors.New("controlled application write gateway is unavailable")
+	}
+	result, err := e.gateway.SubmitVacancyResponse(ctx, hhwritegateway.VacancyResponseRequest{
+		VacancyID: request.VacancyID, ProviderResumeID: request.ResumeID, ResumeHash: request.ResumeID,
+		Letter: request.Letter, RefererURL: e.prepared.RefererURL, IgnorePostponed: "true",
+	})
 	execution := applicationsubmission.ExecutionResult{ApplicationClass: result.ApplicationClass, ProviderID: result.ProviderID, ProviderStatus: result.ProviderStatus, Metadata: result.Metadata, TransportTried: result.TransportAttempted}
 	switch result.Outcome {
 	case hhwritegateway.OutcomeAccepted:

@@ -122,6 +122,17 @@ func (s *CookieWebApplicationPreflightService) Preflight(ctx context.Context, va
 		if parseErr != nil {
 			return CookieWebApplicationPreflight{}, parseErr
 		}
+		// The response page is the authoritative vacancy-wide application
+		// surface for cookie-web transport. An explicit responded/not-responded
+		// marker is therefore a complete duplicate proof; no resume-specific
+		// absence is inferred from the page.
+		parsed.NegotiationScanComplete = parsed.alreadyRespondedEvidence().Value != AlreadyRespondedUnknown
+		// This fixed endpoint is the standard applicant response path. The
+		// generic parser marks any non-empty response URL as an identifier for
+		// legacy API compatibility, so normalize that projection here rather
+		// than treating the route itself as a direct/external response.
+		parsed.ResponseIdentifierPresent = false
+		parsed.VacancyTypeID, parsed.VacancyTypeKnown = "open", true
 		preflight = parsed
 		activeState, evidence := parseVacancyActiveState(vacancyPage.Body, vacancyID, webTraceVacancy)
 		mergeVacancyActiveEvidence(&preflight, activeState, evidence)
@@ -137,6 +148,11 @@ func (s *CookieWebApplicationPreflightService) Preflight(ctx context.Context, va
 			break
 		}
 	}
+	selectedHash := strings.TrimSpace(selected.BrowserHash)
+	approvedHash := strings.TrimSpace(approvedResumeHash)
+	preflight.SuitableResumesScanComplete = true
+	preflight.SelectedResumeSuitableKnown = approvedHash != "" && selectedHash != ""
+	preflight.SelectedResumeSuitable = preflight.SelectedResumeSuitableKnown && approvedHash == selectedHash
 	persistenceHealthy := s.persistenceError == nil || s.persistenceError() == nil
 	result := CookieWebApplicationPreflight{VacancyID: vacancyID, ResponseURL: responseURL.String(), Resume: selected, ApprovedResumeHash: approvedResumeHash, VacancyPreflight: preflight, Authenticated: authenticated, StandardResponsePathKnown: true, PersistenceHealthy: persistenceHealthy}
 	return result, nil
