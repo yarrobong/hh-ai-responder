@@ -58,6 +58,15 @@ func TestPreparationAttentionRequiresAuthoritativeApplicationEvidence(t *testing
 			actionable: false,
 		},
 		{
+			name: "partial projection with confirmed provider delivery suppresses attention",
+			application: JobApplication{
+				ID: "partial-confirmed", VacancyID: preparation.VacancyID, Source: ApplicationSourceHH,
+				Status: ApplicationApplied, ExternalID: "hh-response-3b", Partial: true,
+				HHMetadata: map[string]string{"delivery_confirmed": "true"},
+			},
+			actionable: false,
+		},
+		{
 			name: "reconciled provider application suppresses attention",
 			application: JobApplication{
 				ID: "reconciled", VacancyID: preparation.VacancyID, Source: ApplicationSourceHH,

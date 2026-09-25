@@ -41,17 +41,54 @@ application availability: UNAVAILABLE (duplicate response is proven)
 server acceptance: NOT_ATTEMPTED
 ```
 
-The canonical `application_preparations` table contains four historical ready preparations for this vacancy. They all point to the canary provider resume identity; no preparation row was mutated during validation. The canonical `applications` projection currently has no row for this vacancy because read synchronization could not be completed with the available HH browser session.
+The canonical `application_preparations` table contains four historical ready preparations for this vacancy. They all point to the canary provider resume identity; no preparation row was mutated during validation.
 
-### Read synchronization attempts
+Browser authentication was restored with the operator-supplied cookie file. The normal headed browser doctor reported `AUTH_OK` for Home, My resumes, and the target vacancy. Cookie values were not logged.
 
-- `career-agent browser-doctor --headed`: `SESSION_EXPIRED`; browser reported 8 HH cookies but required a session refresh.
-- `hh sync applications` with browser transport: blocked before sync with `HH browser session is not authenticated`.
-- `hh sync applications` with API transport: failed closed with `applications (applicant negotiation semantics are unproven)`; no application sync was fabricated.
-- `hh sync conversations` with browser transport: blocked by the same unauthenticated session.
-- `career-agent daily --json`: blocked by the same browser authentication requirement.
+The canonical PostgreSQL application projection now contains exactly one HH row for this vacancy:
 
-These failed closed and did not produce HH writes. Because the canonical application projection and a successful read-only daily refresh could not be established, Phase A attention suppression cannot be declared operationally validated.
+- ApplicationID: `application-57ddaa3e233210edcb704c844f63181f`.
+- HH negotiation/application external ID: `5603136427`.
+- Status/raw status: `applied` / `RESPONSE`.
+- Projection: `partial=true`, `data_completeness=partial`.
+- Authoritative metadata: `delivery_confirmed=true`.
+- Application↔conversation relation: `conversation-f3a01bf880297d699544560c2744a605`.
+- Count invariant: applications `1`, distinct non-empty HH external IDs `1`.
+
+The partial projection is intentionally not treated as sufficient by itself. The preparation is suppressed only because the same HH application also has provider identity, a confirming response status, and authoritative `delivery_confirmed=true` evidence. The regression case for partial-without-authoritative-evidence remains actionable.
+
+### Read synchronization and communication refresh
+
+- `career-agent browser-doctor --headed` with the supplied cookies: `Overall: AUTH_OK`.
+- First canonical `hh sync applications`: `fetched=40, created=9, updated=11, unchanged=20, skipped=0`.
+- Second canonical `hh sync applications`: `fetched=40, created=0, updated=0, unchanged=40, skipped=0`; the repeat was idempotent.
+- Full `hh sync conversations` was run read-only. Its observed report was `requests=285`, `cache_hits=271`, `fetched=271`, `created=4`, `updated=0`, `unchanged=0`, `skipped=1`; two unrelated `vacancy not found` errors were reported for conversations whose local vacancy rows were absent.
+- Targeted canary conversation sync for HH conversation `5658569933`: `fetched=1, created=1, updated=0, unchanged=0, skipped=0`.
+- Fresh PostgreSQL relation after targeted sync: conversation status `waiting_employer`, no employer message timestamp, one stored message, employer/inbound messages `0`.
+- A subsequent `career-agent daily --json` invocation was an idempotent replay of an already-running same-day daily run and returned `FAILED`/no communication items; it was not used as evidence for suppression. The independent fresh dashboard reload and `GET /api/career/attention` read model loaded from PostgreSQL and returned `count=38`, with zero attention items for vacancy `137609053`.
+
+The fresh dashboard process was started after the sync work and then stopped cleanly. This provides the restart/reload boundary for the attention read model. The canary preparation is absent from the reloaded target-vacancy attention queue, while unrelated attention remains visible.
+
+### Fresh API preflight and repeat-send protection
+
+Fresh read-only API preflight, using the configured API token file without exposing its contents, reported:
+
+```text
+active/archive: ACTIVE / archived NO
+duplicate: YES
+got_response: YES
+negotiation: YES
+negotiation scan: complete
+has_test: NO
+response_letter_required: NO
+selected resume suitable: NO
+suitable resume scan: complete
+requested resume present: NO
+application availability: UNAVAILABLE (duplicate response is proven)
+server acceptance: NOT_ATTEMPTED
+```
+
+This is the expected post-canary fail-closed repeat-send state. No approval or nonce was created or consumed during this validation.
 
 ## Phase B — implementation and regression evidence
 
@@ -65,7 +102,7 @@ Implemented and verified:
 - A concurrent same-approval regression proves exactly one provider boundary call; the competing runner receives deterministic nonce failure without deadlock or ambiguous duplicate execution.
 - Gateway batch cap is three; the fourth mutation is blocked before provider transport.
 
-Verification passed:
+Verification passed before the final attention-evidence patch, and the final full verification is rerun after the patch below:
 
 ```text
 go test ./...
@@ -87,11 +124,30 @@ No production batch POST was used by these tests.
 - `e5c0c74` — bounded controlled application batch and CLI integration.
 - `20ff02c` — validate single-apply identity before executor execution.
 - `68e3cf0` — batch safety and post-canary regression coverage.
+- Working-tree patch — authoritative `delivery_confirmed` evidence suppresses a partial application projection; partial-only projections remain actionable.
 
 Branch remains unmerged and unpushed.
 
-## Verdict
+## Phase A verdict
 
-`POST_CANARY_BLOCKER_REMAINS`
+`POST_CANARY_FIXED_AND_PASS`
 
-Reason: implementation safety gates and tests pass, but canonical Phase A operational refresh remains blocked by expired HH browser authentication and API application-semantics limitations. No send is authorized by this validation.
+Reason: browser auth was restored, canonical application sync is durable and idempotent, the canary conversation is linked in PostgreSQL, a fresh dashboard reload suppresses only the authoritative applied evidence, and fresh API preflight keeps repeat-send unavailable because the response is already duplicated. The daily orchestration replay remains a same-day running-run artifact, but it did not change the canonical application/conversation projection and was not used to bypass attention safety.
+
+## Safety counters
+
+```text
+new applications sent: 0
+HH POST: 0
+employer messages sent: 0
+resume mutations: 0
+production approvals created: 0
+production approvals consumed: 0
+HH writes: 0
+```
+
+The original dirty checkout at `/Users/Yaroslav/Documents/dev/hh-ai-responder` remained unchanged. The isolated branch remains unmerged and unpushed.
+
+## Final verdict
+
+`CONTROLLED_BATCH_READY`

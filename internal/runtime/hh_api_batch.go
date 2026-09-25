@@ -133,6 +133,16 @@ func executeControlledApplicationBatch(ctx context.Context, paths []string, now 
 			run.Items = append(run.Items, item)
 			continue
 		}
+		// A transport-attempted execution error is uncertain even when a
+		// provisional final outcome was populated. In particular, a
+		// reconciliation persistence error must not release the batch to the
+		// next item.
+		if err != nil {
+			item.Status = BatchItemStoppedUncertain
+			run.Status = BatchRunStoppedUncertain
+			run.Items = append(run.Items, item)
+			return run, nil
+		}
 		if batchFinalOutcomeConfirmed(result.FinalOutcome) {
 			if result.FinalOutcome == APIApplicationFinalAlreadyAppliedReconciled {
 				item.Status = BatchItemAlreadyApplied
@@ -182,7 +192,10 @@ func runHHAPIApplyBatch(ctx context.Context, args []string, cfg Config, stdout, 
 	if err != nil {
 		return err
 	}
-	run, _ := executeControlledApplicationBatch(ctx, paths, now, service)
+	run, batchErr := executeControlledApplicationBatch(ctx, paths, now, service)
+	if batchErr != nil {
+		return batchErr
+	}
 	if cfg.DryRun {
 		run.Status = BatchRunDryRun
 	}

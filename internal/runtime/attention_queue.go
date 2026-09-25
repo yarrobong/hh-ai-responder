@@ -105,7 +105,6 @@ func preparationAttentionActionable(preparation careeragent.ApplicationPreparati
 	for _, application := range applications {
 		if application.VacancyID != preparation.VacancyID ||
 			application.Source != ApplicationSourceHH ||
-			application.Partial ||
 			strings.TrimSpace(application.ExternalID) == "" ||
 			!applicationStatusConfirmsResponse(application.Status) {
 			continue

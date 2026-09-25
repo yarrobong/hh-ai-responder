@@ -82,6 +82,27 @@ func TestBatchStopsAfterUncertainTransport(t *testing.T) {
 	}
 }
 
+func TestBatchStopsWhenConfirmedOutcomeHasExecutionError(t *testing.T) {
+	fixture := &batchExecutorFixture{results: map[string]controlledAPIApplicationResult{}, errors: map[string]error{}}
+	fixture.results["one"] = batchResult(1, true, APIApplicationFinalPostSuccessReconciled)
+	fixture.errors["one"] = errors.New("reconciliation persistence uncertain")
+	fixture.results["two"] = batchResult(2, true, APIApplicationFinalPostSuccessReconciled)
+
+	run, err := executeControlledApplicationBatch(context.Background(), []string{"one", "two"}, time.Now(), fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != BatchRunStoppedUncertain || len(run.Items) != 1 {
+		t.Fatalf("run=%+v", run)
+	}
+	if run.Items[0].Status != BatchItemStoppedUncertain {
+		t.Fatalf("item=%+v", run.Items[0])
+	}
+	if !reflect.DeepEqual(fixture.calls, []string{"one"}) {
+		t.Fatalf("execution order=%v", fixture.calls)
+	}
+}
+
 func TestBatchContinuesAfterPreSendBlock(t *testing.T) {
 	fixture := &batchExecutorFixture{results: map[string]controlledAPIApplicationResult{}, errors: map[string]error{}}
 	fixture.results["one"] = batchResult(1, true, APIApplicationFinalPostSuccessReconciled)
