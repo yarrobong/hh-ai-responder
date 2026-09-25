@@ -14,6 +14,8 @@ import (
 
 	hhapi "hh-ai-responder/internal/adapters/hh/api"
 	"hh-ai-responder/internal/platform"
+	"hh-ai-responder/internal/ports"
+	attemptport "hh-ai-responder/internal/ports/applicationattempt"
 	hhwrite "hh-ai-responder/internal/ports/hhwrite"
 	attemptusecase "hh-ai-responder/internal/usecase/applicationattempt"
 	applicationreconciliation "hh-ai-responder/internal/usecase/applicationreconciliation"
@@ -222,93 +224,155 @@ func runHHAPIApply(ctx context.Context, args []string, cfg Config, stdout, stder
 	if deps.Now != nil {
 		now = deps.Now().UTC()
 	}
-	approval, err := loadAPIApplicationApproval(approvalPath)
+	service, err := newControlledAPIApplicationService(ctx, cfg, deps, 1)
 	if err != nil {
 		return err
 	}
-	if err := validateAPIApplicationApproval(approval, vacancyID, providerResumeID, now); err != nil {
-		return err
+	result, execErr := service.Execute(ctx, approvalPath, now)
+	if result.Approval.VacancyID != vacancyID || approvalProviderResumeID(result.Approval) != providerResumeID {
+		return errAPIApplicationApprovalIdentity
 	}
-	if err := validatePreparationApprovalBinding(ctx, deps.CareerWorkflow, approval, vacancyID, providerResumeID); err != nil {
-		return err
+	if cfg.DryRun {
+		_, _ = fmt.Fprintf(stdout, "WOULD_APPLY vacancy_id=%d resume_id=%s approval_file=explicit preflight=AVAILABLE\n", vacancyID, safeHHAPIResumeID(providerResumeID))
+		return execErr
 	}
+	_, _ = fmt.Fprintf(stdout, "APPLICATION_RESULT vacancy_id=%d resume_id=%s status=%s class=%s\n", vacancyID, safeHHAPIResumeID(providerResumeID), result.Submission.Status, result.Submission.Execution.ApplicationClass)
+	if result.FinalOutcome != "" {
+		_, _ = fmt.Fprintf(stdout, "FINAL_OUTCOME=%s\n", result.FinalOutcome)
+	}
+	return execErr
+}
+
+type controlledAPIApplicationService struct {
+	client   *hhapi.APIHHClient
+	workflow ports.CareerWorkflowReader
+	store    attemptport.Store
+	gateway  *hhwritegateway.Service
+	maxRun   int
+	write    bool
+	dryRun   bool
+	now      func() time.Time
+}
+
+type controlledAPIApplicationResult struct {
+	Approval           APIApplicationApproval
+	Preflight          VacancyPreflight
+	Submission         applicationsubmission.Result
+	AttemptID          string
+	TransportAttempted bool
+	FinalOutcome       APIApplicationFinalOutcome
+	Reconciliation     applicationreconciliation.Result
+}
+
+func newControlledAPIApplicationService(ctx context.Context, cfg Config, deps HHAPICommandDeps, maxWritesPerRun int) (*controlledAPIApplicationService, error) {
 	oauthConfig := hhAPIReadOAuthConfig(cfg)
 	_, client, err := newHHAPIClient(cfg, oauthConfig, deps)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	preflight, err := apiVacancyPreflightWithSource(ctx, client, vacancyID, providerResumeID)
-	if err != nil {
-		return fmt.Errorf("HH API apply GET-only preflight failed: %w", err)
+	now := time.Now().UTC()
+	if deps.Now != nil {
+		now = deps.Now().UTC()
 	}
-	if err := validateControlledAPIApplicationPreflight(preflight); err != nil {
-		return fmt.Errorf("HH API apply blocked by preflight: %w", err)
-	}
-	if approval.CoverLetter == "" && (!preflight.LetterRequiredKnown || preflight.LetterRequired) {
-		return errors.New("HH API apply requires a validated cover letter when HH requires one or its state is unknown")
-	}
-	if preflight.TestPresentKnown && preflight.TestPresent {
-		return errors.New("HH API apply does not support a vacancy with a required test")
-	}
-	// apply_alternate_url is the normal HH web-response URL and is retained
-	// for diagnostics. Only a direct vacancy response URL identifies a path
-	// outside the standard applicant API mutation.
-	if preflight.ResponseIdentifierPresent {
-		return errors.New("HH API apply does not support a direct or external response path")
-	}
-	prepared := applicationsubmission.PreparedApplication{
-		VacancyID: vacancyID,
-		Vacancy:   vacancy.Vacancy{ID: vacancyID},
-		ResumeID:  providerResumeID, CoverLetter: approval.CoverLetter,
-	}
-	input := applicationsubmission.Input{Prepared: prepared, CurrentResumeID: providerResumeID, RequireCurrentResumeID: true}
+	service := &controlledAPIApplicationService{client: client, workflow: deps.CareerWorkflow, maxRun: maxWritesPerRun, write: cfg.HHWriteEnabled, dryRun: cfg.DryRun, now: func() time.Time { return now }}
 	if cfg.DryRun {
-		_, _ = fmt.Fprintf(stdout, "WOULD_APPLY vacancy_id=%d resume_id=%s approval_file=explicit preflight=AVAILABLE\n", vacancyID, safeHHAPIResumeID(providerResumeID))
-		return nil
+		return service, nil
 	}
-	if err := consumeAPIApplicationApprovalNonce(approvalPath, approval, vacancyID, providerResumeID, now); err != nil {
-		return err
+	if !cfg.HHWriteEnabled {
+		return nil, errors.New("controlled API application requires HH_WRITE_ENABLED=true when HH_DRY_RUN=false")
 	}
 	store := deps.ApplicationAttempts
 	if store == nil {
 		backend, backendErr := normalizeStorageBackend(cfg.StorageBackend)
 		if backendErr != nil {
-			return backendErr
+			return nil, backendErr
 		}
 		store, err = buildAutomaticApplicationAttemptStore(ctx, cfg, backend, nil)
 		if err != nil {
-			return fmt.Errorf("HH API application attempt store is unavailable: %w", err)
+			return nil, fmt.Errorf("HH API application attempt store is unavailable: %w", err)
 		}
 	}
 	audit := deps.ApplicationAudit
 	if cfg.HHMaxWritesPerDay > 0 && audit == nil {
 		audit, err = loadHHAPIApplicationAudit()
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
-	writer := hhapi.NewAPIApplicationWriter(client)
-	gateway := hhwritegateway.NewService(hhwritegateway.Dependencies{VacancyResponseWriter: writer, Audit: audit}, hhwritegateway.Options{
-		WriteEnabled: true, DryRun: false, MaxWritesPerRun: 1, MaxWritesPerDay: cfg.HHMaxWritesPerDay, Now: func() time.Time { return now },
+	service.store = store
+	service.gateway = hhwritegateway.NewService(hhwritegateway.Dependencies{VacancyResponseWriter: hhapi.NewAPIApplicationWriter(client), Audit: audit}, hhwritegateway.Options{
+		WriteEnabled: true, DryRun: false, MaxWritesPerRun: maxWritesPerRun, MaxWritesPerDay: cfg.HHMaxWritesPerDay, Now: service.now,
 	})
-	executor := attemptusecase.NewExecutor(store, apiApplicationExecutor{gateway: gateway}, func() time.Time { return now })
-	service := applicationsubmission.NewService(applicationsubmission.Dependencies{
-		Vacancies: apiApplicationApplicabilityReader{preflight: preflight}, Executor: executor,
-	}, applicationsubmission.Options{WriteEnabled: true, DryRun: false, RequireAvailabilityEvidence: true})
-	result, submitErr := service.Submit(ctx, input)
-	_, _ = fmt.Fprintf(stdout, "APPLICATION_RESULT vacancy_id=%d resume_id=%s status=%s class=%s\n", vacancyID, safeHHAPIResumeID(providerResumeID), result.Status, result.Execution.ApplicationClass)
-	if result.Execution.AttemptID != "" && (result.Execution.ApplicationClass == hhwrite.ApplicationResultSuccess || result.Execution.ApplicationClass == hhwrite.ApplicationResultAlreadyApplied || result.Execution.ApplicationClass == hhwrite.ApplicationResultUnknownSendResult) {
-		reconciliationStore, ok := store.(applicationreconciliation.AttemptStore)
+	return service, nil
+}
+
+func (s *controlledAPIApplicationService) Execute(ctx context.Context, approvalPath string, now time.Time) (controlledAPIApplicationResult, error) {
+	result := controlledAPIApplicationResult{}
+	if s == nil || s.client == nil {
+		return result, errors.New("controlled API application service is unavailable")
+	}
+	approval, err := loadAPIApplicationApproval(approvalPath)
+	if err != nil {
+		return result, err
+	}
+	result.Approval = approval
+	providerResumeID := approvalProviderResumeID(approval)
+	if err := validateAPIApplicationApproval(approval, approval.VacancyID, providerResumeID, now); err != nil {
+		return result, err
+	}
+	if err := validatePreparationApprovalBinding(ctx, s.workflow, approval, approval.VacancyID, providerResumeID); err != nil {
+		return result, err
+	}
+	// This is intentionally the last HH read before nonce reservation and the
+	// possible gateway transport. Batch callers reuse the service but never the
+	// preflight result between items.
+	preflight, err := apiVacancyPreflightWithSource(ctx, s.client, approval.VacancyID, providerResumeID)
+	if err != nil {
+		return result, fmt.Errorf("HH API apply GET-only preflight failed: %w", err)
+	}
+	result.Preflight = preflight
+	if err := validateControlledAPIApplicationPreflight(preflight); err != nil {
+		return result, fmt.Errorf("HH API apply blocked by preflight: %w", err)
+	}
+	if approval.CoverLetter == "" && (!preflight.LetterRequiredKnown || preflight.LetterRequired) {
+		return result, errors.New("HH API apply requires a validated cover letter when HH requires one or its state is unknown")
+	}
+	if preflight.TestPresentKnown && preflight.TestPresent {
+		return result, errors.New("HH API apply does not support a vacancy with a required test")
+	}
+	if preflight.ResponseIdentifierPresent {
+		return result, errors.New("HH API apply does not support a direct or external response path")
+	}
+	prepared := applicationsubmission.PreparedApplication{VacancyID: approval.VacancyID, Vacancy: vacancy.Vacancy{ID: approval.VacancyID}, ResumeID: providerResumeID, CoverLetter: approval.CoverLetter}
+	input := applicationsubmission.Input{Prepared: prepared, CurrentResumeID: providerResumeID, RequireCurrentResumeID: true}
+	if s.dryRun {
+		result.Submission = applicationsubmission.Result{VacancyID: approval.VacancyID, Status: applicationsubmission.StatusPreview}
+		return result, nil
+	}
+	if s.store == nil || s.gateway == nil {
+		return result, errors.New("controlled API application write dependencies are unavailable")
+	}
+	if err := consumeAPIApplicationApprovalNonce(approvalPath, approval, approval.VacancyID, providerResumeID, now); err != nil {
+		return result, err
+	}
+	executor := attemptusecase.NewExecutor(s.store, apiApplicationExecutor{gateway: s.gateway}, s.now)
+	submissionService := applicationsubmission.NewService(applicationsubmission.Dependencies{Vacancies: apiApplicationApplicabilityReader{preflight: preflight}, Executor: executor}, applicationsubmission.Options{WriteEnabled: s.write, DryRun: false, RequireAvailabilityEvidence: true})
+	submission, submitErr := submissionService.Submit(ctx, input)
+	result.Submission = submission
+	result.AttemptID = submission.Execution.AttemptID
+	result.TransportAttempted = submission.Execution.TransportTried
+	if result.AttemptID != "" && (submission.Execution.ApplicationClass == hhwrite.ApplicationResultSuccess || submission.Execution.ApplicationClass == hhwrite.ApplicationResultAlreadyApplied || submission.Execution.ApplicationClass == hhwrite.ApplicationResultUnknownSendResult) {
+		reconciliationStore, ok := s.store.(applicationreconciliation.AttemptStore)
 		if !ok {
-			return fmt.Errorf("HH API application reconciliation store capability is unavailable")
+			return result, fmt.Errorf("HH API application reconciliation store capability is unavailable")
 		}
-		finalOutcome, _, reconcileErr := reconcileControlledAPIApplication(ctx, reconciliationStore, &apiApplicationEvidenceReader{client: client}, result.Execution.AttemptID, result.Execution.ApplicationClass, now)
-		_, _ = fmt.Fprintf(stdout, "FINAL_OUTCOME=%s\n", finalOutcome)
+		finalOutcome, reconciliation, reconcileErr := reconcileControlledAPIApplication(ctx, reconciliationStore, &apiApplicationEvidenceReader{client: s.client}, result.AttemptID, submission.Execution.ApplicationClass, now)
+		result.FinalOutcome, result.Reconciliation = finalOutcome, reconciliation
 		if reconcileErr != nil {
-			return reconcileErr
+			return result, reconcileErr
 		}
 	}
-	return submitErr
+	return result, submitErr
 }
 
 func loadHHAPIApplicationAudit() (hhwritegateway.AuditSink, error) {
