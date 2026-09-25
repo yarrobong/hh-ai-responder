@@ -103,6 +103,19 @@ func TestApplicationPreparationHashOwnershipIsDeterministicForFinalContent(t *te
 	}
 }
 
+func TestPreparationInputFingerprintBindsBrowserResumeHash(t *testing.T) {
+	first := validPreparationFixture()
+	first.BrowserResumeHash = "browser-hash-a"
+	second := first
+	if got, want := PreparationInputFingerprint(first), PreparationInputFingerprint(second); got != want {
+		t.Fatalf("same browser hash is not deterministic: %q != %q", got, want)
+	}
+	second.BrowserResumeHash = "browser-hash-b"
+	if PreparationInputFingerprint(first) == PreparationInputFingerprint(second) {
+		t.Fatal("changed browser resume hash did not invalidate preparation fingerprint")
+	}
+}
+
 func TestApplicationPreparationRejectsMalformedEvidenceAndTracksStaleState(t *testing.T) {
 	preparation := validPreparationFixture()
 	preparation.Evidence = json.RawMessage(`{"unclosed":`)

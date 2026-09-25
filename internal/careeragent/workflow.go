@@ -144,6 +144,7 @@ type ApplicationPreparation struct {
 	ResumeID              string             `json:"resume_id,omitempty"`
 	ResumeProviderID      string             `json:"resume_provider_id,omitempty"`
 	ResumeFingerprint     string             `json:"resume_fingerprint,omitempty"`
+	BrowserResumeHash     string             `json:"browser_resume_hash,omitempty"`
 	CandidateID           string             `json:"candidate_id"`
 	CandidateVersion      int                `json:"candidate_version"`
 	CandidateSnapshotHash string             `json:"candidate_snapshot_hash"`
@@ -223,6 +224,7 @@ func PreparationInputFingerprint(p ApplicationPreparation) string {
 		ResumeID              string
 		ResumeProviderID      string
 		ResumeFingerprint     string
+		BrowserResumeHash     string
 		CandidateID           string
 		CandidateVersion      int
 		CandidateSnapshotHash string
@@ -234,7 +236,7 @@ func PreparationInputFingerprint(p ApplicationPreparation) string {
 		TestAnswerDrafts      json.RawMessage
 		KnowledgeRequests     []KnowledgeRequest
 	}{
-		VacancyID: p.VacancyID, ResumeID: p.ResumeID, ResumeProviderID: p.ResumeProviderID, ResumeFingerprint: p.ResumeFingerprint,
+		VacancyID: p.VacancyID, ResumeID: p.ResumeID, ResumeProviderID: p.ResumeProviderID, ResumeFingerprint: p.ResumeFingerprint, BrowserResumeHash: strings.TrimSpace(p.BrowserResumeHash),
 		CandidateID: p.CandidateID, CandidateVersion: p.CandidateVersion, CandidateSnapshotHash: p.CandidateSnapshotHash,
 		RouteStatus: p.RouteStatus, RouteConfidence: p.RouteConfidence, Evidence: canonicalWorkflowJSON(p.Evidence),
 		StoryIDs: normalizedStringSlice(p.StoryIDs), CoverLetterHash: p.CoverLetterHash,

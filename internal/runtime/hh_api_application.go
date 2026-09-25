@@ -46,6 +46,7 @@ type APIApplicationApproval struct {
 	VacancyID                       int        `json:"vacancy_id"`
 	ProviderResumeID                string     `json:"provider_resume_id,omitempty"`
 	SelectedResumeID                string     `json:"selected_resume_id,omitempty"`
+	BrowserResumeHash               string     `json:"browser_resume_hash,omitempty"`
 	CoverLetter                     string     `json:"cover_letter"`
 	ContentHash                     string     `json:"content_hash"`
 	Nonce                           string     `json:"nonce"`

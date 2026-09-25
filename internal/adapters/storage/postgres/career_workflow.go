@@ -222,13 +222,13 @@ func (r *CareerWorkflowRepository) UpsertPreparation(ctx context.Context, prepar
 	err = r.withMutation(ctx, func(db postgresDBTX) error {
 		_, execErr := db.Exec(postgresContext(ctx), `
 		INSERT INTO application_preparations
-		(id, vacancy_id, resume_id, resume_provider_id, resume_fingerprint, candidate_id, candidate_version,
+		(id, vacancy_id, resume_id, resume_provider_id, resume_fingerprint, browser_resume_hash, candidate_id, candidate_version,
 		 candidate_snapshot_hash, route_status, route_confidence, evidence_json, story_ids,
 		 cover_letter, cover_letter_hash, test_answer_drafts_json, knowledge_requests_json,
 		 input_fingerprint, status, stale_reason, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13,$14,$15::jsonb,$16::jsonb,$17,$18,$19,$20,$21)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14,$15,$16::jsonb,$17::jsonb,$18,$19,$20,$21,$22)
 		ON CONFLICT (vacancy_id, input_fingerprint) DO UPDATE SET
-		resume_id=EXCLUDED.resume_id, resume_provider_id=EXCLUDED.resume_provider_id, resume_fingerprint=EXCLUDED.resume_fingerprint,
+		resume_id=EXCLUDED.resume_id, resume_provider_id=EXCLUDED.resume_provider_id, resume_fingerprint=EXCLUDED.resume_fingerprint, browser_resume_hash=EXCLUDED.browser_resume_hash,
 		candidate_id=EXCLUDED.candidate_id, candidate_version=EXCLUDED.candidate_version,
 		candidate_snapshot_hash=EXCLUDED.candidate_snapshot_hash, route_status=EXCLUDED.route_status,
 		route_confidence=EXCLUDED.route_confidence, evidence_json=EXCLUDED.evidence_json,
@@ -236,7 +236,7 @@ func (r *CareerWorkflowRepository) UpsertPreparation(ctx context.Context, prepar
 		cover_letter_hash=EXCLUDED.cover_letter_hash, test_answer_drafts_json=EXCLUDED.test_answer_drafts_json,
 		knowledge_requests_json=EXCLUDED.knowledge_requests_json, status=EXCLUDED.status,
 		stale_reason=EXCLUDED.stale_reason, created_at=EXCLUDED.created_at, updated_at=EXCLUDED.updated_at`,
-			preparation.ID, preparation.VacancyID, workflowNullableString(preparation.ResumeID), workflowNullableString(preparation.ResumeProviderID), workflowNullableString(preparation.ResumeFingerprint),
+			preparation.ID, preparation.VacancyID, workflowNullableString(preparation.ResumeID), workflowNullableString(preparation.ResumeProviderID), workflowNullableString(preparation.ResumeFingerprint), workflowNullableString(preparation.BrowserResumeHash),
 			preparation.CandidateID, preparation.CandidateVersion, preparation.CandidateSnapshotHash, preparation.RouteStatus,
 			workflowNullableString(preparation.RouteConfidence), evidence, storyIDs,
 			workflowNullableString(preparation.CoverLetter), workflowNullableString(preparation.CoverLetterHash), testDrafts,
@@ -430,7 +430,7 @@ func (r *CareerWorkflowRepository) withMutation(ctx context.Context, fn func(pos
 	return tx.Commit(postgresContext(ctx))
 }
 
-const preparationSelect = `SELECT id, vacancy_id, resume_id, resume_provider_id, resume_fingerprint, candidate_id, candidate_version,
+const preparationSelect = `SELECT id, vacancy_id, resume_id, resume_provider_id, resume_fingerprint, browser_resume_hash, candidate_id, candidate_version,
        candidate_snapshot_hash, route_status, route_confidence, evidence_json, story_ids,
        cover_letter, cover_letter_hash, test_answer_drafts_json, knowledge_requests_json,
        input_fingerprint, status, stale_reason, created_at, updated_at
@@ -490,13 +490,13 @@ func scanCareerAgentRun(scanner careerAgentRunScanner) (careeragent.AgentRun, er
 
 func scanApplicationPreparation(scanner careerAgentRunScanner) (careeragent.ApplicationPreparation, error) {
 	var (
-		preparation                                                                                  careeragent.ApplicationPreparation
-		resumeID, resumeProviderID, resumeFingerprint, routeConfidence, coverLetter, coverLetterHash pgtype.Text
-		staleReason                                                                                  pgtype.Text
-		evidence, storyIDs, testDrafts, knowledgeRequests                                            []byte
-		routeStatus, status                                                                          string
+		preparation                                                                                                     careeragent.ApplicationPreparation
+		resumeID, resumeProviderID, resumeFingerprint, browserResumeHash, routeConfidence, coverLetter, coverLetterHash pgtype.Text
+		staleReason                                                                                                     pgtype.Text
+		evidence, storyIDs, testDrafts, knowledgeRequests                                                               []byte
+		routeStatus, status                                                                                             string
 	)
-	if err := scanner.Scan(&preparation.ID, &preparation.VacancyID, &resumeID, &resumeProviderID, &resumeFingerprint, &preparation.CandidateID,
+	if err := scanner.Scan(&preparation.ID, &preparation.VacancyID, &resumeID, &resumeProviderID, &resumeFingerprint, &browserResumeHash, &preparation.CandidateID,
 		&preparation.CandidateVersion, &preparation.CandidateSnapshotHash, &routeStatus, &routeConfidence, &evidence,
 		&storyIDs, &coverLetter, &coverLetterHash, &testDrafts, &knowledgeRequests, &preparation.InputFingerprint,
 		&status, &staleReason, &preparation.CreatedAt, &preparation.UpdatedAt); err != nil {
@@ -505,7 +505,7 @@ func scanApplicationPreparation(scanner careerAgentRunScanner) (careeragent.Appl
 		}
 		return careeragent.ApplicationPreparation{}, fmt.Errorf("scan application preparation: %w", err)
 	}
-	preparation.ResumeID, preparation.ResumeProviderID, preparation.ResumeFingerprint = workflowNullableText(resumeID), workflowNullableText(resumeProviderID), workflowNullableText(resumeFingerprint)
+	preparation.ResumeID, preparation.ResumeProviderID, preparation.ResumeFingerprint, preparation.BrowserResumeHash = workflowNullableText(resumeID), workflowNullableText(resumeProviderID), workflowNullableText(resumeFingerprint), workflowNullableText(browserResumeHash)
 	preparation.RouteStatus, preparation.RouteConfidence = careeragent.ResumeRouteStatus(routeStatus), workflowNullableText(routeConfidence)
 	preparation.Evidence, preparation.TestAnswerDrafts = workflowCloneJSON(evidence), workflowCloneJSON(testDrafts)
 	preparation.CoverLetter, preparation.CoverLetterHash, preparation.StaleReason = workflowNullableText(coverLetter), workflowNullableText(coverLetterHash), workflowNullableText(staleReason)

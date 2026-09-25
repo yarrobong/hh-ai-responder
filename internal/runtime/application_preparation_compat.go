@@ -15,7 +15,28 @@ var (
 	errAPIApplicationPreparation                   = errors.New("API application approval preparation binding is invalid")
 	errAPIApplicationPreparationStale              = errors.New("API application approval preparation is stale")
 	errAPIApplicationPreparationContentReplacement = errors.New("reviewed cover letter differs from durable preparation; regenerate the pilot/preparation with the desired content")
+	errBrowserResumeBindingStale                   = errors.New("BLOCKED_STALE: approved browser resume hash changed")
+	errApprovedResumeNotAvailableInBrowserSession  = errors.New("APPROVED_RESUME_NOT_AVAILABLE_IN_BROWSER_SESSION")
 )
+
+func validateBrowserResumeBinding(approval APIApplicationApproval, currentHash string) error {
+	approved := strings.TrimSpace(approval.BrowserResumeHash)
+	current := strings.TrimSpace(currentHash)
+	if approved == "" || current == "" {
+		return errApprovedResumeNotAvailableInBrowserSession
+	}
+	if approved != current {
+		return errBrowserResumeBindingStale
+	}
+	return nil
+}
+
+func validateBrowserApprovalHash(approval APIApplicationApproval) error {
+	if strings.TrimSpace(approval.BrowserResumeHash) == "" {
+		return errApprovedResumeNotAvailableInBrowserSession
+	}
+	return nil
+}
 
 func validatePreparationReferenceShape(preparationID, preparationHash string) error {
 	preparationID = strings.TrimSpace(preparationID)
@@ -66,6 +87,11 @@ func validatePreparationApprovalBinding(ctx context.Context, store ports.CareerW
 	}
 	if preparation.CoverLetterHash != strings.TrimSpace(approval.ContentHash) {
 		return fmt.Errorf("%w: preparation cover-letter hash does not match", errAPIApplicationPreparation)
+	}
+	if strings.TrimSpace(approval.BrowserResumeHash) != "" || strings.TrimSpace(preparation.BrowserResumeHash) != "" {
+		if strings.TrimSpace(approval.BrowserResumeHash) == "" || strings.TrimSpace(preparation.BrowserResumeHash) == "" || strings.TrimSpace(approval.BrowserResumeHash) != strings.TrimSpace(preparation.BrowserResumeHash) {
+			return fmt.Errorf("%w: browser resume hash does not match", errAPIApplicationPreparation)
+		}
 	}
 	preparedResumeID := strings.TrimSpace(preparation.ResumeProviderID)
 	if preparedResumeID == "" {

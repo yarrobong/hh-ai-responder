@@ -59,6 +59,27 @@ func validPreparationApprovalFixture(now time.Time) (APIApplicationApproval, car
 	return approval, preparation
 }
 
+func TestBrowserResumeBindingRejectsMissingChangedAndMismatchedHashes(t *testing.T) {
+	now := time.Now().UTC()
+	approval, preparation := validPreparationApprovalFixture(now)
+	preparation.BrowserResumeHash = "browser-hash-7"
+	preparation.InputFingerprint = careeragent.PreparationInputFingerprint(preparation)
+	approval.BrowserResumeHash = preparation.BrowserResumeHash
+	if err := validateBrowserResumeBinding(approval, preparation.BrowserResumeHash); err != nil {
+		t.Fatalf("matching browser hash rejected: %v", err)
+	}
+	if err := validateBrowserResumeBinding(approval, "browser-hash-new"); !errors.Is(err, errBrowserResumeBindingStale) {
+		t.Fatalf("changed browser hash error=%v", err)
+	}
+	approval.BrowserResumeHash = ""
+	if err := validateBrowserResumeBinding(approval, preparation.BrowserResumeHash); !errors.Is(err, errApprovedResumeNotAvailableInBrowserSession) {
+		t.Fatalf("missing approved browser hash error=%v", err)
+	}
+	if err := validateBrowserApprovalHash(approval); !errors.Is(err, errApprovedResumeNotAvailableInBrowserSession) {
+		t.Fatalf("missing browser approval hash error=%v", err)
+	}
+}
+
 func TestPreparationApprovalBindingRequiresExactDurablePreparation(t *testing.T) {
 	now := time.Now().UTC()
 	approval, preparation := validPreparationApprovalFixture(now)

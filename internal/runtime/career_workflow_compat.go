@@ -203,7 +203,7 @@ func (r *HHAIResponder) buildCareerAgentPreparation(value Vacancy, selectedResum
 	}
 	now := time.Now().UTC()
 	preparation := careeragent.ApplicationPreparation{
-		VacancyID: value.ID, ResumeID: internalResumeID, ResumeProviderID: providerResumeID, ResumeFingerprint: strings.TrimSpace(selectedResume.Hash),
+		VacancyID: value.ID, ResumeID: internalResumeID, ResumeProviderID: providerResumeID, ResumeFingerprint: strings.TrimSpace(selectedResume.Hash), BrowserResumeHash: strings.TrimSpace(selectedResume.Hash),
 		CandidateID: r.careerAgentCandidateID, CandidateVersion: r.careerAgentCandidateVersion,
 		CandidateSnapshotHash: r.careerAgentCandidateHash, RouteStatus: careeragent.ResumeRouteMatch,
 		RouteConfidence: boundedWorkflowText(trace.ResumeConfidence), Evidence: workflowPreparationEvidence(trace, result.Prepared.CoverLetterStatus, result.Prepared.CoverLetterFallbackReason, result.Prepared.CoverLetterEvidence),
