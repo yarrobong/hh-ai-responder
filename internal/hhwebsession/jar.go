@@ -88,25 +88,41 @@ func (j *persistentJar) SetCookies(u *url.URL, cookies []*http.Cookie) {
 	defer j.mu.Unlock()
 	changed := false
 	for _, incoming := range cookies {
-		if incoming == nil || incoming.Name == "" || !j.hostAllowed(host) {
+		if incoming == nil {
+			continue
+		}
+		if !j.hostAllowed(host) {
+			j.markUnsafeLocked(errors.New("cookie response origin is outside the configured host scope"))
+			continue
+		}
+		if incoming.Name == "" {
+			j.markUnsafeLocked(errors.New("cookie response contains an empty cookie name"))
 			continue
 		}
 		item := storedCookie{Cookie: *incoming}
-		item.Domain = normalizedHost(incoming.Domain)
+		path := incoming.Path
+		if path == "" {
+			path = defaultCookiePath(u.Path)
+		}
+		if !strings.HasPrefix(path, "/") {
+			j.markUnsafeLocked(errors.New("cookie response contains an invalid cookie path"))
+			continue
+		}
+		item.Path = path
 		if incoming.Domain == "" {
 			item.Domain = host
 			item.hostOnly = true
 		} else {
+			item.Domain = normalizedHost(incoming.Domain)
 			item.hostOnly = false
-			if !j.domainAllowed(item.Domain) || !domainMatches(host, item.Domain) {
+			if !j.domainAllowed(item.Domain) || item.Domain != host {
+				j.markUnsafeLocked(errors.New("cookie response attempts to widen its domain scope"))
 				continue
 			}
-		}
-		if item.Path == "" {
-			item.Path = defaultCookiePath(u.Path)
-		}
-		if !strings.HasPrefix(item.Path, "/") {
-			continue
+			if j.hasActiveHostOnlyCookie(item.Name, item.Path, host) {
+				j.markUnsafeLocked(errors.New("cookie response attempts to convert a host-only cookie"))
+				continue
+			}
 		}
 		item.Raw = ""
 		item.RawExpires = ""
@@ -134,6 +150,22 @@ func (j *persistentJar) SetCookies(u *url.URL, cookies []*http.Cookie) {
 	if changed {
 		j.persistErr = j.persistLocked()
 	}
+}
+
+func (j *persistentJar) markUnsafeLocked(err error) {
+	if j.persistErr == nil {
+		j.persistErr = err
+	}
+}
+
+func (j *persistentJar) hasActiveHostOnlyCookie(name, path, host string) bool {
+	now := j.now()
+	for _, existing := range j.cookies {
+		if existing.Name == name && existing.Path == path && existing.hostOnly && existing.Domain == host && (existing.Expires.IsZero() || existing.Expires.After(now)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (j *persistentJar) cookieIndex(item storedCookie) int {

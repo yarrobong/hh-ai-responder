@@ -44,7 +44,7 @@ func TestCookieWebVacancyResponseWriterBuildsExactApprovedRequest(t *testing.T) 
 		t.Fatal(err)
 	}
 	_ = seed.Body.Close()
-	writer, err := NewCookieWebVacancyResponseWriter(base, session, "fixture-agent")
+	writer, err := newCookieWebVacancyResponseWriter(base, session, "fixture-agent", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,6 +69,20 @@ func TestCookieWebVacancyResponseWriterBuildsExactApprovedRequest(t *testing.T) 
 	}
 }
 
+func TestCookieWebVacancyResponseWriterRejectsNonHHProductionBase(t *testing.T) {
+	base, err := url.Parse("https://example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := hhwebsession.New(filepath.Join(t.TempDir(), "cookies.txt"), hhwebsession.Options{BaseURL: base, AllowedHosts: []string{"example.com"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewCookieWebVacancyResponseWriter(base, session, "agent"); err == nil {
+		t.Fatal("production writer accepted a non-HH base URL")
+	}
+}
+
 func TestCookieWebVacancyResponseWriterRejectsTestAndUnexpectedRedirect(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/seed" {
@@ -87,7 +101,7 @@ func TestCookieWebVacancyResponseWriterRejectsTestAndUnexpectedRedirect(t *testi
 	if seed != nil {
 		_ = seed.Body.Close()
 	}
-	writer, _ := NewCookieWebVacancyResponseWriter(base, session, "agent")
+	writer, _ := newCookieWebVacancyResponseWriter(base, session, "agent", true)
 	request := hhwrite.VacancyResponseRequest{VacancyID: 1, ResumeHash: "hash", RefererURL: server.URL + "/vacancy/1", IgnorePostponed: "true", Test: &hhwrite.VacancyTestSubmission{GUID: "not-supported"}}
 	result, err := writer.SubmitVacancyResponse(context.Background(), request)
 	if err == nil || result.Outcome != hhwrite.OutcomeNotSent || result.Metadata["blocked_phase"] != "pre_send" {
@@ -108,7 +122,14 @@ func TestCookieWebVacancyResponseWriterClassifiesDeterministicFailures(t *testin
 		outcome hhwrite.Outcome
 	}{
 		{http.StatusUnauthorized, `{}`, hhwrite.ApplicationResultAuthRequired, hhwrite.OutcomeRejected},
+		{http.StatusUnauthorized, `{"error":"already applied"}`, hhwrite.ApplicationResultAuthRequired, hhwrite.OutcomeRejected},
+		{http.StatusForbidden, `{"error":"already applied"}`, hhwrite.ApplicationResultManualChallenge, hhwrite.OutcomeRejected},
 		{http.StatusTooManyRequests, `{}`, hhwrite.ApplicationResultRateLimited, hhwrite.OutcomeRejected},
+		{http.StatusTooManyRequests, `{"error":"already applied"}`, hhwrite.ApplicationResultRateLimited, hhwrite.OutcomeRejected},
+		{http.StatusInternalServerError, `{"error":"already applied"}`, hhwrite.ApplicationResultUnknownSendResult, hhwrite.OutcomeAmbiguous},
+		{http.StatusFound, `{"error":"already applied"}`, hhwrite.ApplicationResultUnknownSendResult, hhwrite.OutcomeAmbiguous},
+		{http.StatusOK, `not-json: already applied`, hhwrite.ApplicationResultUnknownSendResult, hhwrite.OutcomeAmbiguous},
+		{http.StatusOK, `{"error":"already applied"}`, hhwrite.ApplicationResultAlreadyApplied, hhwrite.OutcomeAccepted},
 		{http.StatusUnprocessableEntity, `{"error":"already applied"}`, hhwrite.ApplicationResultAlreadyApplied, hhwrite.OutcomeAccepted},
 	}
 	for _, tc := range cases {
@@ -129,7 +150,7 @@ func TestCookieWebVacancyResponseWriterClassifiesDeterministicFailures(t *testin
 		if seed != nil {
 			_ = seed.Body.Close()
 		}
-		writer, _ := NewCookieWebVacancyResponseWriter(base, session, "agent")
+		writer, _ := newCookieWebVacancyResponseWriter(base, session, "agent", true)
 		result, err := writer.SubmitVacancyResponse(context.Background(), hhwrite.VacancyResponseRequest{VacancyID: 1, ResumeHash: "hash", RefererURL: server.URL + "/vacancy/1", IgnorePostponed: "true"})
 		server.Close()
 		if err == nil || result.Class != tc.class || result.Outcome != tc.outcome {
@@ -153,7 +174,7 @@ func TestCookieWebVacancyResponseWriterStopsOnPersistenceFailureBeforeAndAfterPo
 	base, _ := url.Parse(server.URL)
 	missingPath := filepath.Join(t.TempDir(), "missing", "cookies.txt")
 	session, _ := hhwebsession.New(missingPath, hhwebsession.Options{BaseURL: base, AllowedHosts: []string{base.Hostname()}})
-	writer, _ := NewCookieWebVacancyResponseWriter(base, session, "agent")
+	writer, _ := newCookieWebVacancyResponseWriter(base, session, "agent", true)
 	result, err := writer.SubmitVacancyResponse(context.Background(), hhwrite.VacancyResponseRequest{VacancyID: 1, ResumeHash: "hash", RefererURL: server.URL + "/vacancy/1", IgnorePostponed: "true"})
 	if err == nil || result.Metadata["transport_attempted"] != "false" || postCount != 0 {
 		t.Fatalf("pre-send persistence result=%+v err=%v posts=%d", result, err, postCount)
@@ -169,7 +190,7 @@ func TestCookieWebVacancyResponseWriterStopsOnPersistenceFailureBeforeAndAfterPo
 	if err := os.RemoveAll(dir); err != nil {
 		t.Fatal(err)
 	}
-	writer, _ = NewCookieWebVacancyResponseWriter(base, session, "agent")
+	writer, _ = newCookieWebVacancyResponseWriter(base, session, "agent", true)
 	result, err = writer.SubmitVacancyResponse(context.Background(), hhwrite.VacancyResponseRequest{VacancyID: 1, ResumeHash: "hash", RefererURL: server.URL + "/vacancy/1", IgnorePostponed: "true"})
 	if err == nil || result.Metadata["transport_attempted"] != "true" || result.Metadata["reconciliation_required"] != "true" || postCount != 1 {
 		t.Fatalf("post persistence result=%+v err=%v posts=%d", result, err, postCount)

@@ -25,8 +25,24 @@ type CookieWebVacancyResponseWriter struct {
 }
 
 func NewCookieWebVacancyResponseWriter(baseURL *url.URL, session *hhwebsession.Session, userAgent string) (*CookieWebVacancyResponseWriter, error) {
+	return newCookieWebVacancyResponseWriter(baseURL, session, userAgent, false)
+}
+
+// NewCookieWebVacancyResponseWriterForTest is the explicit httptest seam for
+// fixtures that cannot bind to an actual hh.ru hostname. Production code must
+// use NewCookieWebVacancyResponseWriter.
+func NewCookieWebVacancyResponseWriterForTest(baseURL *url.URL, session *hhwebsession.Session, userAgent string) (*CookieWebVacancyResponseWriter, error) {
+	return newCookieWebVacancyResponseWriter(baseURL, session, userAgent, true)
+}
+
+func newCookieWebVacancyResponseWriter(baseURL *url.URL, session *hhwebsession.Session, userAgent string, allowNonHHHost bool) (*CookieWebVacancyResponseWriter, error) {
 	if baseURL == nil || baseURL.Scheme == "" || baseURL.Host == "" || session == nil {
 		return nil, errors.New("cookie web writer requires base URL and session")
+	}
+	if !allowNonHHHost {
+		if err := hhwebsession.ValidateHHWebBaseURL(baseURL); err != nil {
+			return nil, err
+		}
 	}
 	if strings.TrimSpace(userAgent) == "" {
 		userAgent = "Mozilla/5.0 (HH cookie web transport)"
@@ -106,10 +122,6 @@ func classifyCookieWebResponse(status int, contentType string, body []byte) (hhw
 		result := hhwrite.WriteResult{Outcome: hhwrite.OutcomeAmbiguous, Class: hhwrite.ApplicationResultUnknownSendResult, ProviderStatus: status, Timestamp: time.Now().UTC(), Metadata: metadata}
 		return result, &hhwrite.TransportError{Category: hhwrite.ErrorResponseAmbiguous, Outcome: hhwrite.OutcomeAmbiguous, Status: status, Err: errors.New("cookie web application returned an unexpected redirect")}
 	}
-	lower := strings.ToLower(string(body))
-	if strings.Contains(lower, "already applied") || strings.Contains(lower, "already_responded") || strings.Contains(lower, "alreadyresponded") {
-		return hhwrite.WriteResult{Outcome: hhwrite.OutcomeAccepted, Class: hhwrite.ApplicationResultAlreadyApplied, ProviderStatus: status, Timestamp: time.Now().UTC(), Metadata: metadata}, &hhwrite.TransportError{Category: hhwrite.ErrorProvider, Outcome: hhwrite.OutcomeAccepted, Status: status, Err: errors.New("HH reports that the vacancy was already applied")}
-	}
 	if status == http.StatusUnauthorized {
 		return rejectedCookieWeb(status, hhwrite.ApplicationResultAuthRequired, hhwrite.ErrorAuthentication, metadata)
 	}
@@ -123,6 +135,9 @@ func classifyCookieWebResponse(status int, contentType string, body []byte) (hhw
 		metadata["reconciliation_required"] = "true"
 		result := hhwrite.WriteResult{Outcome: hhwrite.OutcomeAmbiguous, Class: hhwrite.ApplicationResultUnknownSendResult, ProviderStatus: status, Timestamp: time.Now().UTC(), Metadata: metadata}
 		return result, &hhwrite.TransportError{Category: hhwrite.ErrorServer, Outcome: hhwrite.OutcomeAmbiguous, Status: status, Err: errors.New("HH server response leaves delivery uncertain")}
+	}
+	if cookieWebDuplicateContract(status, body) {
+		return hhwrite.WriteResult{Outcome: hhwrite.OutcomeAccepted, Class: hhwrite.ApplicationResultAlreadyApplied, ProviderStatus: status, Timestamp: time.Now().UTC(), Metadata: metadata}, &hhwrite.TransportError{Category: hhwrite.ErrorProvider, Outcome: hhwrite.OutcomeAccepted, Status: status, Err: errors.New("HH reports that the vacancy was already applied")}
 	}
 	if status < 200 || status >= 300 {
 		return rejectedCookieWeb(status, hhwrite.ApplicationResultBusinessRejected, hhwrite.ErrorProvider, metadata)
@@ -148,6 +163,35 @@ func classifyCookieWebResponse(status int, contentType string, body []byte) (hhw
 		}
 	}
 	return hhwrite.WriteResult{Outcome: hhwrite.OutcomeAccepted, Class: hhwrite.ApplicationResultSuccess, ProviderStatus: status, ProviderID: providerID, Timestamp: time.Now().UTC(), Metadata: metadata}, nil
+}
+
+func cookieWebDuplicateContract(status int, body []byte) bool {
+	if (status < 200 || status >= 300) && status != http.StatusConflict && status != http.StatusUnprocessableEntity {
+		return false
+	}
+	var payload struct {
+		Error  string `json:"error"`
+		Code   string `json:"code"`
+		Errors []struct {
+			Value string `json:"value"`
+		} `json:"errors"`
+	}
+	if json.Unmarshal(body, &payload) != nil {
+		return false
+	}
+	for _, value := range append([]string{payload.Error, payload.Code}, func() []string {
+		values := make([]string, 0, len(payload.Errors))
+		for _, item := range payload.Errors {
+			values = append(values, item.Value)
+		}
+		return values
+	}()...) {
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "already applied", "already_applied", "already responded", "already_responded":
+			return true
+		}
+	}
+	return false
 }
 
 func blockedPreSend(err error) hhwrite.WriteResult {

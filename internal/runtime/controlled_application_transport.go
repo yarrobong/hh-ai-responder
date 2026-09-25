@@ -77,7 +77,8 @@ func (t *cookieControlledApplicationTransport) Prepare(ctx context.Context, appr
 	if err := validateBrowserApprovalHash(approval); err != nil {
 		return controlledApplicationContext{}, err
 	}
-	preflight, err := t.preflight.Preflight(ctx, approval.VacancyID, approval.BrowserResumeHash)
+	providerResumeID := approvalProviderResumeID(approval)
+	preflight, err := t.preflight.Preflight(ctx, approval.VacancyID, providerResumeID, approval.BrowserResumeHash)
 	if err != nil {
 		return controlledApplicationContext{}, fmt.Errorf("cookie web application GET-only preflight failed: %w", err)
 	}
@@ -114,14 +115,23 @@ func (t *cookieControlledApplicationTransport) PersistenceHealth() error {
 	return t.session.PersistenceError()
 }
 
-func newCookieControlledApplicationTransport(cfg Config, userAgent string) (controlledApplicationTransport, error) {
+func newCookieControlledApplicationTransport(cfg Config, userAgent string, testBaseURL *url.URL) (controlledApplicationTransport, error) {
 	base := &url.URL{Scheme: "https", Host: "hh.ru"}
-	if raw := strings.TrimSpace(cfg.SearchURL); raw != "" {
+	allowNonHHHost := testBaseURL != nil
+	if testBaseURL != nil {
+		baseCopy := *testBaseURL
+		base = &baseCopy
+	} else if raw := strings.TrimSpace(cfg.SearchURL); raw != "" {
 		parsed, err := url.Parse(raw)
 		if err != nil || parsed.Host == "" {
 			return nil, errors.New("cookie web transport search URL is invalid")
 		}
 		base = parsed
+	}
+	if !allowNonHHHost {
+		if err := hhwebsession.ValidateHHWebBaseURL(base); err != nil {
+			return nil, fmt.Errorf("cookie web transport search URL is not an allowed HH host: %w", err)
+		}
 	}
 	session, err := hhwebsession.New(cfg.CookiesPath, hhwebsession.Options{BaseURL: base, AllowedHosts: []string{"hh.ru", base.Hostname()}, UserAgent: userAgent})
 	if err != nil {
@@ -135,7 +145,11 @@ func newCookieControlledApplicationTransport(cfg Config, userAgent string) (cont
 	if err != nil {
 		return nil, err
 	}
-	writer, err := web.NewCookieWebVacancyResponseWriter(base, session, userAgent)
+	writerConstructor := web.NewCookieWebVacancyResponseWriter
+	if allowNonHHHost {
+		writerConstructor = web.NewCookieWebVacancyResponseWriterForTest
+	}
+	writer, err := writerConstructor(base, session, userAgent)
 	if err != nil {
 		return nil, err
 	}

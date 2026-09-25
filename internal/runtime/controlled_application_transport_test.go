@@ -49,3 +49,30 @@ func TestBrowserControlledApplicationServiceDoesNotRequireOAuth(t *testing.T) {
 		t.Fatalf("browser service composition=%+v", service)
 	}
 }
+
+func TestBrowserControlledApplicationRejectsNonHHConfiguredBase(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{name: "root", raw: "https://hh.ru/search/vacancy", want: true},
+		{name: "subdomain", raw: "https://spb.hh.ru/search/vacancy", want: true},
+		{name: "http", raw: "http://hh.ru/search/vacancy"},
+		{name: "foreign", raw: "https://example.com/search/vacancy"},
+		{name: "suffix trick", raw: "https://hh.ru.example.com/search/vacancy"},
+		{name: "lookalike", raw: "https://evilhh.ru/search/vacancy"},
+		{name: "userinfo", raw: "https://user@hh.ru/search/vacancy"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service, err := newControlledApplicationService(context.Background(), Config{
+				HHTransport: "browser", SearchURL: tt.raw, DryRun: true,
+				CookiesPath: filepath.Join(t.TempDir(), "cookies.txt"),
+			}, HHAPICommandDeps{}, 1)
+			if (err == nil) != tt.want {
+				t.Fatalf("service=%+v err=%v, want allowed=%t", service, err, tt.want)
+			}
+		})
+	}
+}

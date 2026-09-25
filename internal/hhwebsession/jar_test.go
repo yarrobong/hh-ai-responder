@@ -81,6 +81,62 @@ func TestPersistentJarExpiresWithoutRewritingFile(t *testing.T) {
 	}
 }
 
+func TestPersistentJarRejectsSetCookieDomainWideningAndPreservesFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cookies.txt")
+	jar := newPersistentJar(path, time.Unix(1_700_000_000, 0))
+	origin := mustURL(t, "https://api.hh.ru/applicant")
+	jar.SetCookies(origin, []*http.Cookie{{Name: "auth", Value: "old", Domain: "api.hh.ru", Path: "/"}})
+	if err := jar.PersistenceError(); err != nil {
+		t.Fatalf("initial persist: %v", err)
+	}
+	before := string(mustRead(t, path))
+
+	jar.SetCookies(origin, []*http.Cookie{{Name: "auth", Value: "parent", Domain: "hh.ru", Path: "/"}})
+	if got := cookieValue(jar.Cookies(origin), "auth"); got != "old" {
+		t.Fatalf("origin cookie=%q, want old", got)
+	}
+	if got := cookieValue(jar.Cookies(mustURL(t, "https://hh.ru/")), "auth"); got != "" {
+		t.Fatalf("parent received widened cookie=%q", got)
+	}
+	if after := string(mustRead(t, path)); after != before {
+		t.Fatalf("persisted cookie file changed after rejected widening")
+	}
+	if err := jar.PersistenceError(); err == nil {
+		t.Fatal("unsafe Set-Cookie was not observable")
+	}
+}
+
+func TestPersistentJarRejectsHostOnlyToDomainConversion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cookies.txt")
+	jar := newPersistentJar(path, time.Unix(1_700_000_000, 0))
+	origin := mustURL(t, "https://api.hh.ru/applicant")
+	jar.SetCookies(origin, []*http.Cookie{{Name: "auth", Value: "host-only", Path: "/"}})
+	before := string(mustRead(t, path))
+
+	jar.SetCookies(origin, []*http.Cookie{{Name: "auth", Value: "wider", Domain: ".api.hh.ru", Path: "/"}})
+	if cookies := jar.Cookies(mustURL(t, "https://api.hh.ru/")); len(cookies) != 1 || cookies[0].Value != "host-only" {
+		t.Fatalf("host-only cookie changed: %+v", cookies)
+	}
+	if after := string(mustRead(t, path)); after != before {
+		t.Fatalf("persisted cookie file changed after host-only widening")
+	}
+}
+
+func TestPersistentJarAllowsSameScopeReplacementAndExpiry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cookies.txt")
+	jar := newPersistentJar(path, time.Unix(1_700_000_000, 0))
+	origin := mustURL(t, "https://api.hh.ru/applicant")
+	jar.SetCookies(origin, []*http.Cookie{{Name: "auth", Value: "old", Domain: ".api.hh.ru", Path: "/"}})
+	jar.SetCookies(origin, []*http.Cookie{{Name: "auth", Value: "new", Domain: "api.hh.ru", Path: "/"}})
+	if got := cookieValue(jar.Cookies(origin), "auth"); got != "new" {
+		t.Fatalf("replacement value=%q, want new", got)
+	}
+	jar.SetCookies(origin, []*http.Cookie{{Name: "auth", Value: "new", Domain: "api.hh.ru", Path: "/", Expires: time.Unix(1_700_000_100, 0)}})
+	if cookies := jar.Cookies(origin); len(cookies) != 1 || !cookies[0].Expires.Equal(time.Unix(1_700_000_100, 0)) {
+		t.Fatalf("same-scope expiry update=%+v", cookies)
+	}
+}
+
 func mustURL(t *testing.T, raw string) *url.URL {
 	t.Helper()
 	u, err := url.Parse(raw)
@@ -96,6 +152,15 @@ func cookieNames(cookies []*http.Cookie) string {
 		names = append(names, cookie.Name)
 	}
 	return strings.Join(names, ",")
+}
+
+func cookieValue(cookies []*http.Cookie, name string) string {
+	for _, cookie := range cookies {
+		if cookie.Name == name {
+			return cookie.Value
+		}
+	}
+	return ""
 }
 
 func mustRead(t *testing.T, path string) []byte {

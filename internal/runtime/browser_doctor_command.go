@@ -260,7 +260,7 @@ func browserModeName(headless bool) string {
 
 func browserDoctorBaseURL(raw string) *url.URL {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err == nil && isHHHost(parsed.Hostname()) {
+	if err == nil && hhwebsession.ValidateHHWebBaseURL(parsed) == nil {
 		return &url.URL{Scheme: parsed.Scheme, Host: parsed.Host}
 	}
 	return &url.URL{Scheme: "https", Host: "hh.ru"}
