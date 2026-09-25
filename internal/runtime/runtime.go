@@ -1650,6 +1650,13 @@ func (r *HHAIResponder) getBaseHost() string {
 	return defaultHost
 }
 
+func validateLegacyBrowserProductionBaseURL(base *url.URL) error {
+	if err := hhwebsession.ValidateHHWebBaseURL(base); err != nil {
+		return fmt.Errorf("legacy browser transport requires an allowed HH base URL: %w", err)
+	}
+	return nil
+}
+
 func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 	if logger == nil {
 		// Read-only dashboard construction can happen outside the CLI entrypoint.
@@ -1723,6 +1730,13 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 		return nil, err
 	}
 	baseURL = parsedBaseURL
+	if transportMode == "browser" {
+		for _, profile := range searchProfiles {
+			if err := validateLegacyBrowserProductionBaseURL(profile.BaseURL); err != nil {
+				return nil, err
+			}
+		}
+	}
 	if len(searchProfiles) > 0 {
 		searchParams = cloneValues(searchProfiles[0].Params)
 	}
@@ -1839,6 +1853,11 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 	if responder.baseURL == nil {
 		host := responder.getBaseHost()
 		responder.baseURL = &url.URL{Scheme: "https", Host: host}
+	}
+	if transportMode == "browser" {
+		if err := validateLegacyBrowserProductionBaseURL(responder.baseURL); err != nil {
+			return nil, err
+		}
 	}
 	logger.Debug("baseURL resolved to %s", responder.baseURL.String())
 	var webSession *hhwebsession.Session

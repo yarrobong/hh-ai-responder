@@ -157,25 +157,18 @@ func TestDoctorNeverWritesAndUsesGETOnly(t *testing.T) {
 	}
 }
 
-func TestCareerAgentFailsFastWithStructuredReadError(t *testing.T) {
-	var calls int
+func TestCareerAgentRejectsNonHHProductionSearchURLBeforeRead(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		if r.Method != http.MethodGet {
-			t.Fatalf("non-GET request: %s", r.Method)
-		}
-		w.Header().Set("Content-Type", "text/html")
-		w.WriteHeader(http.StatusForbidden)
-		_, _ = io.WriteString(w, `<div class="ForbiddenPage"><a href="/account/login">login</a></div>`)
+		t.Fatalf("non-HH production URL was contacted: %s %s", r.Method, r.URL)
 	}))
 	defer server.Close()
 	var stdout, stderr bytes.Buffer
 	err := runCareerAgentCommand([]string{"--shadow"}, Config{StorageBackend: "json", SearchURL: server.URL, CookiesPath: filepath.Join(t.TempDir(), "missing-cookies.txt"), RequestInterval: time.Millisecond, HHReadConcurrency: 1}, &stdout, &stderr)
-	if err == nil || !strings.Contains(err.Error(), "classification=AUTH_REQUIRED") || !strings.Contains(err.Error(), "writes_attempted=0") {
-		t.Fatalf("career-agent did not fail fast safely: err=%v", err)
+	if err == nil || !strings.Contains(err.Error(), "allowed HH base URL") {
+		t.Fatalf("career-agent did not reject non-HH production URL: err=%v", err)
 	}
-	if calls != 1 || strings.Contains(stdout.String(), "career_agent") {
-		t.Fatalf("career-agent continued after auth failure: calls=%d stdout=%q", calls, stdout.String())
+	if strings.Contains(stdout.String(), "career_agent") {
+		t.Fatalf("career-agent emitted output after unsafe URL rejection: stdout=%q", stdout.String())
 	}
 }
 
