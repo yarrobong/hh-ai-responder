@@ -158,6 +158,15 @@ func validateControlledAPIApplicationPreflight(preflight VacancyPreflight) error
 	return nil
 }
 
+func controlledApplicationTransportModeSupported(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "api", "browser":
+		return true
+	default:
+		return false
+	}
+}
+
 func approvalProviderResumeID(approval APIApplicationApproval) string {
 	if strings.TrimSpace(approval.ProviderResumeID) != "" {
 		return strings.TrimSpace(approval.ProviderResumeID)
@@ -215,8 +224,8 @@ func runHHAPIApply(ctx context.Context, args []string, cfg Config, stdout, stder
 	if err != nil {
 		return err
 	}
-	if !strings.EqualFold(strings.TrimSpace(cfg.HHTransport), "api") {
-		return errors.New("hh-api apply requires HH_TRANSPORT=api")
+	if !controlledApplicationTransportModeSupported(cfg.HHTransport) {
+		return errors.New("hh-api apply requires HH_TRANSPORT=api or HH_TRANSPORT=browser")
 	}
 	if !cfg.DryRun && !cfg.HHWriteEnabled {
 		return errors.New("hh-api apply requires HH_WRITE_ENABLED=true when HH_DRY_RUN=false")

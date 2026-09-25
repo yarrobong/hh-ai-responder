@@ -411,6 +411,27 @@ func TestValidateControlledAPIApplicationPreflightRequiresAllFreshProviderSafety
 	}
 }
 
+func TestControlledApplicationTransportModeSupportsAPIAndBrowserOnly(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{name: "api", value: "api", want: true},
+		{name: "browser", value: "browser", want: true},
+		{name: "browser case insensitive", value: " BrOwSeR ", want: true},
+		{name: "auto", value: "auto", want: false},
+		{name: "empty", value: "", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := controlledApplicationTransportModeSupported(test.value); got != test.want {
+				t.Fatalf("supported(%q)=%t, want %t", test.value, got, test.want)
+			}
+		})
+	}
+}
+
 func TestConsumeAPIApplicationApprovalNonceIsDurableAndOneTime(t *testing.T) {
 	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 	dir := t.TempDir()
