@@ -12,8 +12,9 @@ import (
 )
 
 var (
-	errAPIApplicationPreparation      = errors.New("API application approval preparation binding is invalid")
-	errAPIApplicationPreparationStale = errors.New("API application approval preparation is stale")
+	errAPIApplicationPreparation                   = errors.New("API application approval preparation binding is invalid")
+	errAPIApplicationPreparationStale              = errors.New("API application approval preparation is stale")
+	errAPIApplicationPreparationContentReplacement = errors.New("reviewed cover letter differs from durable preparation; regenerate the pilot/preparation with the desired content")
 )
 
 func validatePreparationReferenceShape(preparationID, preparationHash string) error {
@@ -85,4 +86,18 @@ func validatePreparationApprovalBinding(ctx context.Context, store ports.CareerW
 		return fmt.Errorf("%w: preparation is not ready", errAPIApplicationPreparation)
 	}
 	return nil
+}
+
+// validatePreparationContentReplacement rejects an operator replacement once
+// a durable preparation exists. The preparation binds the exact reviewed
+// content; changing it requires a fresh pilot/preparation pair rather than a
+// weaker binding check.
+func validatePreparationContentReplacement(ctx context.Context, store ports.CareerWorkflowReader, approval APIApplicationApproval, replacement string) error {
+	if strings.TrimSpace(approval.PreparationID) == "" || replacement == approval.CoverLetter {
+		return nil
+	}
+	if err := validatePreparationApprovalBinding(ctx, store, approval, approval.VacancyID, approval.ProviderResumeID); err != nil {
+		return err
+	}
+	return errAPIApplicationPreparationContentReplacement
 }

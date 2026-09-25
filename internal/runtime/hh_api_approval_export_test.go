@@ -18,6 +18,7 @@ import (
 	"time"
 
 	hhapi "hh-ai-responder/internal/adapters/hh/api"
+	"hh-ai-responder/internal/careeragent"
 )
 
 func exportPilotFixture(now time.Time) PilotArtifact {
@@ -424,6 +425,115 @@ func TestHHAPIApprovalReviewAppliesEmptyLetterPolicyB(t *testing.T) {
 				t.Fatal("empty-letter review unexpectedly succeeded")
 			}
 		})
+	}
+}
+
+func TestHHAPIApprovalExportBindsEmptyLetterFromDurablePreparation(t *testing.T) {
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	pilotPath := filepath.Join(dir, "pilot.json")
+	approvalPath := filepath.Join(dir, "approval.json")
+	pilot := exportPilotFixture(now)
+	_, preparation := validPreparationApprovalFixture(now)
+	preparation.CoverLetter = ""
+	preparation.CoverLetterHash = preparation.ContentHash()
+	preparation.InputFingerprint = careeragent.PreparationInputFingerprint(preparation)
+	pilot.CoverLetter = ""
+	pilot.ContentHash = contentHash("")
+	pilot.PreparationID = preparation.ID
+	pilot.PreparationHash = preparation.InputFingerprint
+	raw, err := json.Marshal(pilot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pilotPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runHHAPICommandWithDeps(context.Background(), []string{"approval", "export", "--pilot", pilotPath, "--out", approvalPath}, Config{}, nil, io.Discard, nil, HHAPICommandDeps{
+		CareerWorkflow: preparationReaderFixture{preparation: preparation},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	approval, err := loadAPIApplicationApproval(approvalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approval.CoverLetter != "" || approval.ContentHash != contentHash("") {
+		t.Fatalf("empty MATCH approval=%+v", approval)
+	}
+	if err := validatePreparationApprovalBinding(context.Background(), preparationReaderFixture{preparation: preparation}, approval, pilot.VacancyID, "resume-provider-7"); err != nil {
+		t.Fatalf("empty MATCH approval lost durable binding: %v", err)
+	}
+}
+
+func TestHHAPIApprovalReviewBindsEmptyLetterFromDurablePreparation(t *testing.T) {
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	pilotPath := filepath.Join(dir, "pilot.json")
+	approvalPath := filepath.Join(dir, "approval.json")
+	pilot := manualPilotFixture(now)
+	_, preparation := validPreparationApprovalFixture(now)
+	preparation.CoverLetter = ""
+	preparation.CoverLetterHash = preparation.ContentHash()
+	preparation.InputFingerprint = careeragent.PreparationInputFingerprint(preparation)
+	pilot.CoverLetter = ""
+	pilot.ContentHash = contentHash("")
+	pilot.Preflight.ObservedAt = now
+	pilot.PreparationID = preparation.ID
+	pilot.PreparationHash = preparation.InputFingerprint
+	raw, err := json.Marshal(pilot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pilotPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runHHAPICommandWithDeps(context.Background(), []string{"approval", "review", "--pilot", pilotPath, "--out", approvalPath}, Config{}, nil, io.Discard, nil, HHAPICommandDeps{
+		Now:            func() time.Time { return now },
+		CareerWorkflow: preparationReaderFixture{preparation: preparation},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	approval, err := loadAPIApplicationApproval(approvalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approval.CoverLetter != "" || approval.ContentHash != contentHash("") {
+		t.Fatalf("empty manual approval=%+v", approval)
+	}
+	if err := validatePreparationApprovalBinding(context.Background(), preparationReaderFixture{preparation: preparation}, approval, pilot.VacancyID, "resume-provider-7"); err != nil {
+		t.Fatalf("empty manual approval lost durable binding: %v", err)
+	}
+}
+
+func TestHHAPIApprovalExportRejectsReplacementThatDiffersFromDurablePreparation(t *testing.T) {
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	pilotPath := filepath.Join(dir, "pilot.json")
+	approvalPath := filepath.Join(dir, "approval.json")
+	letterPath := filepath.Join(dir, "replacement.txt")
+	pilot := exportPilotFixture(now)
+	_, preparation := validPreparationApprovalFixture(now)
+	pilot.PreparationID = preparation.ID
+	pilot.PreparationHash = preparation.InputFingerprint
+	raw, err := json.Marshal(pilot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pilotPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(letterPath, []byte("Здравствуйте! Другая операторская версия.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err = runHHAPICommandWithDeps(context.Background(), []string{"approval", "export", "--pilot", pilotPath, "--out", approvalPath, "--letter-file", letterPath}, Config{}, nil, io.Discard, nil, HHAPICommandDeps{
+		CareerWorkflow: preparationReaderFixture{preparation: preparation},
+	})
+	if err == nil || !errors.Is(err, errAPIApplicationPreparationContentReplacement) || !strings.Contains(err.Error(), "differs from durable preparation") {
+		t.Fatalf("replacement mismatch error=%v, want clear durable-preparation error", err)
+	}
+	if _, statErr := os.Stat(approvalPath); !os.IsNotExist(statErr) {
+		t.Fatalf("approval artifact exists after rejected replacement: %v", statErr)
 	}
 }
 

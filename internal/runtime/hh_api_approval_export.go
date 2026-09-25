@@ -225,6 +225,9 @@ func runHHAPIApprovalCommand(args []string, stdout io.Writer, deps HHAPICommandD
 		if err := validateReplacementCoverLetter(artifact, replacement); err != nil {
 			return err
 		}
+		if err := validatePreparationContentReplacement(context.Background(), deps.CareerWorkflow, approval, replacement); err != nil {
+			return err
+		}
 		approval.CoverLetter = replacement
 		approval.ContentHash = contentHash(replacement)
 	}
@@ -271,11 +274,15 @@ func runHHAPIApprovalReview(args []string, stdout io.Writer, deps HHAPICommandDe
 			return err
 		}
 	}
+	pilotHash := sha256.Sum256(raw)
+	originalApproval := buildManualAPIApplicationApproval(artifact, providerResumeID, artifact.CoverLetter, "", "", now)
+	if err := validatePreparationContentReplacement(context.Background(), deps.CareerWorkflow, originalApproval, reviewedLetter); err != nil {
+		return err
+	}
 	nonce, err := generateUUIDv4()
 	if err != nil {
 		return fmt.Errorf("manual approval nonce generation failed: %w", err)
 	}
-	pilotHash := sha256.Sum256(raw)
 	approval := buildManualAPIApplicationApproval(artifact, providerResumeID, reviewedLetter, hex.EncodeToString(pilotHash[:]), nonce, now)
 	if err := validatePreparationApprovalBinding(context.Background(), deps.CareerWorkflow, approval, approval.VacancyID, approval.ProviderResumeID); err != nil {
 		return err
