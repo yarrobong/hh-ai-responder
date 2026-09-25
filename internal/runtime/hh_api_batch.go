@@ -188,7 +188,7 @@ func runHHAPIApplyBatch(ctx context.Context, args []string, cfg Config, stdout, 
 	if err := validateBatchApprovalFiles(paths, now); err != nil {
 		return err
 	}
-	service, err := newControlledAPIApplicationService(ctx, cfg, deps, batchMaxApplications)
+	service, err := newControlledApplicationService(ctx, cfg, deps, batchMaxApplications)
 	if err != nil {
 		return err
 	}

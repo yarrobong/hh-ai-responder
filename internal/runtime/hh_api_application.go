@@ -232,7 +232,7 @@ func runHHAPIApply(ctx context.Context, args []string, cfg Config, stdout, stder
 	if err := validateAPIApplicationApproval(approval, vacancyID, providerResumeID, now); err != nil {
 		return err
 	}
-	service, err := newControlledAPIApplicationService(ctx, cfg, deps, 1)
+	service, err := newControlledApplicationService(ctx, cfg, deps, 1)
 	if err != nil {
 		return err
 	}
@@ -248,16 +248,19 @@ func runHHAPIApply(ctx context.Context, args []string, cfg Config, stdout, stder
 	return execErr
 }
 
-type controlledAPIApplicationService struct {
-	client   *hhapi.APIHHClient
-	workflow ports.CareerWorkflowReader
-	store    attemptport.Store
-	gateway  *hhwritegateway.Service
-	maxRun   int
-	write    bool
-	dryRun   bool
-	now      func() time.Time
+type controlledApplicationService struct {
+	client    *hhapi.APIHHClient
+	transport controlledApplicationTransport
+	workflow  ports.CareerWorkflowReader
+	store     attemptport.Store
+	gateway   *hhwritegateway.Service
+	maxRun    int
+	write     bool
+	dryRun    bool
+	now       func() time.Time
 }
+
+type controlledAPIApplicationService = controlledApplicationService
 
 type controlledAPIApplicationResult struct {
 	Approval           APIApplicationApproval
@@ -279,7 +282,7 @@ func newControlledAPIApplicationService(ctx context.Context, cfg Config, deps HH
 	if deps.Now != nil {
 		now = deps.Now().UTC()
 	}
-	service := &controlledAPIApplicationService{client: client, workflow: deps.CareerWorkflow, maxRun: maxWritesPerRun, write: cfg.HHWriteEnabled, dryRun: cfg.DryRun, now: func() time.Time { return now }}
+	service := &controlledApplicationService{client: client, workflow: deps.CareerWorkflow, transport: &apiControlledApplicationTransport{client: client}, maxRun: maxWritesPerRun, write: cfg.HHWriteEnabled, dryRun: cfg.DryRun, now: func() time.Time { return now }}
 	if cfg.DryRun {
 		return service, nil
 	}
@@ -311,9 +314,51 @@ func newControlledAPIApplicationService(ctx context.Context, cfg Config, deps HH
 	return service, nil
 }
 
-func (s *controlledAPIApplicationService) Execute(ctx context.Context, approvalPath string, now time.Time) (controlledAPIApplicationResult, error) {
+func newControlledApplicationService(ctx context.Context, cfg Config, deps HHAPICommandDeps, maxWritesPerRun int) (*controlledApplicationService, error) {
+	if strings.EqualFold(strings.TrimSpace(cfg.HHTransport), "browser") {
+		transport, err := newCookieControlledApplicationTransport(cfg, userAgent)
+		if err != nil {
+			return nil, err
+		}
+		now := time.Now().UTC()
+		if deps.Now != nil {
+			now = deps.Now().UTC()
+		}
+		service := &controlledApplicationService{transport: transport, workflow: deps.CareerWorkflow, maxRun: maxWritesPerRun, write: cfg.HHWriteEnabled, dryRun: cfg.DryRun, now: func() time.Time { return now }}
+		if cfg.DryRun {
+			return service, nil
+		}
+		if !cfg.HHWriteEnabled {
+			return nil, errors.New("controlled browser application requires HH_WRITE_ENABLED=true when HH_DRY_RUN=false")
+		}
+		store := deps.ApplicationAttempts
+		if store == nil {
+			backend, backendErr := normalizeStorageBackend(cfg.StorageBackend)
+			if backendErr != nil {
+				return nil, backendErr
+			}
+			store, err = buildAutomaticApplicationAttemptStore(ctx, cfg, backend, nil)
+			if err != nil {
+				return nil, fmt.Errorf("cookie web application attempt store is unavailable: %w", err)
+			}
+		}
+		audit := deps.ApplicationAudit
+		if cfg.HHMaxWritesPerDay > 0 && audit == nil {
+			audit, err = loadHHAPIApplicationAudit()
+			if err != nil {
+				return nil, err
+			}
+		}
+		service.store = store
+		service.gateway = hhwritegateway.NewService(hhwritegateway.Dependencies{VacancyResponseWriter: transport.Writer(), Audit: audit}, hhwritegateway.Options{WriteEnabled: true, DryRun: false, MaxWritesPerRun: maxWritesPerRun, MaxWritesPerDay: cfg.HHMaxWritesPerDay, Now: service.now})
+		return service, nil
+	}
+	return newControlledAPIApplicationService(ctx, cfg, deps, maxWritesPerRun)
+}
+
+func (s *controlledApplicationService) Execute(ctx context.Context, approvalPath string, now time.Time) (controlledAPIApplicationResult, error) {
 	result := controlledAPIApplicationResult{}
-	if s == nil || s.client == nil {
+	if s == nil || s.transport == nil {
 		return result, errors.New("controlled API application service is unavailable")
 	}
 	approval, err := loadAPIApplicationApproval(approvalPath)
@@ -331,11 +376,12 @@ func (s *controlledAPIApplicationService) Execute(ctx context.Context, approvalP
 	// This is intentionally the last HH read before nonce reservation and the
 	// possible gateway transport. Batch callers reuse the service but never the
 	// preflight result between items.
-	preflight, err := apiVacancyPreflightWithSource(ctx, s.client, approval.VacancyID, providerResumeID)
+	preparedContext, err := s.transport.Prepare(ctx, approval)
 	if err != nil {
-		return result, fmt.Errorf("HH API apply GET-only preflight failed: %w", err)
+		return result, err
 	}
-	result.Preflight = preflight
+	preflight := preparedContext.Preflight
+	result.Preflight = preparedContext.Preflight
 	if err := validateControlledAPIApplicationPreflight(preflight); err != nil {
 		return result, fmt.Errorf("HH API apply blocked by preflight: %w", err)
 	}
@@ -348,8 +394,9 @@ func (s *controlledAPIApplicationService) Execute(ctx context.Context, approvalP
 	if preflight.ResponseIdentifierPresent {
 		return result, errors.New("HH API apply does not support a direct or external response path")
 	}
-	prepared := applicationsubmission.PreparedApplication{VacancyID: approval.VacancyID, Vacancy: vacancy.Vacancy{ID: approval.VacancyID}, ResumeID: providerResumeID, CoverLetter: approval.CoverLetter}
-	input := applicationsubmission.Input{Prepared: prepared, CurrentResumeID: providerResumeID, RequireCurrentResumeID: true}
+	prepared := applicationsubmission.PreparedApplication{VacancyID: approval.VacancyID, Vacancy: vacancy.Vacancy{ID: approval.VacancyID}, ResumeID: preparedContext.ResumeID, CoverLetter: approval.CoverLetter}
+	prepared.Vacancy.Links = map[string]string{"desktop": preparedContext.RefererURL}
+	input := applicationsubmission.Input{Prepared: prepared, CurrentResumeID: preparedContext.ResumeID, RequireCurrentResumeID: true, ResponseURL: preparedContext.ResponseURL}
 	if s.dryRun {
 		result.Submission = applicationsubmission.Result{VacancyID: approval.VacancyID, Status: applicationsubmission.StatusPreview}
 		return result, nil
@@ -371,7 +418,7 @@ func (s *controlledAPIApplicationService) Execute(ctx context.Context, approvalP
 		if !ok {
 			return result, fmt.Errorf("HH API application reconciliation store capability is unavailable")
 		}
-		finalOutcome, reconciliation, reconcileErr := reconcileControlledAPIApplication(ctx, reconciliationStore, &apiApplicationEvidenceReader{client: s.client}, result.AttemptID, submission.Execution.ApplicationClass, now)
+		finalOutcome, reconciliation, reconcileErr := reconcileControlledAPIApplication(ctx, reconciliationStore, preparedContext.EvidenceReader, result.AttemptID, submission.Execution.ApplicationClass, now)
 		result.FinalOutcome, result.Reconciliation = finalOutcome, reconciliation
 		if reconcileErr != nil {
 			return result, reconcileErr
