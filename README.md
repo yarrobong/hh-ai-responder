@@ -158,6 +158,12 @@ HH_DRY_RUN=true HH_WRITE_ENABLED=false STORAGE_BACKEND=json \
   ./hh-ai-responder career-agent pilot --vacancy <id> --resume-id <identity>
 ```
 
+When fresh read-only preflight proves that the vacancy does not require a
+cover letter, the targeted pilot may intentionally skip optional cover-letter
+generation with `--omit-optional-cover-letter`. The flag is accepted only
+with an explicit `--vacancy` and `--resume-id`; required or unknown letter
+requirements fail closed.
+
 Уже подтверждённые отклики пропускаются до detail и AI; при готовом результате
 команда останавливается на `PILOT: READY_FOR_EXPLICIT_SEND` и не выполняет POST.
 

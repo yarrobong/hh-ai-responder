@@ -168,7 +168,7 @@ func runCareerAgentPilotCommand(args []string, cfg Config, stdout, stderr io.Wri
 	if len(args) > 0 && args[0] == "send" {
 		return runCareerAgentPilotSend(args[1:], cfg, stdout, stderr)
 	}
-	vacancyID, search, explicitResumeID, maxScan, maxCandidates, err := parseCareerAgentPilotArgs(args)
+	vacancyID, search, explicitResumeID, omitOptionalCoverLetter, maxScan, maxCandidates, err := parseCareerAgentPilotArgs(args)
 	if err != nil {
 		return err
 	}
@@ -189,7 +189,7 @@ func runCareerAgentPilotCommand(args []string, cfg Config, stdout, stderr io.Wri
 	if search {
 		preview, err = responder.findFirstCareerAgentPilotCandidate(maxScan, maxCandidates)
 	} else {
-		preview, err = responder.buildCareerAgentPilotPreviewWithResume(vacancyID, explicitResumeID)
+		preview, err = responder.buildCareerAgentPilotPreviewWithResumeOptions(vacancyID, explicitResumeID, omitOptionalCoverLetter)
 	}
 	if err != nil {
 		return err
@@ -205,7 +205,7 @@ func runCareerAgentPilotCommand(args []string, cfg Config, stdout, stderr io.Wri
 	return err
 }
 
-func parseCareerAgentPilotArgs(args []string) (int, bool, string, int, int, error) {
+func parseCareerAgentPilotArgs(args []string) (int, bool, string, bool, int, int, error) {
 	resumeFlagCount := 0
 	for _, arg := range args {
 		if arg == "--resume-id" || strings.HasPrefix(arg, "--resume-id=") {
@@ -213,7 +213,7 @@ func parseCareerAgentPilotArgs(args []string) (int, bool, string, int, int, erro
 		}
 	}
 	if resumeFlagCount > 1 {
-		return 0, false, "", 0, 0, errors.New("career-agent pilot accepts exactly one --resume-id")
+		return 0, false, "", false, 0, 0, errors.New("career-agent pilot accepts exactly one --resume-id")
 	}
 	fs := flag.NewFlagSet("career-agent pilot", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -223,20 +223,25 @@ func parseCareerAgentPilotArgs(args []string) (int, bool, string, int, int, erro
 	fs.BoolVar(&search, "search", false, "find the first fresh pilot-eligible vacancy")
 	explicitResumeID := ""
 	fs.StringVar(&explicitResumeID, "resume-id", "", "exact enabled resume identity for manual review")
+	omitOptionalCoverLetter := false
+	fs.BoolVar(&omitOptionalCoverLetter, "omit-optional-cover-letter", false, "omit a cover letter only when fresh preflight proves it is optional")
 	maxScan := 100
 	fs.IntVar(&maxScan, "max-scan", 100, "maximum unique vacancies to inspect cheaply")
 	maxCandidates := 20
 	fs.IntVar(&maxCandidates, "max-candidates", 20, "maximum fresh candidates to check")
 	if err := fs.Parse(args); err != nil {
-		return 0, false, "", 0, 0, err
+		return 0, false, "", false, 0, 0, err
 	}
 	if resumeFlagCount == 1 && strings.TrimSpace(explicitResumeID) == "" {
-		return 0, false, "", 0, 0, errors.New("career-agent pilot --resume-id requires a value")
+		return 0, false, "", false, 0, 0, errors.New("career-agent pilot --resume-id requires a value")
 	}
-	if fs.NArg() != 0 || maxScan <= 0 || maxScan > 1000 || maxCandidates <= 0 || maxCandidates > 20 || (vacancyID <= 0 && !search) || (vacancyID > 0 && search) || (strings.TrimSpace(explicitResumeID) != "" && search) || (strings.TrimSpace(explicitResumeID) != "" && vacancyID <= 0) {
-		return 0, false, "", 0, 0, errors.New("usage: career-agent pilot --search [--max-scan 1..1000] [--max-candidates 1..20] | career-agent pilot --vacancy <id> [--resume-id <identity>]")
+	if fs.NArg() != 0 || maxScan <= 0 || maxScan > 1000 || maxCandidates <= 0 || maxCandidates > 20 || (vacancyID <= 0 && !search) || (vacancyID > 0 && search) || (strings.TrimSpace(explicitResumeID) != "" && search) || (strings.TrimSpace(explicitResumeID) != "" && vacancyID <= 0) || (omitOptionalCoverLetter && (search || vacancyID <= 0 || strings.TrimSpace(explicitResumeID) == "")) {
+		if omitOptionalCoverLetter && (search || vacancyID <= 0 || strings.TrimSpace(explicitResumeID) == "") {
+			return 0, false, "", false, 0, 0, errors.New("--omit-optional-cover-letter requires a targeted --vacancy with explicit --resume-id")
+		}
+		return 0, false, "", false, 0, 0, errors.New("usage: career-agent pilot --search [--max-scan 1..1000] [--max-candidates 1..20] | career-agent pilot --vacancy <id> --resume-id <identity> [--omit-optional-cover-letter]")
 	}
-	return vacancyID, search, strings.TrimSpace(explicitResumeID), maxScan, maxCandidates, nil
+	return vacancyID, search, strings.TrimSpace(explicitResumeID), omitOptionalCoverLetter, maxScan, maxCandidates, nil
 }
 
 func resolveExplicitPilotResume(profiles []careeragent.ResumeProfile, requested string) (careeragent.ResumeProfile, error) {
@@ -292,6 +297,10 @@ func (r *HHAIResponder) buildCareerAgentPilotPreview(vacancyID int) (PilotPrevie
 }
 
 func (r *HHAIResponder) buildCareerAgentPilotPreviewWithResume(vacancyID int, requestedResumeID string) (PilotPreview, error) {
+	return r.buildCareerAgentPilotPreviewWithResumeOptions(vacancyID, requestedResumeID, false)
+}
+
+func (r *HHAIResponder) buildCareerAgentPilotPreviewWithResumeOptions(vacancyID int, requestedResumeID string, omitOptionalCoverLetter bool) (PilotPreview, error) {
 	ctx := ctxOrBackground(r.ctx)
 	reader := r.hhReadClient()
 	if reader == nil {
@@ -332,7 +341,7 @@ func (r *HHAIResponder) buildCareerAgentPilotPreviewWithResume(vacancyID int, re
 		return PilotPreview{}, fmt.Errorf("pilot application preflight read failed: %w", err)
 	}
 
-	return r.buildCareerAgentPilotPreviewFromStateWithSelection(value, preflight, explicitProfile)
+	return r.buildCareerAgentPilotPreviewFromStateWithSelectionOptions(value, preflight, explicitProfile, omitOptionalCoverLetter)
 }
 
 func (r *HHAIResponder) getCareerAgentPilotPreflight(value Vacancy, profile *careeragent.ResumeProfile) (VacancyPreflight, error) {
@@ -744,6 +753,10 @@ func (r *HHAIResponder) buildCareerAgentPilotPreviewFromState(value Vacancy, pre
 }
 
 func (r *HHAIResponder) buildCareerAgentPilotPreviewFromStateWithSelection(value Vacancy, preflight VacancyPreflight, explicitProfile *careeragent.ResumeProfile) (PilotPreview, error) {
+	return r.buildCareerAgentPilotPreviewFromStateWithSelectionOptions(value, preflight, explicitProfile, false)
+}
+
+func (r *HHAIResponder) buildCareerAgentPilotPreviewFromStateWithSelectionOptions(value Vacancy, preflight VacancyPreflight, explicitProfile *careeragent.ResumeProfile, omitOptionalCoverLetter bool) (PilotPreview, error) {
 	ctx := ctxOrBackground(r.ctx)
 	if value.ID <= 0 {
 		return PilotPreview{}, errors.New("pilot vacancy has invalid id")
@@ -860,41 +873,47 @@ func (r *HHAIResponder) buildCareerAgentPilotPreviewFromStateWithSelection(value
 		return preview, nil
 	}
 
-	letterInput := coverLetterInput(value, description, candidate, &assessment, strings.TrimSpace(strings.Join([]string{r.extraLetterPrompt, pilotCoverLetterPrompt}, "\n")), r.coverLetterSemanticExamples(value, description, assessment, resolver))
-	letter, letterErr := rootApplicationCoverLetter{client: r.ai}.GenerateWithFallback(ctx, letterInput)
-	if letterErr != nil {
-		artifact.CoverLetterStatus = coverletter.DraftStatusHardInvalid
-		artifact.CoverLetterFailureReason = letterErr.Error()
-		if pilotCoverLetterOptional(preflight) {
-			// Optional cover-letter failures are observable review metadata, not
-			// application blockers. Never retain the invalid provider output.
-			preview.Reasons = append(preview.Reasons, "optional cover-letter draft discarded: "+letterErr.Error())
-		} else {
-			preview.Reasons = append(preview.Reasons, "cover-letter preview failed: "+letterErr.Error())
+	if omitOptionalCoverLetter {
+		if err := applyPilotOptionalCoverLetterOmission(&artifact, preflight, true); err != nil {
+			return PilotPreview{}, err
 		}
 	} else {
-		artifact.CoverLetterStatus = letter.Status
-		artifact.CoverLetterFailureReason = letter.FallbackReason
-		artifact.CoverLetterEvidence = append([]coverletter.DraftEvidence(nil), letter.Evidence...)
-		artifact.CoverLetterUsedStoryIDs = append([]string(nil), letter.UsedStoryIDs...)
-		if qualityErr := validatePilotCoverLetter(letter.Letter); qualityErr != nil {
+		letterInput := coverLetterInput(value, description, candidate, &assessment, strings.TrimSpace(strings.Join([]string{r.extraLetterPrompt, pilotCoverLetterPrompt}, "\n")), r.coverLetterSemanticExamples(value, description, assessment, resolver))
+		letter, letterErr := rootApplicationCoverLetter{client: r.ai}.GenerateWithFallback(ctx, letterInput)
+		if letterErr != nil {
 			artifact.CoverLetterStatus = coverletter.DraftStatusHardInvalid
-			artifact.CoverLetterFailureReason = qualityErr.Error()
+			artifact.CoverLetterFailureReason = letterErr.Error()
 			if pilotCoverLetterOptional(preflight) {
-				preview.Reasons = append(preview.Reasons, "optional cover-letter draft discarded: "+qualityErr.Error())
+				// Optional cover-letter failures are observable review metadata, not
+				// application blockers. Never retain the invalid provider output.
+				preview.Reasons = append(preview.Reasons, "optional cover-letter draft discarded: "+letterErr.Error())
 			} else {
-				preview.Reasons = append(preview.Reasons, "cover-letter preview failed: "+qualityErr.Error())
+				preview.Reasons = append(preview.Reasons, "cover-letter preview failed: "+letterErr.Error())
 			}
 		} else {
-			artifact.CoverLetter = letter.Letter
-			hash := sha256.Sum256([]byte(letter.Letter))
-			artifact.ContentHash = hex.EncodeToString(hash[:])
+			artifact.CoverLetterStatus = letter.Status
+			artifact.CoverLetterFailureReason = letter.FallbackReason
+			artifact.CoverLetterEvidence = append([]coverletter.DraftEvidence(nil), letter.Evidence...)
+			artifact.CoverLetterUsedStoryIDs = append([]string(nil), letter.UsedStoryIDs...)
+			if qualityErr := validatePilotCoverLetter(letter.Letter); qualityErr != nil {
+				artifact.CoverLetterStatus = coverletter.DraftStatusHardInvalid
+				artifact.CoverLetterFailureReason = qualityErr.Error()
+				if pilotCoverLetterOptional(preflight) {
+					preview.Reasons = append(preview.Reasons, "optional cover-letter draft discarded: "+qualityErr.Error())
+				} else {
+					preview.Reasons = append(preview.Reasons, "cover-letter preview failed: "+qualityErr.Error())
+				}
+			} else {
+				artifact.CoverLetter = letter.Letter
+				hash := sha256.Sum256([]byte(letter.Letter))
+				artifact.ContentHash = hex.EncodeToString(hash[:])
+			}
 		}
-	}
-	if pilotCoverLetterOptional(preflight) && artifact.CoverLetter == "" {
-		// The empty optional content is still hashed canonically so the pilot
-		// artifact and any later preparation reference remain deterministic.
-		artifact.ContentHash = contentHash("")
+		if pilotCoverLetterOptional(preflight) && artifact.CoverLetter == "" {
+			// The empty optional content is still hashed canonically so the pilot
+			// artifact and any later preparation reference remain deterministic.
+			artifact.ContentHash = contentHash("")
+		}
 	}
 
 	if preflight.ArchivedKnown && preflight.Archived {
@@ -989,6 +1008,25 @@ func (r *HHAIResponder) persistCareerAgentPilotPreparation(value Vacancy, select
 
 func pilotCoverLetterOptional(preflight VacancyPreflight) bool {
 	return preflight.LetterRequiredKnown && !preflight.LetterRequired
+}
+
+func applyPilotOptionalCoverLetterOmission(artifact *PilotArtifact, preflight VacancyPreflight, omit bool) error {
+	if !omit {
+		return nil
+	}
+	if !pilotCoverLetterOptional(preflight) {
+		return errors.New("--omit-optional-cover-letter requires cover-letter-required=false to be known from fresh preflight")
+	}
+	if artifact == nil {
+		return errors.New("pilot artifact is required for optional cover-letter omission")
+	}
+	artifact.CoverLetter = ""
+	artifact.CoverLetterStatus = ""
+	artifact.CoverLetterFailureReason = ""
+	artifact.CoverLetterEvidence = nil
+	artifact.CoverLetterUsedStoryIDs = nil
+	artifact.ContentHash = contentHash("")
+	return nil
 }
 
 func pilotCoverLetterContentReady(preflight VacancyPreflight, hash string) bool {

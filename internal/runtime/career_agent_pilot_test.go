@@ -190,16 +190,60 @@ func TestResolveExplicitPilotResumeRejectsAmbiguousExactIdentity(t *testing.T) {
 }
 
 func TestParseCareerAgentPilotArgsRejectsSearchWithExplicitResume(t *testing.T) {
-	_, _, _, _, _, err := parseCareerAgentPilotArgs([]string{"--search", "--resume-id", "provider-1"})
+	_, _, _, _, _, _, err := parseCareerAgentPilotArgs([]string{"--search", "--resume-id", "provider-1"})
 	if err == nil || !strings.Contains(err.Error(), "--resume-id") {
 		t.Fatalf("error=%v, want explicit resume/search rejection", err)
 	}
 }
 
 func TestParseCareerAgentPilotArgsRejectsDuplicateExplicitResume(t *testing.T) {
-	_, _, _, _, _, err := parseCareerAgentPilotArgs([]string{"--vacancy", "42", "--resume-id", "provider-1", "--resume-id=provider-1"})
+	_, _, _, _, _, _, err := parseCareerAgentPilotArgs([]string{"--vacancy", "42", "--resume-id", "provider-1", "--resume-id=provider-1"})
 	if err == nil || !strings.Contains(err.Error(), "exactly one") {
 		t.Fatalf("error=%v, want duplicate identity rejection", err)
+	}
+}
+
+func TestParseCareerAgentPilotArgsAcceptsOptionalCoverLetterOmissionOnlyForExplicitPilot(t *testing.T) {
+	vacancyID, search, resumeID, omit, _, _, err := parseCareerAgentPilotArgs([]string{
+		"--vacancy", "42", "--resume-id", "provider-1", "--omit-optional-cover-letter",
+	})
+	if err != nil || vacancyID != 42 || search || resumeID != "provider-1" || !omit {
+		t.Fatalf("parsed=(vacancy=%d search=%v resume=%q omit=%v) error=%v", vacancyID, search, resumeID, omit, err)
+	}
+
+	if _, _, _, _, _, _, err := parseCareerAgentPilotArgs([]string{"--search", "--omit-optional-cover-letter"}); err == nil || !strings.Contains(err.Error(), "explicit") {
+		t.Fatalf("search omission unexpectedly accepted: %v", err)
+	}
+	if _, _, _, _, _, _, err := parseCareerAgentPilotArgs([]string{"--vacancy", "42", "--omit-optional-cover-letter"}); err == nil || !strings.Contains(err.Error(), "--resume-id") {
+		t.Fatalf("router-selected omission unexpectedly accepted: %v", err)
+	}
+}
+
+func TestPilotOptionalCoverLetterOmissionRequiresKnownFalse(t *testing.T) {
+	optional := false
+	artifact := PilotArtifact{CoverLetter: "generated", ContentHash: contentHash("generated")}
+	if err := applyPilotOptionalCoverLetterOmission(&artifact, VacancyPreflight{LetterRequiredKnown: true, LetterRequired: optional}, true); err != nil {
+		t.Fatalf("optional omission rejected: %v", err)
+	}
+	if artifact.CoverLetter != "" || artifact.ContentHash != contentHash("") {
+		t.Fatalf("omitted artifact=(letter=%q hash=%q), want empty canonical content", artifact.CoverLetter, artifact.ContentHash)
+	}
+
+	for _, required := range []*bool{nil, func() *bool { value := true; return &value }()} {
+		value := PilotArtifact{}
+		preflight := VacancyPreflight{}
+		if required != nil {
+			preflight.LetterRequiredKnown = true
+			preflight.LetterRequired = *required
+		}
+		if err := applyPilotOptionalCoverLetterOmission(&value, preflight, true); err == nil {
+			t.Fatalf("requirement=%v omission unexpectedly accepted", required)
+		}
+	}
+
+	unchanged := PilotArtifact{CoverLetter: "existing", ContentHash: contentHash("existing")}
+	if err := applyPilotOptionalCoverLetterOmission(&unchanged, VacancyPreflight{}, false); err != nil || unchanged.CoverLetter != "existing" || unchanged.ContentHash != contentHash("existing") {
+		t.Fatalf("default pilot behavior changed: artifact=%+v error=%v", unchanged, err)
 	}
 }
 
