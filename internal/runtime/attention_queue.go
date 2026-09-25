@@ -62,6 +62,9 @@ func (s *DashboardServer) buildAttentionQueue(snapshot dashboardSnapshot) ([]car
 		if preparation.Status != careeragent.PreparationStatusReady {
 			continue
 		}
+		if !preparationAttentionActionable(preparation, snapshot.applications) {
+			continue
+		}
 		items = append(items, careeragent.AttentionItem{
 			ID: "preparation:" + preparation.ID, Type: "application_ready", Priority: 1,
 			VacancyID: preparation.VacancyID, Title: "Application preparation ready",
@@ -92,6 +95,46 @@ func (s *DashboardServer) buildAttentionQueue(snapshot dashboardSnapshot) ([]car
 		}
 	}
 	return careeragent.BuildAttentionQueue(items), nil
+}
+
+// preparationAttentionActionable keeps a ready preparation visible until the
+// application projection contains authoritative provider evidence. A local
+// JobApplication row, an external id, or an applied status alone is not proof
+// that HH accepted the response and therefore must not suppress attention.
+func preparationAttentionActionable(preparation careeragent.ApplicationPreparation, applications []JobApplication) bool {
+	for _, application := range applications {
+		if application.VacancyID != preparation.VacancyID ||
+			application.Source != ApplicationSourceHH ||
+			application.Partial ||
+			strings.TrimSpace(application.ExternalID) == "" ||
+			!applicationStatusConfirmsResponse(application.Status) {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(application.HHMetadata["delivery_confirmed"]), "true") || hasAuthoritativeHHReconciliation(application.ReconciliationEvidence) {
+			return false
+		}
+	}
+	return true
+}
+
+func applicationStatusConfirmsResponse(status ApplicationStatus) bool {
+	switch status {
+	case ApplicationApplied, ApplicationEmployerReplied, ApplicationInterview, ApplicationOffer, ApplicationRejected, ApplicationArchived:
+		return true
+	default:
+		return false
+	}
+}
+
+func hasAuthoritativeHHReconciliation(evidence []ReconciliationEvidence) bool {
+	for _, item := range evidence {
+		if strings.EqualFold(strings.TrimSpace(item.Source), "hh") &&
+			strings.TrimSpace(item.Method) != "" &&
+			item.Confidence >= 1 {
+			return true
+		}
+	}
+	return false
 }
 
 // deduplicateAttentionNotifications collapses repeated notification records
