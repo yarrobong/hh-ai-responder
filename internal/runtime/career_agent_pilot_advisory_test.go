@@ -120,6 +120,14 @@ func TestCareerAgentPilotOptionalCoverLetterOmissionSkipsGenerationAndPersistsEm
 	if preparation.CoverLetter != "" || preparation.CoverLetterHash != contentHash("") || preview.Artifact.PreparationID != preparation.ID || preview.Artifact.PreparationHash != preparation.InputFingerprint {
 		t.Fatalf("empty preparation binding was not persisted: preparation=%+v artifact=%+v", preparation, preview.Artifact)
 	}
+	approval := buildManualAPIApplicationApproval(preview.Artifact, preparation.ResumeProviderID, preview.Artifact.CoverLetter, "pilot-artifact-hash", "manual-approval-nonce", time.Now().UTC())
+	emptyHash := contentHash("")
+	if preview.Artifact.CoverLetter != "" || preview.Artifact.ContentHash != emptyHash || preparation.CoverLetterHash != emptyHash || approval.CoverLetter != "" || approval.ContentHash != emptyHash {
+		t.Fatalf("empty-letter hash chain diverged: artifact=%+v preparation=%+v approval=%+v", preview.Artifact, preparation, approval)
+	}
+	if err := validatePreparationApprovalBinding(context.Background(), preparationReaderFixture{preparation: preparation}, approval, value.ID, preparation.ResumeProviderID); err != nil {
+		t.Fatalf("empty-letter approval binding failed: %v", err)
+	}
 	if err := preparation.Validate(); err != nil {
 		t.Fatalf("empty preparation failed validation: %v", err)
 	}
