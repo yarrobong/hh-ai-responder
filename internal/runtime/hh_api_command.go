@@ -40,6 +40,9 @@ type HHAPICommandDeps struct {
 	ApplicationAttempts      attemptport.Store
 	ApplicationAudit         hhwritegateway.AuditSink
 	CareerWorkflow           ports.CareerWorkflowReader
+	// CookieWebTestBaseURL is populated only by httptest composition tests.
+	// Production command construction leaves it nil and validates HH_SEARCH_URL.
+	CookieWebTestBaseURL *url.URL
 }
 
 func runHHAPICommand(ctx context.Context, args []string, cfg Config, stdin io.Reader, stdout, stderr io.Writer) error {

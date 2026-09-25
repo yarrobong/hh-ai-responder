@@ -36,11 +36,17 @@ type Options struct {
 	BaseURL         *url.URL
 	ChatURL         *url.URL
 	SearchParams    url.Values
-	HTTPClient      *http.Client
+	HTTPClient      RequestDoer
 	XSRFToken       string
 	UserID          int64
 	RequestInterval time.Duration
 	ReadConcurrency int
+}
+
+// RequestDoer is the narrow read-side HTTP capability. A cookie-web reader
+// receives only a session client that rejects mutation methods by construction.
+type RequestDoer interface {
+	Do(*http.Request) (*http.Response, error)
 }
 
 type Client struct {
@@ -370,7 +376,7 @@ type readResponse struct {
 }
 
 type readTransport struct {
-	client          *http.Client
+	client          RequestDoer
 	interval        time.Duration
 	readConcurrency int
 	mu              sync.Mutex
@@ -386,7 +392,7 @@ type readWaiter struct {
 	ctx     context.Context
 }
 
-func newReadTransport(client *http.Client, interval time.Duration, concurrency int) *readTransport {
+func newReadTransport(client RequestDoer, interval time.Duration, concurrency int) *readTransport {
 	return &readTransport{client: client, interval: interval, readConcurrency: concurrency}
 }
 

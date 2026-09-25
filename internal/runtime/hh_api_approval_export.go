@@ -104,7 +104,8 @@ func buildManualAPIApplicationApproval(artifact PilotArtifact, providerResumeID,
 	return APIApplicationApproval{
 		Version: apiApplicationApprovalVersion, VacancyID: artifact.VacancyID,
 		ProviderResumeID: providerResumeID, SelectedResumeID: providerResumeID,
-		CoverLetter: reviewedLetter, ContentHash: contentHash(reviewedLetter), Nonce: nonce,
+		BrowserResumeHash: strings.TrimSpace(artifact.SelectedResumeHash),
+		CoverLetter:       reviewedLetter, ContentHash: contentHash(reviewedLetter), Nonce: nonce,
 		Status: pilotManualReviewStatus, FinalDecision: "REVIEW_REQUIRED", PreviewFreshAt: artifact.PreviewFreshAt,
 		ApprovalBasis: manualApprovalBasis, OperatorApproved: true, OperatorApprovalTimestamp: approvedAt,
 		OriginalAIScore: &score, OriginalAIRecommendation: artifact.AIRecommendation,
@@ -143,18 +144,19 @@ func pilotArtifactToAPIApplicationApproval(artifact PilotArtifact) (APIApplicati
 		return APIApplicationApproval{}, err
 	}
 	return APIApplicationApproval{
-		Version:          apiApplicationApprovalVersion,
-		VacancyID:        artifact.VacancyID,
-		ProviderResumeID: providerResumeID,
-		SelectedResumeID: providerResumeID,
-		CoverLetter:      artifact.CoverLetter,
-		ContentHash:      focusedHash,
-		Nonce:            artifact.Nonce,
-		PreviewFreshAt:   artifact.PreviewFreshAt,
-		Status:           "READY_FOR_EXPLICIT_SEND",
-		FinalDecision:    "MATCH",
-		PreparationID:    artifact.PreparationID,
-		PreparationHash:  artifact.PreparationHash,
+		Version:           apiApplicationApprovalVersion,
+		VacancyID:         artifact.VacancyID,
+		ProviderResumeID:  providerResumeID,
+		SelectedResumeID:  providerResumeID,
+		BrowserResumeHash: strings.TrimSpace(artifact.SelectedResumeHash),
+		CoverLetter:       artifact.CoverLetter,
+		ContentHash:       focusedHash,
+		Nonce:             artifact.Nonce,
+		PreviewFreshAt:    artifact.PreviewFreshAt,
+		Status:            "READY_FOR_EXPLICIT_SEND",
+		FinalDecision:     "MATCH",
+		PreparationID:     artifact.PreparationID,
+		PreparationHash:   artifact.PreparationHash,
 	}, nil
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -11,10 +12,12 @@ import (
 
 	hhapi "hh-ai-responder/internal/adapters/hh/api"
 	hhreadadapter "hh-ai-responder/internal/adapters/hh/read"
+	hhwebadapter "hh-ai-responder/internal/adapters/hh/web"
 	"hh-ai-responder/internal/browsersession"
 	"hh-ai-responder/internal/candidate"
 	appconfig "hh-ai-responder/internal/config"
 	"hh-ai-responder/internal/hhread"
+	"hh-ai-responder/internal/hhwebsession"
 	hhreadport "hh-ai-responder/internal/ports/hhread"
 )
 
@@ -313,8 +316,41 @@ func newLegacyBrowserReadSource(responder *HHAIResponder) (hhreadport.HHReadSour
 	if responder == nil {
 		return nil, errors.New("HH responder is not configured")
 	}
+	if responder.webSession != nil {
+		return hhwebadapter.NewCookieWebReadClient(responder.webSession, responder.baseURL, responder.searchParams)
+	}
 	return hhreadadapter.NewClient(hhreadadapter.Options{
 		BaseURL: responder.baseURL, SearchParams: responder.searchParams, HTTPClient: responder.client,
 		XSRFToken: responder.XSRFToken(), UserID: responder.userId,
 	})
+}
+
+func cookieBrowserDoctorForSession(session *hhwebsession.Session, baseURL *url.URL) func(context.Context) (string, error) {
+	return func(ctx context.Context) (string, error) {
+		if session == nil || baseURL == nil {
+			return browserAuthRequired, errors.New("cookie web session is unavailable")
+		}
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL.ResolveReference(&url.URL{Path: "/applicant/my_resumes"}).String(), nil)
+		if err != nil {
+			return browserAuthRequired, err
+		}
+		response, err := session.ReadClient().Do(request)
+		if err != nil {
+			return browserAuthRequired, err
+		}
+		defer response.Body.Close()
+		body, _ := io.ReadAll(io.LimitReader(response.Body, 512*1024))
+		finalURL := strings.ToLower(response.Request.URL.String())
+		lowerBody := strings.ToLower(string(body))
+		switch {
+		case strings.Contains(finalURL, "/account/captcha"), strings.Contains(lowerBody, "captcha") || strings.Contains(lowerBody, "challenge"):
+			return browserAuthRequired, errors.New("cookie web session challenge")
+		case strings.Contains(finalURL, "/account/login"), response.StatusCode == http.StatusUnauthorized:
+			return browserAuthRequired, errors.New("cookie web session authentication required")
+		case response.StatusCode < 200 || response.StatusCode >= 400:
+			return browserAuthRequired, fmt.Errorf("cookie web profile GET returned status %d", response.StatusCode)
+		default:
+			return browserAuthOK, nil
+		}
+	}
 }

@@ -23,9 +23,10 @@ go build ./cmd/hh-ai-responder
 В [релизах](https://github.com/s3rgeym/hh-ai-responder/releases/latest) можно скачать готовую версию под все целевые платформы: Windows, Linux, Darwin (Mac) и Android (для запуска через Termux).
 
 Для работы с HH нужен только актуальный экспорт авторизованной web-сессии:
-`cookies.txt` в Netscape format. Программа загружает cookies в Playwright
-browser context до первой навигации; значения cookies не выводятся и не
-сохраняются обратно из браузера.
+`cookies.txt` в строгом Netscape format. Cookie-web transport использует
+единый GET-only/POST-only HTTP session: значения cookies не выводятся, а
+безопасные `Set-Cookie` обновления сохраняются атомарно в private-файл с
+правами `0600`.
 
 Сначала запустите read-only browser doctor:
 
@@ -49,9 +50,10 @@ HH_DRY_RUN=true HH_WRITE_ENABLED=false STORAGE_BACKEND=json \
   ./hh-ai-responder career-agent run
 ```
 
-Для диагностики headless/headed используйте `--headless` и `--headed`. Если
-headless получает challenge, оставьте `HH_BROWSER_HEADLESS=false` и используйте
-обычный headed Chromium/Chrome; никаких обходов challenge программа не делает.
+`browser-doctor` выполняет bounded GET-проверки через тот же cookie session,
+который используется web application transport. Флаги `--headless` и
+`--headed` сохранены для совместимости CLI, но cookie-web doctor не запускает
+браузер и не выполняет обход challenge.
 
 Для запуска приложения можно указать ссылку для поиска по вакансиям:
 
@@ -167,9 +169,13 @@ requirements fail closed.
 Уже подтверждённые отклики пропускаются до detail и AI; при готовом результате
 команда останавливается на `PILOT: READY_FOR_EXPLICIT_SEND` и не выполняет POST.
 
-### Controlled API application POST (RESET-API-3)
+### Controlled application POST (API или cookie-web)
 
-Для одного явно выбранного vacancy/resume доступен отдельный API-only путь:
+Для одного явно выбранного vacancy/resume доступен отдельный controlled путь.
+Текущие CLI-команды `hh-api approval`, `hh-api apply` и `hh-api apply-batch`
+сохраняются. `HH_TRANSPORT=api` использует существующий OAuth/API adapter;
+`HH_TRANSPORT=browser` использует cookies, требует `cookies.txt` и не требует
+OAuth-конфигурации или API token.
 
 ```sh
 HH_TRANSPORT=api HH_DRY_RUN=true HH_WRITE_ENABLED=false \
@@ -182,7 +188,7 @@ HH_TRANSPORT=api HH_DRY_RUN=true HH_WRITE_ENABLED=false \
   --pilot ./career-agent-pilot.json --out ./api-manual-approval.json \
   [--letter-file ./reviewed-letter.txt]
 
-HH_TRANSPORT=api HH_DRY_RUN=true HH_WRITE_ENABLED=false \
+HH_TRANSPORT=browser HH_DRY_RUN=true HH_WRITE_ENABLED=false \
   ./hh-ai-responder hh-api apply 137112468 \
   --resume-id <provider-resume-id> --approval-file ./api-approval.json
 ```
@@ -212,7 +218,10 @@ AI-рекомендацией `UNCERTAIN`, без hard missing/unknown, выпу
 `response_letter_required=false`.
 
 Единственный live-вызов имеет тот же точный синтаксис и требует одновременно
-`HH_TRANSPORT=api HH_DRY_RUN=false HH_WRITE_ENABLED=true`. За один invocation
+`HH_TRANSPORT=api` или `HH_TRANSPORT=browser`,
+`HH_DRY_RUN=false HH_WRITE_ENABLED=true`. В browser mode approval должен
+содержать точный `browser_resume_hash`, подтверждённый свежим `/applicant/my_resumes`
+preflight; provider resume ID и browser resume hash не смешиваются. За один invocation
 разрешена ровно одна application mutation; существующие глобальные и дневные
 лимиты Write Gateway сохраняются, но этот путь не добавляет отдельную
 постоянную политику «один отклик в день». Команда не подключена к поиску,
@@ -230,7 +239,7 @@ durable vacancy lock сохраняется до reconciliation. Валидац�
 batch-путь:
 
 ```sh
-HH_TRANSPORT=api HH_DRY_RUN=true HH_WRITE_ENABLED=false \
+HH_TRANSPORT=browser HH_DRY_RUN=true HH_WRITE_ENABLED=false \
   ./hh-ai-responder hh-api apply-batch \
   --approval-file ./api-approval-a.json \
   --approval-file ./api-approval-b.json \
@@ -304,7 +313,7 @@ cp example.env .env
 | `HH_BROWSER_TRACE_VACANCY` | `--browser-trace-vacancy` | Одна явно заданная HTTPS vacancy URL для безопасного Browser/Go HTTP trace. |
 | `HH_BROWSER_TRANSPORT` | `--browser-transport` | `auto` (browser для реального hh.ru с cookies), `browser` или legacy `http`. |
 | `HH_BROWSER_HEADLESS` | `--browser-headless` | Запуск Playwright browser headless; по умолчанию `false`. |
-| `HH_TRANSPORT` | `--hh-transport` | Выбор read transport: `browser` (по умолчанию), `api` или `auto`. Не изменяет отдельную настройку `HH_BROWSER_TRANSPORT`. |
+| `HH_TRANSPORT` | `--hh-transport` | Основной HH transport: `browser` (по умолчанию, cookies-only web reads/writes), `api` или `auto` для остальных read-сценариев. Для controlled `apply`/`apply-batch` допустимы `browser` и `api`; browser mode не требует OAuth. |
 | `HH_API_BASE_URL` | — | Базовый URL HH API; по умолчанию `https://api.hh.ru`. |
 | `HH_OAUTH_AUTHORIZE_URL` | — | URL OAuth authorize; по умолчанию `https://hh.ru/oauth/authorize`. |
 | `HH_OAUTH_TOKEN_URL` | — | URL OAuth token; по умолчанию `https://api.hh.ru/token`. |

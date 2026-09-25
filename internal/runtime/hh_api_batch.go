@@ -175,8 +175,8 @@ func runHHAPIApplyBatch(ctx context.Context, args []string, cfg Config, stdout, 
 	if err != nil {
 		return err
 	}
-	if !strings.EqualFold(strings.TrimSpace(cfg.HHTransport), "api") {
-		return errors.New("hh-api apply-batch requires HH_TRANSPORT=api")
+	if !controlledApplicationTransportModeSupported(cfg.HHTransport) {
+		return errors.New("hh-api apply-batch requires HH_TRANSPORT=api or HH_TRANSPORT=browser")
 	}
 	if !cfg.DryRun && !cfg.HHWriteEnabled {
 		return errors.New("hh-api apply-batch requires HH_WRITE_ENABLED=true when HH_DRY_RUN=false")
@@ -188,7 +188,7 @@ func runHHAPIApplyBatch(ctx context.Context, args []string, cfg Config, stdout, 
 	if err := validateBatchApprovalFiles(paths, now); err != nil {
 		return err
 	}
-	service, err := newControlledAPIApplicationService(ctx, cfg, deps, batchMaxApplications)
+	service, err := newControlledApplicationService(ctx, cfg, deps, batchMaxApplications)
 	if err != nil {
 		return err
 	}

@@ -64,6 +64,31 @@ func TestSelectHHTransportBrowserIsTheDefault(t *testing.T) {
 	}
 }
 
+func TestLegacyBrowserProductionBaseURLUsesStrictHHBoundary(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{name: "root", raw: "https://hh.ru", want: true},
+		{name: "subdomain", raw: "https://ekaterinburg.hh.ru", want: true},
+		{name: "http", raw: "http://hh.ru"},
+		{name: "foreign", raw: "https://evil.example"},
+		{name: "suffix trick", raw: "https://hh.ru.evil.example"},
+		{name: "lookalike", raw: "https://evilhh.ru"},
+		{name: "userinfo", raw: "https://user@hh.ru"},
+		{name: "malformed", raw: "://hh.ru"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateLegacyBrowserProductionSearchURL(tt.raw)
+			if (err == nil) != tt.want {
+				t.Fatalf("validation error=%v, want allowed=%t", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestSelectHHTransportExplicitAPIMissingTokenDoesNotFallback(t *testing.T) {
 	browser := &transportFakeBrowserSource{}
 	doctorCalls := 0
