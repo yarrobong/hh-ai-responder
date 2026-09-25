@@ -224,14 +224,18 @@ func runHHAPIApply(ctx context.Context, args []string, cfg Config, stdout, stder
 	if deps.Now != nil {
 		now = deps.Now().UTC()
 	}
+	approval, err := loadAPIApplicationApproval(approvalPath)
+	if err != nil {
+		return err
+	}
+	if err := validateAPIApplicationApproval(approval, vacancyID, providerResumeID, now); err != nil {
+		return err
+	}
 	service, err := newControlledAPIApplicationService(ctx, cfg, deps, 1)
 	if err != nil {
 		return err
 	}
 	result, execErr := service.Execute(ctx, approvalPath, now)
-	if result.Approval.VacancyID != vacancyID || approvalProviderResumeID(result.Approval) != providerResumeID {
-		return errAPIApplicationApprovalIdentity
-	}
 	if cfg.DryRun {
 		_, _ = fmt.Fprintf(stdout, "WOULD_APPLY vacancy_id=%d resume_id=%s approval_file=explicit preflight=AVAILABLE\n", vacancyID, safeHHAPIResumeID(providerResumeID))
 		return execErr
