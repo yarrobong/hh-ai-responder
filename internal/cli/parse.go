@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	appconfig "hh-ai-responder/internal/config"
@@ -99,13 +100,13 @@ func firstSubcommand(args []string) string {
 func validateCommandArgs(command CommandKind, args []string) error {
 	if len(args) == 0 {
 		if command == CommandHHAPI {
-			return errors.New("hh-api requires a subcommand: auth, doctor, logout, preflight, approval, or apply")
+			return errors.New("hh-api requires a subcommand: auth, doctor, logout, preflight, approval, apply, or apply-batch")
 		}
 		return nil
 	}
 	if strings.HasPrefix(args[0], "-") {
 		if command == CommandHHAPI && !IsHelpFlag(args[0]) {
-			return errors.New("hh-api requires a subcommand: auth, doctor, logout, preflight, approval, or apply")
+			return errors.New("hh-api requires a subcommand: auth, doctor, logout, preflight, approval, apply, or apply-batch")
 		}
 		return nil
 	}
@@ -139,11 +140,56 @@ func validateCommandArgs(command CommandKind, args []string) error {
 			return fmt.Errorf("unknown hh reliability action %q", args[2])
 		}
 	case CommandHHAPI:
-		if !known(args[0], "auth", "doctor", "logout", "preflight", "approval", "apply") {
+		if !known(args[0], "auth", "doctor", "logout", "preflight", "approval", "apply", "apply-batch") {
 			return errors.New("unknown hh-api subcommand")
 		}
 		if args[0] == "apply" {
 			return validateHHAPIApplyArgs(args[1:])
+		}
+		if args[0] == "apply-batch" {
+			if len(args) < 2 {
+				return errors.New("hh-api apply-batch requires one through three --approval-file values")
+			}
+			approvalFiles := 0
+			seenPaths := map[string]struct{}{}
+			for index := 1; index < len(args); index++ {
+				if args[index] == "--approval-file" {
+					if index+1 >= len(args) || strings.HasPrefix(args[index+1], "-") || strings.TrimSpace(args[index+1]) == "" {
+						return errors.New("hh-api apply-batch requires --approval-file followed by a path")
+					}
+					approvalFiles++
+					path, pathErr := filepath.Abs(filepath.Clean(strings.TrimSpace(args[index+1])))
+					if pathErr != nil {
+						return errors.New("hh-api apply-batch approval path is invalid")
+					}
+					if _, exists := seenPaths[path]; exists {
+						return errors.New("hh-api apply-batch rejects duplicate approval paths")
+					}
+					seenPaths[path] = struct{}{}
+					index++
+					continue
+				}
+				if strings.HasPrefix(args[index], "--approval-file=") && strings.TrimSpace(strings.TrimPrefix(args[index], "--approval-file=")) != "" {
+					approvalFiles++
+					path, pathErr := filepath.Abs(filepath.Clean(strings.TrimSpace(strings.TrimPrefix(args[index], "--approval-file="))))
+					if pathErr != nil {
+						return errors.New("hh-api apply-batch approval path is invalid")
+					}
+					if _, exists := seenPaths[path]; exists {
+						return errors.New("hh-api apply-batch rejects duplicate approval paths")
+					}
+					seenPaths[path] = struct{}{}
+					continue
+				}
+				if IsHelpFlag(args[index]) {
+					continue
+				}
+				return errors.New("hh-api apply-batch accepts only repeated --approval-file values")
+			}
+			if approvalFiles == 0 || approvalFiles > 3 {
+				return errors.New("hh-api apply-batch requires one through three --approval-file values")
+			}
+			return nil
 		}
 		if args[0] == "preflight" {
 			if len(args) > 1 && IsHelpFlag(args[1]) {
