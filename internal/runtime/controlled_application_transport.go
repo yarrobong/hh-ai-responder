@@ -139,5 +139,6 @@ func newCookieControlledApplicationTransport(cfg Config, userAgent string) (cont
 	if err != nil {
 		return nil, err
 	}
-	return &cookieControlledApplicationTransport{preflight: preflight, writer: writer, session: session}, nil
+	evidence := newCookieWebApplicationEvidenceReader(session.ReadClient(), base)
+	return &cookieControlledApplicationTransport{preflight: preflight, writer: writer, evidence: evidence, session: session}, nil
 }

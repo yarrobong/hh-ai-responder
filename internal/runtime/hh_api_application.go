@@ -270,6 +270,7 @@ type controlledAPIApplicationResult struct {
 	TransportAttempted bool
 	FinalOutcome       APIApplicationFinalOutcome
 	Reconciliation     applicationreconciliation.Result
+	PersistenceHealthy bool
 }
 
 func newControlledAPIApplicationService(ctx context.Context, cfg Config, deps HHAPICommandDeps, maxWritesPerRun int) (*controlledAPIApplicationService, error) {
@@ -380,6 +381,10 @@ func (s *controlledApplicationService) Execute(ctx context.Context, approvalPath
 	if err != nil {
 		return result, err
 	}
+	result.PersistenceHealthy = s.transport.PersistenceHealth() == nil
+	if !result.PersistenceHealthy {
+		return result, errors.New("HH application session persistence is unhealthy before send")
+	}
 	preflight := preparedContext.Preflight
 	result.Preflight = preparedContext.Preflight
 	if err := validateControlledAPIApplicationPreflight(preflight); err != nil {
@@ -422,6 +427,10 @@ func (s *controlledApplicationService) Execute(ctx context.Context, approvalPath
 		result.FinalOutcome, result.Reconciliation = finalOutcome, reconciliation
 		if reconcileErr != nil {
 			return result, reconcileErr
+		}
+		result.PersistenceHealthy = s.transport.PersistenceHealth() == nil
+		if !result.PersistenceHealthy {
+			return result, errors.New("HH application session persistence is unhealthy after reconciliation")
 		}
 	}
 	return result, submitErr
