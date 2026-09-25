@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -80,6 +81,78 @@ func TestControlledApplicationGatewayCapsMutationsAtOnePerInvocation(t *testing.
 	}
 	if writer.calls != 1 {
 		t.Fatalf("writer calls=%d, want 1", writer.calls)
+	}
+}
+
+func TestControlledApplicationGatewayBatchCapAllowsThreeAndBlocksFourth(t *testing.T) {
+	writer := &controlledApplicationWriter{}
+	service := hhwritegateway.NewService(hhwritegateway.Dependencies{VacancyResponseWriter: writer}, hhwritegateway.Options{WriteEnabled: true, MaxWritesPerRun: batchMaxApplications})
+	for index := 0; index < batchMaxApplications; index++ {
+		if _, err := service.SubmitVacancyResponse(context.Background(), hhwritegateway.VacancyResponseRequest{VacancyID: 42 + index, ProviderResumeID: "resume"}); err != nil {
+			t.Fatalf("submission %d: %v", index+1, err)
+		}
+	}
+	if _, err := service.SubmitVacancyResponse(context.Background(), hhwritegateway.VacancyResponseRequest{VacancyID: 99, ProviderResumeID: "resume"}); err == nil {
+		t.Fatal("fourth mutation was not blocked by batch cap")
+	}
+	if writer.calls != batchMaxApplications {
+		t.Fatalf("writer calls=%d, want %d", writer.calls, batchMaxApplications)
+	}
+}
+
+func TestConcurrentControlledApplicationNonceAllowsOneProviderPost(t *testing.T) {
+	now := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	approvalPath := filepath.Join(dir, "approval.json")
+	approval := validAPIApplicationApproval(now)
+	raw, err := json.Marshal(approval)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(approvalPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writer := &controlledApplicationWriter{}
+	gateway := hhwritegateway.NewService(hhwritegateway.Dependencies{VacancyResponseWriter: writer}, hhwritegateway.Options{WriteEnabled: true, MaxWritesPerRun: batchMaxApplications})
+	start := make(chan struct{})
+	errorsSeen := make(chan error, 2)
+	var posts atomic.Int32
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if err := consumeAPIApplicationApprovalNonce(approvalPath, approval, approval.VacancyID, approvalProviderResumeID(approval), now); err != nil {
+				errorsSeen <- err
+				return
+			}
+			result, postErr := gateway.SubmitVacancyResponse(context.Background(), hhwritegateway.VacancyResponseRequest{VacancyID: approval.VacancyID, ProviderResumeID: approvalProviderResumeID(approval)})
+			if postErr != nil || !result.TransportAttempted {
+				errorsSeen <- fmt.Errorf("provider transport failed: result=%+v err=%v", result, postErr)
+				return
+			}
+			posts.Add(1)
+			errorsSeen <- nil
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errorsSeen)
+	var nonceFailures, successfulPosts int
+	for err := range errorsSeen {
+		if err == nil {
+			successfulPosts++
+			continue
+		}
+		if errors.Is(err, errAPIApplicationApprovalNonce) {
+			nonceFailures++
+			continue
+		}
+		t.Fatal(err)
+	}
+	if posts.Load() != 1 || successfulPosts != 1 || nonceFailures != 1 || writer.calls != 1 {
+		t.Fatalf("posts=%d successful=%d nonce_failures=%d writer_calls=%d", posts.Load(), successfulPosts, nonceFailures, writer.calls)
 	}
 }
 

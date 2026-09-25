@@ -220,6 +220,26 @@ bulk career-agent или переключению резюме.
 durable vacancy lock сохраняется до reconciliation. Валидация и тесты этого
 пути не выполняют реальный HH POST.
 
+Для нескольких заранее проверенных откликов существует только явный bounded
+batch-путь:
+
+```sh
+HH_TRANSPORT=api HH_DRY_RUN=true HH_WRITE_ENABLED=false \
+  ./hh-ai-responder hh-api apply-batch \
+  --approval-file ./api-approval-a.json \
+  --approval-file ./api-approval-b.json \
+  --approval-file ./api-approval-c.json
+```
+
+Принимается от одного до трёх explicit approval-файлов; пути и vacancy не
+могут дублироваться. Batch использует один application execution service и
+один `HHWriteGateway`, выполняет свежий GET-only preflight непосредственно
+перед возможным transport для каждого item и reconciles его до перехода к
+следующему. Pre-send block может пропустить item, а uncertain transport,
+delivery или persistence останавливает batch без retry. `HH_DRY_RUN=true`
+строит план с `WOULD_ATTEMPT`, не расходует nonce и не выполняет HH writes.
+Live batch POST в validation workflow не выполняется.
+
 Перед Shadow или любым другим HH read-path проверьте доступ без discovery:
 
 ```sh
