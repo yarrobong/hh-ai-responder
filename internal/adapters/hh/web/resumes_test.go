@@ -8,7 +8,7 @@ func TestParseBrowserResumesUsesExactEmbeddedIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if len(resumes) != 2 || resumes[0].BrowserHash != "browser-hash-123" || resumes[0].HHID != 123 || resumes[0].Title != "Backend developer" {
+	if len(resumes) != 2 || resumes[0].BrowserHash != "browser-hash-123" || resumes[0].HHID != 123 || resumes[0].ProviderID != "123" || resumes[0].Title != "Backend developer" {
 		t.Fatalf("resumes=%+v", resumes)
 	}
 }
@@ -32,7 +32,7 @@ func TestParseBrowserResumesDoesNotSelectByTitle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resumes[0].InternalID != "" || resumes[0].ProviderID != "" {
+	if resumes[0].InternalID != "" || resumes[0].ProviderID != "1" {
 		t.Fatalf("parser invented local identity: %+v", resumes[0])
 	}
 }

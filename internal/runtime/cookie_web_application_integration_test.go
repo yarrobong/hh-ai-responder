@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -148,7 +149,7 @@ func TestCookieOnlyControlledApplyLiveCompositionUsesWebSessionAndReconciles(t *
 	}
 	approvalPath := filepath.Join(dir, "approval.json")
 	approval := APIApplicationApproval{
-		Version: 1, VacancyID: 42, ProviderResumeID: "resume-provider-7", BrowserResumeHash: "browser-hash-42",
+		Version: 1, VacancyID: 42, ProviderResumeID: "272272326", BrowserResumeHash: "browser-hash-42",
 		CoverLetter: "Approved browser letter", ContentHash: contentHash("Approved browser letter"), Nonce: "browser-nonce-42",
 		Status: "READY_FOR_EXPLICIT_SEND", FinalDecision: "MATCH", PreviewFreshAt: now,
 	}
@@ -158,7 +159,7 @@ func TestCookieOnlyControlledApplyLiveCompositionUsesWebSessionAndReconciles(t *
 	store := &cookieWebIntegrationAttemptStore{}
 	service, err := newControlledApplicationService(context.Background(), Config{
 		HHTransport: "browser", SearchURL: server.URL, CookiesPath: cookiePath, DryRun: false, HHWriteEnabled: true,
-	}, HHAPICommandDeps{ApplicationAttempts: store, Now: func() time.Time { return now }}, 1)
+	}, HHAPICommandDeps{ApplicationAttempts: store, CookieWebTestBaseURL: mustIntegrationURL(t, server.URL), Now: func() time.Time { return now }}, 1)
 	if err != nil {
 		t.Fatalf("cookies-only service construction failed: %v", err)
 	}
@@ -215,7 +216,7 @@ func TestCookieOnlyControlledApplyDryRunDoesNotConsumeNonceReserveAttemptOrPost(
 	}
 	approvalPath := filepath.Join(dir, "approval.json")
 	approval := APIApplicationApproval{
-		Version: 1, VacancyID: 42, ProviderResumeID: "resume-provider-7", BrowserResumeHash: "browser-hash-42",
+		Version: 1, VacancyID: 42, ProviderResumeID: "272272326", BrowserResumeHash: "browser-hash-42",
 		CoverLetter: "Approved browser letter", ContentHash: contentHash("Approved browser letter"), Nonce: "browser-dry-run-nonce",
 		Status: "READY_FOR_EXPLICIT_SEND", FinalDecision: "MATCH", PreviewFreshAt: now,
 	}
@@ -226,7 +227,7 @@ func TestCookieOnlyControlledApplyDryRunDoesNotConsumeNonceReserveAttemptOrPost(
 	service, err := newControlledApplicationService(context.Background(), Config{
 		HHTransport: "browser", SearchURL: server.URL, CookiesPath: cookiePath, DryRun: true, HHWriteEnabled: false,
 		HHOAuthTokenURL: "::invalid", HHAPITokenFile: filepath.Join(dir, "absent-oauth-token.json"),
-	}, HHAPICommandDeps{ApplicationAttempts: store, Now: func() time.Time { return now }}, 1)
+	}, HHAPICommandDeps{ApplicationAttempts: store, CookieWebTestBaseURL: mustIntegrationURL(t, server.URL), Now: func() time.Time { return now }}, 1)
 	if err != nil {
 		t.Fatalf("cookies-only dry-run construction failed without OAuth: %v", err)
 	}
@@ -242,6 +243,60 @@ func TestCookieOnlyControlledApplyDryRunDoesNotConsumeNonceReserveAttemptOrPost(
 	}
 }
 
+func TestCookieOnlyControlledApplyBlocksMismatchedProviderBeforeNonceAttemptOrPost(t *testing.T) {
+	now := time.Date(2026, 9, 25, 15, 0, 0, 0, time.UTC)
+	var postCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			postCount.Add(1)
+		}
+		switch r.Method + " " + r.URL.Path {
+		case http.MethodGet + " /vacancy/42":
+			w.Header().Set("Set-Cookie", "_xsrf=xsrf-mismatch; Path=/")
+			_, _ = io.WriteString(w, `{"redirectConfig":{"archived":false}}`)
+		case http.MethodGet + " /applicant/my_resumes":
+			_, _ = io.WriteString(w, `<script>{"redirectConfig":{},"applicantResumes":[{"_attributes":{"id":"272272326","hash":"browser-hash-42"}}]}</script>`)
+		case http.MethodGet + " /applicant/vacancy_response":
+			_, _ = io.WriteString(w, `{"redirectConfig":{"archived":false,"alreadyResponded":false,"testPresent":false,"responseLetterRequired":false,"canApply":true}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	cookiePath := filepath.Join(dir, "cookies.txt")
+	if err := os.WriteFile(cookiePath, []byte("# Netscape HTTP Cookie File\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	approvalPath := filepath.Join(dir, "approval.json")
+	approval := APIApplicationApproval{
+		Version: 1, VacancyID: 42, ProviderResumeID: "different-provider", BrowserResumeHash: "browser-hash-42",
+		CoverLetter: "Approved browser letter", ContentHash: contentHash("Approved browser letter"), Nonce: "mismatch-nonce",
+		Status: "READY_FOR_EXPLICIT_SEND", FinalDecision: "MATCH", PreviewFreshAt: now,
+	}
+	if err := os.WriteFile(approvalPath, mustIntegrationJSON(t, approval), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := &cookieWebIntegrationAttemptStore{}
+	service, err := newControlledApplicationService(context.Background(), Config{
+		HHTransport: "browser", SearchURL: server.URL, CookiesPath: cookiePath, DryRun: false, HHWriteEnabled: true,
+	}, HHAPICommandDeps{ApplicationAttempts: store, CookieWebTestBaseURL: mustIntegrationURL(t, server.URL), Now: func() time.Time { return now }}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Execute(context.Background(), approvalPath, now); err == nil {
+		t.Fatal("mismatched provider identity unexpectedly passed preflight")
+	}
+	updated, err := loadAPIApplicationApproval(approvalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.NonceUsedAt != nil || len(store.attempts) != 0 || postCount.Load() != 0 {
+		t.Fatalf("provider mismatch mutated state: nonce=%v attempts=%d posts=%d", updated.NonceUsedAt, len(store.attempts), postCount.Load())
+	}
+}
+
 func mustIntegrationJSON(t *testing.T, value any) []byte {
 	t.Helper()
 	raw, err := json.Marshal(value)
@@ -249,4 +304,13 @@ func mustIntegrationJSON(t *testing.T, value any) []byte {
 		t.Fatal(err)
 	}
 	return raw
+}
+
+func mustIntegrationURL(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed
 }

@@ -28,6 +28,7 @@ type CookieWebApplicationPreflight struct {
 	VacancyID                 int
 	ResponseURL               string
 	Resume                    BrowserResume
+	ApprovedProviderResumeID  string
 	ApprovedResumeHash        string
 	VacancyPreflight          VacancyPreflight
 	Authenticated             bool
@@ -48,7 +49,13 @@ func (p CookieWebApplicationPreflight) ValidateForSend(letter string) error {
 	if p.VacancyPreflight.ArchivedKnown && p.VacancyPreflight.Archived {
 		return errCookieWebPreflightBlocked
 	}
-	if !p.VacancyPreflight.ArchivedKnown || p.VacancyPreflight.ActiveState == VacancyActiveStateUnknown && !p.VacancyPreflight.ArchivedKnown {
+	if !p.VacancyPreflight.ArchivedKnown {
+		return errCookieWebPreflightUnknown
+	}
+	if p.VacancyPreflight.ActiveState == VacancyActiveStateInactive {
+		return errCookieWebPreflightBlocked
+	}
+	if p.VacancyPreflight.ActiveState != VacancyActiveStateActive {
 		return errCookieWebPreflightUnknown
 	}
 	evidence := p.VacancyPreflight.alreadyRespondedEvidence()
@@ -84,6 +91,14 @@ func (p CookieWebApplicationPreflight) ValidateForSend(letter string) error {
 	if approvedHash != currentHash {
 		return errBrowserResumeBindingStale
 	}
+	approvedProviderID, approvedProviderOK := normalizeProviderResumeID(p.ApprovedProviderResumeID)
+	currentProviderID, currentProviderOK := normalizeProviderResumeID(p.Resume.ProviderID)
+	if !approvedProviderOK || !currentProviderOK {
+		return errApprovedResumeNotAvailableInBrowserSession
+	}
+	if approvedProviderID != currentProviderID {
+		return errBrowserResumeBindingStale
+	}
 	return nil
 }
 
@@ -101,7 +116,7 @@ func NewCookieWebApplicationPreflightService(client hhwebsession.RequestDoer, ba
 	return &CookieWebApplicationPreflightService{client: client, baseURL: baseURL, resumeMapping: mapping, persistenceError: persistenceError}, nil
 }
 
-func (s *CookieWebApplicationPreflightService) Preflight(ctx context.Context, vacancyID int, approvedResumeHash string) (CookieWebApplicationPreflight, error) {
+func (s *CookieWebApplicationPreflightService) Preflight(ctx context.Context, vacancyID int, approvedProviderResumeID, approvedResumeHash string) (CookieWebApplicationPreflight, error) {
 	if s == nil || vacancyID <= 0 {
 		return CookieWebApplicationPreflight{}, errors.New("cookie web preflight vacancy is invalid")
 	}
@@ -154,7 +169,7 @@ func (s *CookieWebApplicationPreflightService) Preflight(ctx context.Context, va
 	preflight.SelectedResumeSuitableKnown = approvedHash != "" && selectedHash != ""
 	preflight.SelectedResumeSuitable = preflight.SelectedResumeSuitableKnown && approvedHash == selectedHash
 	persistenceHealthy := s.persistenceError == nil || s.persistenceError() == nil
-	result := CookieWebApplicationPreflight{VacancyID: vacancyID, ResponseURL: responseURL.String(), Resume: selected, ApprovedResumeHash: approvedResumeHash, VacancyPreflight: preflight, Authenticated: authenticated, StandardResponsePathKnown: true, PersistenceHealthy: persistenceHealthy}
+	result := CookieWebApplicationPreflight{VacancyID: vacancyID, ResponseURL: responseURL.String(), Resume: selected, ApprovedProviderResumeID: approvedProviderResumeID, ApprovedResumeHash: approvedResumeHash, VacancyPreflight: preflight, Authenticated: authenticated, StandardResponsePathKnown: true, PersistenceHealthy: persistenceHealthy}
 	return result, nil
 }
 

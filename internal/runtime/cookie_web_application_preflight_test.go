@@ -7,12 +7,13 @@ import (
 
 func TestCookieWebApplicationPreflightFailsClosed(t *testing.T) {
 	base := CookieWebApplicationPreflight{
-		VacancyID:          42,
-		ResponseURL:        "https://hh.ru/applicant/vacancy_response?vacancyId=42",
-		Resume:             BrowserResume{BrowserHash: "browser-hash-42"},
-		ApprovedResumeHash: "browser-hash-42",
+		VacancyID:                42,
+		ResponseURL:              "https://hh.ru/applicant/vacancy_response?vacancyId=42",
+		Resume:                   BrowserResume{BrowserHash: "browser-hash-42", ProviderID: "42", HHID: 42},
+		ApprovedResumeHash:       "browser-hash-42",
+		ApprovedProviderResumeID: "42",
 		VacancyPreflight: VacancyPreflight{
-			VacancyID: 42, ArchivedKnown: true, CanApplyKnown: true, CanApply: true,
+			VacancyID: 42, ArchivedKnown: true, ActiveState: VacancyActiveStateActive, CanApplyKnown: true, CanApply: true,
 			AlreadyRespondedKnown: true, AlreadyRespondedEvidence: AlreadyRespondedEvidence{Value: AlreadyRespondedNo, EvidenceCode: EvidenceExplicitNotResponded},
 			TestPresentKnown: true, LetterRequiredKnown: true,
 		},
@@ -34,6 +35,13 @@ func TestCookieWebApplicationPreflightFailsClosed(t *testing.T) {
 		{"letter unknown", func(p *CookieWebApplicationPreflight) { p.VacancyPreflight.LetterRequiredKnown = false }, errCookieWebPreflightUnknown},
 		{"empty required letter", func(p *CookieWebApplicationPreflight) { p.VacancyPreflight.LetterRequired = true }, errCookieWebPreflightBlocked},
 		{"resume mismatch", func(p *CookieWebApplicationPreflight) { p.Resume.BrowserHash = "other" }, errBrowserResumeBindingStale},
+		{"browser hash missing", func(p *CookieWebApplicationPreflight) { p.Resume.BrowserHash = "" }, errApprovedResumeNotAvailableInBrowserSession},
+		{"approved provider missing", func(p *CookieWebApplicationPreflight) { p.ApprovedProviderResumeID = "" }, errApprovedResumeNotAvailableInBrowserSession},
+		{"provider mismatch", func(p *CookieWebApplicationPreflight) { p.Resume.ProviderID = "99" }, errBrowserResumeBindingStale},
+		{"provider missing", func(p *CookieWebApplicationPreflight) { p.Resume.ProviderID = "" }, errApprovedResumeNotAvailableInBrowserSession},
+		{"active unknown", func(p *CookieWebApplicationPreflight) { p.VacancyPreflight.ActiveState = VacancyActiveStateUnknown }, errCookieWebPreflightUnknown},
+		{"inactive", func(p *CookieWebApplicationPreflight) { p.VacancyPreflight.ActiveState = VacancyActiveStateInactive }, errCookieWebPreflightBlocked},
+		{"archived", func(p *CookieWebApplicationPreflight) { p.VacancyPreflight.Archived = true }, errCookieWebPreflightBlocked},
 		{"auth", func(p *CookieWebApplicationPreflight) { p.Authenticated = false }, errCookieWebPreflightUnknown},
 		{"path", func(p *CookieWebApplicationPreflight) { p.StandardResponsePathKnown = false }, errCookieWebPreflightUnknown},
 		{"persistence", func(p *CookieWebApplicationPreflight) { p.PersistenceHealthy = false }, errCookieWebPreflightBlocked},

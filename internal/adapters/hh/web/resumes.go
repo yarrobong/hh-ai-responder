@@ -76,7 +76,11 @@ func ParseBrowserResumes(data []byte) ([]BrowserResume, error) {
 		if len(rawResume.Title) > 0 {
 			title = strings.TrimSpace(rawResume.Title[0].String)
 		}
-		result = append(result, BrowserResume{BrowserHash: hash, HHID: id, Title: title})
+		providerID := ""
+		if id > 0 {
+			providerID = strconv.FormatInt(id, 10)
+		}
+		result = append(result, BrowserResume{BrowserHash: hash, HHID: id, ProviderID: providerID, Title: title})
 	}
 	return result, nil
 }
