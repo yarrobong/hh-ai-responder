@@ -238,6 +238,61 @@ func TestReconcileControlledAPIApplicationMapsAllRequiredFinalOutcomes(t *testin
 	}
 }
 
+func TestAlreadyAppliedReconciliationRequiresConfirmedEvidence(t *testing.T) {
+	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	attempt, err := domain.New(42, "resume-provider-7", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name     string
+		snapshot applicationreconciliation.EvidenceSnapshot
+		want     APIApplicationFinalOutcome
+		wantErr  bool
+	}{
+		{
+			name: "confirmed",
+			snapshot: applicationreconciliation.EvidenceSnapshot{
+				VacancyID: 42, PreflightAvailable: true, ApplicationsAvailable: true,
+				Preflight: applicationreconciliation.PreflightEvidence{AlreadyRespondedKnown: true, AlreadyResponded: true},
+			},
+			want: APIApplicationFinalAlreadyAppliedReconciled,
+		},
+		{
+			name:     "insufficient",
+			snapshot: applicationreconciliation.EvidenceSnapshot{VacancyID: 42, PreflightAvailable: true, ApplicationsAvailable: true},
+			want:     APIApplicationFinalUnknownSendUnresolved,
+		},
+		{
+			name:     "unavailable",
+			snapshot: applicationreconciliation.EvidenceSnapshot{VacancyID: 42},
+			want:     APIApplicationFinalUnknownSendUnresolved, wantErr: true,
+		},
+		{
+			name: "conflicting",
+			snapshot: applicationreconciliation.EvidenceSnapshot{
+				VacancyID: 42, PreflightAvailable: true, ApplicationsAvailable: true,
+				Preflight:    applicationreconciliation.PreflightEvidence{AlreadyRespondedKnown: true, AlreadyResponded: false},
+				Applications: []applicationreconciliation.ProviderResponse{{VacancyID: 42, NegotiationID: "provider-response-42", ResponseByApplicant: true}},
+			},
+			want: APIApplicationFinalUnknownSendUnresolved,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &apiReconciliationStore{attempt: attempt}
+			reader := &apiReconciliationReader{snapshot: tt.snapshot}
+			got, reconciliation, err := reconcileControlledAPIApplication(context.Background(), store, reader, attempt.AttemptID, hhwrite.ApplicationResultAlreadyApplied, now)
+			if got != tt.want || (err != nil) != tt.wantErr {
+				t.Fatalf("outcome=%s reconciliation=%+v err=%v, want outcome=%s wantErr=%t", got, reconciliation, err, tt.want, tt.wantErr)
+			}
+			if !tt.wantErr && tt.name != "confirmed" && reconciliation.Status == applicationreconciliation.StatusConfirmed {
+				t.Fatalf("non-confirming evidence was marked confirmed: %+v", reconciliation)
+			}
+		})
+	}
+}
+
 func TestAPIApplicationEvidenceReaderUsesTargetedGETsOnly(t *testing.T) {
 	var methods []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

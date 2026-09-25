@@ -326,7 +326,7 @@ func newControlledAPIApplicationService(ctx context.Context, cfg Config, deps HH
 
 func newControlledApplicationService(ctx context.Context, cfg Config, deps HHAPICommandDeps, maxWritesPerRun int) (*controlledApplicationService, error) {
 	if strings.EqualFold(strings.TrimSpace(cfg.HHTransport), "browser") {
-		transport, err := newCookieControlledApplicationTransport(cfg, userAgent)
+		transport, err := newCookieControlledApplicationTransport(cfg, userAgent, deps.CookieWebTestBaseURL)
 		if err != nil {
 			return nil, err
 		}
@@ -600,7 +600,7 @@ func reconcileControlledAPIApplication(ctx context.Context, store applicationrec
 		return APIApplicationFinalPostSuccessUnconfirmed, reconciled, err
 	}
 	if class == hhwrite.ApplicationResultAlreadyApplied {
-		if err != nil {
+		if err != nil || reconciled.Status != applicationreconciliation.StatusConfirmed {
 			return APIApplicationFinalUnknownSendUnresolved, reconciled, err
 		}
 		return APIApplicationFinalAlreadyAppliedReconciled, reconciled, nil
