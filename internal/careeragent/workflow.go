@@ -1,6 +1,7 @@
 package careeragent
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -235,13 +236,43 @@ func PreparationInputFingerprint(p ApplicationPreparation) string {
 	}{
 		VacancyID: p.VacancyID, ResumeID: p.ResumeID, ResumeProviderID: p.ResumeProviderID, ResumeFingerprint: p.ResumeFingerprint,
 		CandidateID: p.CandidateID, CandidateVersion: p.CandidateVersion, CandidateSnapshotHash: p.CandidateSnapshotHash,
-		RouteStatus: p.RouteStatus, RouteConfidence: p.RouteConfidence, Evidence: p.Evidence,
-		StoryIDs: append([]string(nil), p.StoryIDs...), CoverLetterHash: p.CoverLetterHash,
-		TestAnswerDrafts: p.TestAnswerDrafts, KnowledgeRequests: append([]KnowledgeRequest(nil), p.KnowledgeRequests...),
+		RouteStatus: p.RouteStatus, RouteConfidence: p.RouteConfidence, Evidence: canonicalWorkflowJSON(p.Evidence),
+		StoryIDs: normalizedStringSlice(p.StoryIDs), CoverLetterHash: p.CoverLetterHash,
+		TestAnswerDrafts: canonicalWorkflowJSON(p.TestAnswerDrafts), KnowledgeRequests: normalizedKnowledgeRequests(p.KnowledgeRequests),
 	}
 	raw, _ := json.Marshal(value)
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
+}
+
+func canonicalWorkflowJSON(raw json.RawMessage) json.RawMessage {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil
+	}
+	var value any
+	if err := json.Unmarshal(trimmed, &value); err != nil {
+		return append(json.RawMessage(nil), trimmed...)
+	}
+	canonical, err := json.Marshal(value)
+	if err != nil {
+		return append(json.RawMessage(nil), trimmed...)
+	}
+	return canonical
+}
+
+func normalizedStringSlice(value []string) []string {
+	if len(value) == 0 {
+		return nil
+	}
+	return append([]string(nil), value...)
+}
+
+func normalizedKnowledgeRequests(value []KnowledgeRequest) []KnowledgeRequest {
+	if len(value) == 0 {
+		return nil
+	}
+	return append([]KnowledgeRequest(nil), value...)
 }
 
 func (p ApplicationPreparation) ContentHash() string {
