@@ -1657,6 +1657,14 @@ func validateLegacyBrowserProductionBaseURL(base *url.URL) error {
 	return nil
 }
 
+func validateLegacyBrowserProductionSearchURL(raw string) error {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return fmt.Errorf("invalid legacy browser search URL: %w", err)
+	}
+	return validateLegacyBrowserProductionBaseURL(parsed)
+}
+
 func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 	if logger == nil {
 		// Read-only dashboard construction can happen outside the CLI entrypoint.
@@ -1724,6 +1732,16 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 	searchURLs := append([]string(nil), cfg.SearchURLs...)
 	if len(searchURLs) == 0 && strings.TrimSpace(cfg.SearchURL) != "" {
 		searchURLs = []string{cfg.SearchURL}
+	}
+	if transportMode == "browser" {
+		for _, rawURL := range searchURLs {
+			if strings.TrimSpace(rawURL) == "" {
+				continue
+			}
+			if err := validateLegacyBrowserProductionSearchURL(rawURL); err != nil {
+				return nil, err
+			}
+		}
 	}
 	searchProfiles, parsedBaseURL, err := buildVacancySearchProfilesWithOptions(searchURLs, cfg.SearchPeriodDays)
 	if err != nil {

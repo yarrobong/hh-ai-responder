@@ -81,14 +81,7 @@ func TestLegacyBrowserProductionBaseURLUsesStrictHHBoundary(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			parsed, err := url.Parse(tt.raw)
-			if err != nil {
-				if tt.want {
-					t.Fatal(err)
-				}
-				return
-			}
-			err = validateLegacyBrowserProductionBaseURL(parsed)
+			err := validateLegacyBrowserProductionSearchURL(tt.raw)
 			if (err == nil) != tt.want {
 				t.Fatalf("validation error=%v, want allowed=%t", err, tt.want)
 			}

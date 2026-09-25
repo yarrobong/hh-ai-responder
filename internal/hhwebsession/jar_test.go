@@ -106,6 +106,64 @@ func TestPersistentJarRejectsSetCookieDomainWideningAndPreservesFile(t *testing.
 	}
 }
 
+func TestPersistentJarUnsafeSetCookieErrorStaysStickyAcrossMixedBatch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cookies.txt")
+	origin := mustURL(t, "https://api.hh.ru/applicant")
+	jar := newPersistentJar(path, time.Unix(1_700_000_000, 0))
+	jar.SetCookies(origin, []*http.Cookie{{Name: "auth", Value: "old", Path: "/"}})
+	before := string(mustRead(t, path))
+
+	jar.SetCookies(origin, []*http.Cookie{
+		{Name: "evil", Value: "secret-parent", Domain: "hh.ru", Path: "/"},
+		{Name: "refresh", Value: "safe-value", Path: "/"},
+	})
+
+	if err := jar.PersistenceError(); err == nil {
+		t.Fatal("mixed unsafe Set-Cookie batch was reported healthy")
+	} else if strings.Contains(err.Error(), "secret-parent") {
+		t.Fatalf("persistence error exposed cookie value: %v", err)
+	}
+	if got := cookieValue(jar.Cookies(origin), "auth"); got != "old" {
+		t.Fatalf("old safe cookie=%q, want old", got)
+	}
+	if got := cookieValue(jar.Cookies(origin), "refresh"); got != "safe-value" {
+		t.Fatalf("safe cookie=%q, want safe-value", got)
+	}
+	if got := cookieValue(jar.Cookies(mustURL(t, "https://hh.ru/")), "evil"); got != "" {
+		t.Fatalf("rejected parent cookie was stored: %q", got)
+	}
+	if persisted := string(mustRead(t, path)); strings.Contains(persisted, "secret-parent") || strings.Contains(persisted, "evil") {
+		t.Fatalf("rejected cookie was persisted: %q", persisted)
+	}
+	if persisted := string(mustRead(t, path)); persisted == before {
+		t.Fatal("accepted safe cookie was not persisted")
+	}
+
+	jar.SetCookies(origin, []*http.Cookie{{Name: "auth", Value: "new", Path: "/"}})
+	if err := jar.PersistenceError(); err == nil {
+		t.Fatal("later valid update silently cleared unsafe Set-Cookie error")
+	}
+	if got := cookieValue(jar.Cookies(origin), "auth"); got != "new" {
+		t.Fatalf("later safe replacement=%q, want new", got)
+	}
+}
+
+func TestPersistentJarUnsafeSetCookieErrorStaysStickyWhenUnsafeCookieFollowsSafeCookie(t *testing.T) {
+	jar := newPersistentJar(filepath.Join(t.TempDir(), "cookies.txt"), time.Unix(1_700_000_000, 0))
+	origin := mustURL(t, "https://api.hh.ru/applicant")
+	jar.SetCookies(origin, []*http.Cookie{
+		{Name: "refresh", Value: "safe-first", Path: "/"},
+		{Name: "evil", Value: "secret-parent", Domain: "hh.ru", Path: "/"},
+	})
+
+	if err := jar.PersistenceError(); err == nil {
+		t.Fatal("unsafe Set-Cookie after safe cookie was reported healthy")
+	}
+	if got := cookieValue(jar.Cookies(origin), "refresh"); got != "safe-first" {
+		t.Fatalf("safe cookie=%q, want safe-first", got)
+	}
+}
+
 func TestPersistentJarRejectsHostOnlyToDomainConversion(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cookies.txt")
 	jar := newPersistentJar(path, time.Unix(1_700_000_000, 0))

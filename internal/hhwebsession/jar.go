@@ -148,7 +148,13 @@ func (j *persistentJar) SetCookies(u *url.URL, cookies []*http.Cookie) {
 		}
 	}
 	if changed {
-		j.persistErr = j.persistLocked()
+		if err := j.persistLocked(); err != nil {
+			if j.persistErr == nil {
+				j.persistErr = err
+			} else {
+				j.persistErr = errors.Join(j.persistErr, err)
+			}
+		}
 	}
 }
 

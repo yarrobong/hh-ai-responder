@@ -243,6 +243,62 @@ func TestCookieOnlyControlledApplyDryRunDoesNotConsumeNonceReserveAttemptOrPost(
 	}
 }
 
+func TestCookieOnlyControlledApplyBlocksAfterUnsafeSetCookieBeforeNonceAttemptOrPost(t *testing.T) {
+	now := time.Date(2026, 9, 25, 14, 30, 0, 0, time.UTC)
+	var postCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			postCount.Add(1)
+			t.Fatalf("unsafe cookie preflight issued POST %s", r.URL.Path)
+		}
+		switch r.URL.Path {
+		case "/vacancy/42":
+			w.Header().Add("Set-Cookie", "evil=secret-parent; Domain=hh.ru; Path=/")
+			w.Header().Add("Set-Cookie", "_xsrf=xsrf-unsafe; Path=/")
+			_, _ = io.WriteString(w, `{"redirectConfig":{"archived":false}}`)
+		case "/applicant/my_resumes":
+			_, _ = io.WriteString(w, `<script>{"redirectConfig":{},"applicantResumes":[{"_attributes":{"id":"272272326","hash":"browser-hash-42"}}]}</script>`)
+		case "/applicant/vacancy_response":
+			_, _ = io.WriteString(w, `{"redirectConfig":{"archived":false,"alreadyResponded":false,"testPresent":false,"responseLetterRequired":false,"canApply":true}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	cookiePath := filepath.Join(dir, "cookies.txt")
+	if err := os.WriteFile(cookiePath, []byte("# Netscape HTTP Cookie File\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	approvalPath := filepath.Join(dir, "approval.json")
+	approval := APIApplicationApproval{
+		Version: 1, VacancyID: 42, ProviderResumeID: "272272326", BrowserResumeHash: "browser-hash-42",
+		CoverLetter: "Approved browser letter", ContentHash: contentHash("Approved browser letter"), Nonce: "unsafe-cookie-nonce",
+		Status: "READY_FOR_EXPLICIT_SEND", FinalDecision: "MATCH", PreviewFreshAt: now,
+	}
+	if err := os.WriteFile(approvalPath, mustIntegrationJSON(t, approval), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := &cookieWebIntegrationAttemptStore{}
+	service, err := newControlledApplicationService(context.Background(), Config{
+		HHTransport: "browser", SearchURL: server.URL, CookiesPath: cookiePath, DryRun: false, HHWriteEnabled: true,
+	}, HHAPICommandDeps{ApplicationAttempts: store, CookieWebTestBaseURL: mustIntegrationURL(t, server.URL), Now: func() time.Time { return now }}, 1)
+	if err != nil {
+		t.Fatalf("cookies-only service construction failed: %v", err)
+	}
+	if _, err := service.Execute(context.Background(), approvalPath, now); err == nil {
+		t.Fatal("unsafe Set-Cookie unexpectedly allowed application send")
+	}
+	updated, err := loadAPIApplicationApproval(approvalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.NonceUsedAt != nil || len(store.attempts) != 0 || postCount.Load() != 0 {
+		t.Fatalf("unsafe cookie mutated application state: nonce=%v attempts=%d posts=%d", updated.NonceUsedAt, len(store.attempts), postCount.Load())
+	}
+}
+
 func TestCookieOnlyControlledApplyBlocksMismatchedProviderBeforeNonceAttemptOrPost(t *testing.T) {
 	now := time.Date(2026, 9, 25, 15, 0, 0, 0, time.UTC)
 	var postCount atomic.Int32
